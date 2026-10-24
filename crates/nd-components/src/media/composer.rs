@@ -13,6 +13,7 @@
 use std::path::PathBuf;
 use std::rc::Rc;
 
+use nd_theme::Preset;
 use nd_ui::StyleRefinement;
 use nd_ui::prelude::*;
 
@@ -32,6 +33,9 @@ pub const ATTACHMENT_THUMB: f32 = 32.;
 /// as the line it sits on, so icons centre on the text, and stays on the bottom line as the
 /// field grows (Messages' layout).
 pub const COMPOSER_ROW: f32 = 31.;
+/// WinUI's TextBox corner (ControlCornerRadius) and libadwaita's entry corner.
+const FLUENT_RADIUS: f32 = 4.;
+const ADWAITA_RADIUS: f32 = 9.;
 
 /// A file staged to go with the next message.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -248,6 +252,7 @@ impl IntoElement for Composer {
                 }
             }
         };
+        let look = Preset::current();
         let sender = send.clone();
         let emit = move |event: ComposerEvent, window: &mut Window, cx: &mut App| sender(event)(window, cx);
         let chips = draft.attachments.iter().map(|a| {
@@ -287,16 +292,28 @@ impl IntoElement for Composer {
                 .accepts_media()
                 .emoji_picker(draft.emoji_requests)
                 .disabled(!enabled)
-                .rounded(px(COMPOSER_ROW / 2.))
+                .rounded(px(match look {
+                    Preset::Fluent => FLUENT_RADIUS,
+                    Preset::Adwaita => ADWAITA_RADIUS,
+                    _ => COMPOSER_ROW / 2.,
+                }))
                 .on_change(move |e: &TextChanged, w, cx| edit(ComposerEvent::Edited(e.text.clone()), w, cx))
                 .on_submit(move |_: &TextSubmitted, w, cx| submit(ComposerEvent::Send, w, cx))
                 .on_images(move |e: &ImagesPasted, w, cx| images(ComposerEvent::Images(e.images.clone()), w, cx))
                 .on_files(move |e: &FilesDropped, w, cx| files(ComposerEvent::Files(e.paths.clone()), w, cx))
         };
-        let square = |button: nd_ui::Button| button.size(px(COMPOSER_ROW)).flex_none();
+        // Messages' round buttons on macOS; WinUI's subtle buttons and libadwaita's flat circular
+        // ones elsewhere, which show a fill only under the pointer.
+        let square = |button: nd_ui::Button| {
+            let button = button.size(px(COMPOSER_ROW)).flex_none();
+            match look {
+                Preset::Fluent => button.bezel(nd_ui::Bezel::Borderless),
+                Preset::Adwaita => button.bezel(nd_ui::Bezel::Borderless).rounded_full(),
+                _ => button.bezel(nd_ui::Bezel::Circle),
+            }
+        };
         let attach_button = attach.then(|| {
             square(icon_button(child("attach"), Icon::Plus))
-                .bezel(nd_ui::Bezel::Circle)
                 .tooltip("Attach Files")
                 .disabled(!enabled)
                 .on_click({
@@ -305,7 +322,6 @@ impl IntoElement for Composer {
                 })
         });
         let emoji = square(icon_button(child("emoji"), Icon::Smile))
-            .bezel(nd_ui::Bezel::Circle)
             .tooltip("Emoji")
             .disabled(!enabled)
             .on_click({
@@ -315,10 +331,21 @@ impl IntoElement for Composer {
         // Only a message that can go shows the send button, a filled arrow in the accent (or the
         // app's fill), as in Messages; Return sends either way.
         let has_send = enabled && draft.can_send();
+        // WinUI's accent button and libadwaita's suggested circular one carry a paper plane beside
+        // the field, as Phone Link and Fractal send; Messages' arrow sits inside it.
+        let inside = look == Preset::MacOs;
+        let send_icon = match (inside, send_icon) {
+            (false, Icon::CircleArrowUp) => Icon::Send,
+            (_, icon) => icon,
+        };
         let send_button = has_send.then(|| {
-            square(icon_button(child("send"), send_icon))
-                .bezel(nd_ui::Bezel::Circle)
-                .prominent()
+            let button = icon_button(child("send"), send_icon).size(px(COMPOSER_ROW)).flex_none();
+            match look {
+                Preset::Fluent => button,
+                Preset::Adwaita => button.rounded_full(),
+                _ => button.bezel(nd_ui::Bezel::Circle),
+            }
+            .prominent()
                 .when_some(send_fill, |button, fill| button.bg(fill))
                 .tooltip(send_tooltip)
                 .on_click({
@@ -326,30 +353,29 @@ impl IntoElement for Composer {
                     move |_, w, cx| f(w, cx)
                 })
         });
+        // Messages' bar: 9 pt between the plus button, the field and the emoji button.
+        let row = h_flex().w_full().items_end().gap(px(9.)).children(attach_button);
+        let row = if inside {
+            // The send button sits inside the field's outline at its trailing end, on the last
+            // line, as Messages draws it; the text wraps before it.
+            row.child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_w_0()
+                    .child(field.w_full().when(has_send, |f| f.trailing_room(COMPOSER_ROW)))
+                    .children(send_button.map(|b| b.absolute().right_0().bottom_0())),
+            )
+            .child(emoji)
+        } else {
+            row.child(div().flex_1().min_w_0().child(field.w_full())).child(emoji).children(send_button)
+        };
         let mut root = v_flex()
             .id(id.clone())
             .w_full()
             .gap_2()
             .when(!draft.attachments.is_empty(), |col| col.child(h_flex().flex_wrap().gap_2().children(chips)))
-            .child(
-                // Messages' bar: 9 pt between the plus button, the field and the emoji button.
-                h_flex()
-                    .w_full()
-                    .items_end()
-                    .gap(px(9.))
-                    .children(attach_button)
-                    // The send button sits inside the field's outline at its trailing end, on the
-                    // last line, as Messages draws it; the text wraps before it.
-                    .child(
-                        div()
-                            .relative()
-                            .flex_1()
-                            .min_w_0()
-                            .child(field.w_full().when(has_send, |f| f.trailing_room(COMPOSER_ROW)))
-                            .children(send_button.map(|b| b.absolute().right_0().bottom_0())),
-                    )
-                    .child(emoji),
-            );
+            .child(row);
         nd_gpui::gpui::Refineable::refine(root.style(), &style);
         root.into_any_element()
     }

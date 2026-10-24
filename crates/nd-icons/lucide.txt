@@ -1,5 +1,6 @@
 # Lucide names vendored by scripts/vendor-lucide. Every Icon variant needs one.
 archive
+arrow-left
 arrow-up
 bell-off
 calendar
@@ -61,6 +62,7 @@ repeat-1
 reply
 rotate-cw
 search
+send
 settings
 share
 shuffle

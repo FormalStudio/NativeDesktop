@@ -87,6 +87,7 @@ macro_rules! icons {
 
 icons! {
     Archive "archive" ["archivebox"] '\u{E7B8}';
+    ArrowLeft "arrow-left" ["arrow.left"] '\u{E72B}';
     ArrowUp "arrow-up" ["arrow.up"] '\u{E74A}';
     BellOff "bell-off" ["bell.slash"] '\u{E7ED}';
     Calendar "calendar" ["calendar"] '\u{E787}';
@@ -148,6 +149,7 @@ icons! {
     Reply "reply" ["arrowshape.turn.up.left"] '\u{E97A}';
     RotateCw "rotate-cw" ["arrow.clockwise"] '\u{E72C}';
     Search "search" ["magnifyingglass"] '\u{E721}';
+    Send "send" ["paperplane.fill"] '\u{E724}';
     Settings "settings" ["gearshape"] '\u{E713}';
     Share "share" ["square.and.arrow.up"] '\u{E72D}';
     Shuffle "shuffle" ["shuffle"] '\u{E8B1}';
