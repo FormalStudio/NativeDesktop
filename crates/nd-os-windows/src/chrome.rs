@@ -27,7 +27,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::PCWSTR;
 
-use crate::caption::{CaptionButton, CaptionLayout, CaptionState, Edge, Hit};
+use crate::caption::{CaptionButton, CaptionLayout, CaptionState, Edge, Hit, Rect};
 use crate::pointer::{self, PointerEvent, PointerKind};
 
 /// Sent by the shell for the window menu of a taskbar button; not in the SDK headers.
@@ -160,9 +160,17 @@ impl Chrome {
     }
 
     /// Replaces the title row; call after every layout pass that moved it. An empty layout (no
-    /// title row, no buttons) hands the whole window to the app, as full screen needs.
-    pub fn set_layout(&self, layout: CaptionLayout) {
-        *self.shared.layout.borrow_mut() = layout;
+    /// title row, no buttons) hands the whole window to the app, as full screen needs. The
+    /// covered rectangles stay: they come from the paint, after layout.
+    pub fn set_layout(&self, mut layout: CaptionLayout) {
+        let mut current = self.shared.layout.borrow_mut();
+        layout.covered = std::mem::take(&mut current.covered);
+        *current = layout;
+    }
+
+    /// Where overlays above the title row take the pointer this frame.
+    pub fn set_covered(&self, covered: Vec<Rect>) {
+        self.shared.layout.borrow_mut().covered = covered;
     }
 
     pub fn layout(&self) -> CaptionLayout {

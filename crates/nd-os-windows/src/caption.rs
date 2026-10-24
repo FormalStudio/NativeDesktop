@@ -74,6 +74,9 @@ pub struct CaptionLayout {
     /// GPUI backend's toolbar and `drag_region()`), which then answer for everything that is not
     /// a caption button or the resize band.
     pub title_drags: bool,
+    /// Where an overlay drawn above the title row takes the pointer (a popover's backdrop, a
+    /// lightbox's toolbar): the app gets the mouse there, even over a caption button.
+    pub covered: Vec<Rect>,
 }
 
 impl CaptionLayout {
@@ -96,6 +99,7 @@ impl CaptionLayout {
             interactive: Vec::new(),
             resizable: true,
             title_drags: true,
+            covered: Vec::new(),
         }
     }
 
@@ -122,6 +126,9 @@ impl CaptionLayout {
             } else {
                 Edge::Top
             });
+        }
+        if self.covered.iter().any(|r| r.contains(x, y)) {
+            return Hit::Client;
         }
         if let Some((button, _)) = self.buttons.iter().find(|(_, r)| r.contains(x, y)) {
             return Hit::Button(*button);
@@ -198,5 +205,20 @@ mod tests {
         l.title_drags = false;
         assert_eq!(l.hit(500., 16., false, 4.), Hit::Client);
         assert_eq!(l.hit(730., 16., false, 4.), Hit::Button(CaptionButton::Maximize));
+    }
+
+    #[test]
+    fn an_overlay_over_a_button_takes_the_pointer() {
+        let mut l = layout();
+        // A lightbox toolbar's close button over the caption close button.
+        l.covered.push(Rect::new(740., 16., 32., 32.));
+        assert_eq!(l.hit(760., 24., false, 4.), Hit::Client);
+        assert_eq!(l.hit(790., 8., false, 4.), Hit::Button(CaptionButton::Close));
+        assert_eq!(l.hit(730., 16., false, 4.), Hit::Button(CaptionButton::Maximize));
+        // The resize band stays the frame's, as the side borders do.
+        l.covered.push(Rect::new(0., 0., 800., 600.));
+        assert_eq!(l.hit(760., 1., false, 4.), Hit::Resize(Edge::Top));
+        assert_eq!(l.hit(730., 16., false, 4.), Hit::Client);
+        assert_eq!(l.hit(300., 16., false, 4.), Hit::Client);
     }
 }

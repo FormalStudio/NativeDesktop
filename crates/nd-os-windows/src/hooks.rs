@@ -18,12 +18,12 @@ use std::rc::Rc;
 use nd_backend_gpui::{ChromeContext, Look, OsHooks};
 use nd_core::WindowId;
 use nd_gpui::gpui::{
-    self, AnyElement, IntoElement, ParentElement, Styled, WindowAppearance, WindowBackgroundAppearance, div, px,
+    self, AnyElement, IntoElement, ParentElement, Styled, WindowAppearance, WindowBackgroundAppearance, canvas, div, px,
 };
 use nd_ui::TitlebarInsets;
 
 use crate::backdrop::{self, Backdrop};
-use crate::caption::{CaptionButton, CaptionLayout, CaptionState, FLUENT_BUTTON_WIDTH, FLUENT_TITLE_HEIGHT};
+use crate::caption::{CaptionButton, CaptionLayout, CaptionState, FLUENT_BUTTON_WIDTH, FLUENT_TITLE_HEIGHT, Rect};
 use crate::chrome::{Chrome, ChromeEvent};
 use crate::pointer::PointerPhase;
 
@@ -166,11 +166,33 @@ impl OsHooks for WindowsHooks {
         }
         let layout = Self::layout(gpui_window, title_height);
         let height = layout.title_height;
-        if layout != chrome.layout() {
-            chrome.set_layout(layout);
-        }
+        chrome.set_layout(layout);
         let state = chrome.caption_state();
         let maximized = gpui_window.is_maximized();
+        // Overlays record where they take the pointer as they prepaint, which GPUI does for the
+        // deferred layer before this row paints.
+        let covering = chrome.clone();
+        let covered = canvas(
+            |_, _, _| (),
+            move |_, _, window, _| {
+                let covered = nd_backend_gpui::occlusion::occluders(window)
+                    .into_iter()
+                    .filter(|o| o.blocks_input)
+                    .map(|o| {
+                        let b = o.bounds;
+                        Rect::new(
+                            b.origin.x.as_f32(),
+                            b.origin.y.as_f32(),
+                            b.size.width.as_f32(),
+                            b.size.height.as_f32(),
+                        )
+                    })
+                    .collect();
+                covering.set_covered(covered);
+            },
+        )
+        .absolute()
+        .size_0();
         let row = div()
             .absolute()
             .top_0()
@@ -178,6 +200,7 @@ impl OsHooks for WindowsHooks {
             .h(px(height))
             .flex()
             .flex_row()
+            .child(covered)
             .child(caption_button(CaptionButton::Minimize, state, look, maximized))
             .child(caption_button(CaptionButton::Maximize, state, look, maximized))
             .child(caption_button(CaptionButton::Close, state, look, maximized));
