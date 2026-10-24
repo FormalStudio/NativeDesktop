@@ -839,8 +839,11 @@ impl Build<'_> {
         // `%button_basic_flat`: 7% hovered, 16% pressed; checked `$selected_color` 10%, 13%
         // hovered, 19% pressed.
         let tint = |share: f32| nd_theme::color::with_alpha(ink, ink.a * share);
-        let (rest, hover, active) =
-            if shown { (tint(0.10), tint(0.13), tint(0.19)) } else { (gpui::transparent_black(), tint(0.07), tint(0.16)) };
+        let (rest, hover, active) = if shown {
+            (tint(0.10), tint(0.13), tint(0.19))
+        } else {
+            (gpui::transparent_black(), tint(0.07), tint(0.16))
+        };
         let mode = self.search_mode(field);
         div()
             .id(ElementId::Integer(id.0))
@@ -872,6 +875,9 @@ impl Build<'_> {
             return None;
         }
         let mode = self.search_mode(field);
+        // GtkSearchBar: 6 px around the entry over a 1 px line of `--headerbar-shade-color`.
+        let shade =
+            nd_theme::color::with_alpha(gpui::rgb(0x000006).into(), if self.theme().is_dark() { 0.36 } else { 0.12 });
         Some(
             div()
                 .w_full()
@@ -879,6 +885,8 @@ impl Build<'_> {
                 .flex()
                 .justify_center()
                 .p(px(6.))
+                .border_b_1()
+                .border_color(shade)
                 .on_key_down(move |e: &gpui::KeyDownEvent, window, cx| {
                     if e.keystroke.key == "escape" {
                         cx.stop_propagation();

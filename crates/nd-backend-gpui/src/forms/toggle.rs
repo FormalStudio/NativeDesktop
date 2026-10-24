@@ -37,6 +37,12 @@ pub(crate) fn ring(look: FormLook, on: bool, radius: Pixels, inner: impl IntoEle
         .when(on, |d| d.child(focus_outline(look.focus_ring, radius + px(3.), px(-2.), true)))
 }
 
+/// Space between a check or radio indicator and its label: libadwaita's 4 px `border-spacing`
+/// less the 3 px its focus ring pads the indicator by; elsewhere the look's gap.
+pub(crate) fn check_label_gap(look: &FormLook) -> Pixels {
+    if look.preset == nd_theme::Preset::Adwaita { px(1.) } else { look.gap }
+}
+
 /// libadwaita's focus outline over an element rounded at `radius`: 2 px of `color`, `offset`
 /// outside its edge (inside when negative), drawn over it so its layout never moves. When it
 /// `settles`, it starts 4 px further out and closes onto the element over 200 ms, as GTK's
@@ -172,7 +178,7 @@ pub(crate) fn checkbox(
         .flex_row()
         .items_center()
         .min_h(look.toggle_row)
-        .gap(look.gap)
+        .gap(check_label_gap(&look))
         .text_size(look.text_size)
         .line_height(look.line_height)
         .child(ring(look, ctl.ring(), look.check_radius, indicator))

@@ -429,6 +429,7 @@ pub fn source_tree_view(
             .size_full(),
         )
     };
+    let mut first = true;
     for (i, depth) in index.visible(&props.nodes) {
         let node = &props.nodes[i];
         if node.section && compact {
@@ -449,6 +450,25 @@ pub fn source_tree_view(
             );
             continue;
         }
+        if node.section && adwaita {
+            // AdwSidebar's section header: `.heading` (bold, body size) in the text colour,
+            // 12 px in from the pane and 12 px above and below, no top margin on the first.
+            marks.text(&node.title, theme.text.primary, &[], body, FontWeight::BOLD);
+            list = list.child(
+                div()
+                    .pt(if first { px(0.) } else { px(12.) })
+                    .pb(px(10.))
+                    .px(px(12.) - theme.spacing.sm)
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(theme.text.primary)
+                    .relative()
+                    .child(node.title.clone())
+                    .children(report(&node.id)),
+            );
+            first = false;
+            continue;
+        }
+        first = false;
         if node.section {
             marks.text(&node.title, theme.text.secondary, &[], footnote, semibold);
             list = list.child(

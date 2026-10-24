@@ -15,7 +15,7 @@ use nd_gpui::gpui::prelude::FluentBuilder as _;
 
 use super::glyph::{Glyph, glyph};
 use super::text::{menu_item, popover};
-use super::toggle::{elevation_edge, focus_visual, pressable, ring};
+use super::toggle::{check_label_gap, elevation_edge, focus_visual, pressable, ring};
 use super::{Sink, with_style};
 use crate::render::Build;
 
@@ -361,7 +361,7 @@ fn radio(b: &Build, id: NodeId, p: &SelectProps, window: &mut Window, cx: &mut A
             .flex_row()
             .items_center()
             .min_h(look.toggle_row)
-            .gap(look.gap)
+            .gap(check_label_gap(&look))
             .child(ring(look, selected && ctl.ring(), look.check_size / 2., dot))
             .child(option.clone());
         if p.enabled {

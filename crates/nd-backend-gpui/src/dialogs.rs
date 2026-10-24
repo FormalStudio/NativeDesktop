@@ -20,7 +20,7 @@ use nd_components::forms::TextStyle;
 use nd_components::services::AlertCallback;
 use nd_components::{AboutPanel, Alert, AlertPresentation, AlertResponse, ButtonRole};
 use nd_core::{NodeId, WindowId};
-use nd_gpui::gpui::prelude::FluentBuilder as _;
+use nd_gpui::gpui::prelude::FluentBuilder;
 use nd_gpui::gpui::{
     self, AnyElement, BoxShadow, ElementId, FocusHandle, FontWeight, Hsla, InteractiveElement, IntoElement, Keystroke,
     ParentElement, SharedString, StatefulInteractiveElement, Styled, anchored, deferred, div, point, px,
@@ -171,14 +171,45 @@ fn card(
         .flex()
         .flex_col()
         .w(px(width.min(viewport.width.as_f32() - 2. * theme.spacing.md.as_f32()).max(0.)))
-        .bg(theme.surface.overlay)
-        .border_1()
-        .border_color(theme.border.subtle)
-        .rounded(theme.radius.xl)
-        .shadow(shadow())
+        .map(|card| {
+            if theme.preset == nd_theme::Preset::Adwaita {
+                adw_sheet(card, theme).rounded(theme.radius.xl)
+            } else {
+                card.bg(theme.surface.overlay)
+                    .border_1()
+                    .border_color(theme.border.subtle)
+                    .rounded(theme.radius.xl)
+                    .shadow(shadow())
+            }
+        })
         .text_color(theme.text.primary)
         .occlude()
         .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
+}
+
+/// `--dialog-bg-color`: the window colour in light, the popover colour in dark.
+fn adw_dialog_bg(theme: &Theme) -> Hsla {
+    if theme.is_dark() { theme.surface.overlay } else { theme.surface.base }
+}
+
+/// `floating-sheet > sheet`: the dialog colour under three tight shadows, with the window
+/// outline (7% white, inside the edge) only showing in dark.
+fn adw_sheet<E: Styled + FluentBuilder>(card: E, theme: &Theme) -> E {
+    let shade = |a: f32| gpui::hsla(240. / 360., 1., 0.012, a);
+    let layer = |color: Hsla, blur: f32, spread: f32| BoxShadow {
+        color,
+        offset: point(px(0.), px(0.)),
+        blur_radius: px(blur),
+        spread_radius: px(spread),
+        inset: false,
+    };
+    card.bg(adw_dialog_bg(theme))
+        .shadow(vec![
+            layer(shade(0.03), 14., 2.),
+            layer(shade(0.1), 5., 2.),
+            layer(gpui::black().opacity(0.05), 0., 1.),
+        ])
+        .when(theme.is_dark(), |card| card.border_1().border_color(with_alpha(gpui::white(), 0.07)))
 }
 
 /// A centred, wrapping line of text in `style`.
@@ -275,10 +306,11 @@ pub fn alert_view(
     layer(theme, viewport, focus, on_input, Some(card.into_any_element()), marks)
 }
 
-/// AdwAlertDialog (`_dialogs.scss`): the dialog colour at radius 18 under libadwaita's dialog
-/// shadow, a `title-2` heading 32 px from the top with the body 10 px under it, 24 px sides,
-/// and 44 px responses at radius 12, 12 px apart: plain responses as regular buttons, the
-/// default as a suggested one, destructive ones as red text on a red tint.
+/// AdwAlertDialog (`_message-dialog.scss`): the dialog colour at radius 18 under libadwaita's
+/// dialog shadow, a `title-2` heading 32 px from the top with the body 10 px under it, 24 px
+/// sides, 9 px under the message and 12 px over the responses, and 44 px responses at radius 12,
+/// 12 px apart: plain responses as regular buttons, the default as a suggested one, destructive
+/// ones as red text on a red tint.
 fn adw_alert(
     alert: &Alert,
     focused: Option<usize>,
@@ -290,12 +322,12 @@ fn adw_alert(
 ) -> AnyElement {
     use crate::forms::look::AdwButton;
     let look = FormLook::of(theme);
-    let surface = if theme.is_dark() { theme.surface.overlay } else { theme.surface.base };
+    let surface = adw_dialog_bg(theme);
     let under = [theme.scrim, surface];
     marks.fill("alert", surface, &[theme.scrim]);
     let (title_size, title_weight, _) = look.type_of(TextStyle::Title1);
     marks.text(&alert.title, theme.text.primary, &under, title_size, title_weight);
-    let mut message = div().flex().flex_col().gap(px(10.)).px(px(24.)).pt(px(32.)).pb(px(24.)).child(line(
+    let mut message = div().flex().flex_col().gap(px(10.)).px(px(24.)).pt(px(32.)).pb(px(9.)).child(line(
         alert.title.clone(),
         TextStyle::Title1,
         theme.text.primary,
@@ -352,7 +384,6 @@ fn adw_alert(
     if !stacked {
         items.reverse();
     }
-    let shade = |a: f32| gpui::hsla(240. / 360., 1., 0.012, a);
     let card = div()
         .id("nd-dialog")
         .role(gpui::Role::AlertDialog)
@@ -361,32 +392,8 @@ fn adw_alert(
         .flex()
         .flex_col()
         .w(px(ALERT_WIDTH.min(viewport.width.as_f32() - 2. * theme.spacing.md.as_f32()).max(0.)))
-        .bg(surface)
         .rounded(px(18.))
-        .shadow(vec![
-            BoxShadow {
-                color: shade(0.03),
-                offset: point(px(0.), px(0.)),
-                blur_radius: px(14.),
-                spread_radius: px(2.),
-                inset: false,
-            },
-            BoxShadow {
-                color: shade(0.1),
-                offset: point(px(0.), px(0.)),
-                blur_radius: px(5.),
-                spread_radius: px(2.),
-                inset: false,
-            },
-            BoxShadow {
-                color: gpui::black().opacity(0.05),
-                offset: point(px(0.), px(0.)),
-                blur_radius: px(0.),
-                spread_radius: px(1.),
-                inset: false,
-            },
-        ])
-        .when(theme.is_dark(), |card| card.border_1().border_color(with_alpha(gpui::white(), 0.07)))
+        .map(|card| adw_sheet(card, theme))
         .text_color(theme.text.primary)
         .occlude()
         .on_any_mouse_down(|_, _, cx| cx.stop_propagation())
@@ -409,7 +416,8 @@ pub fn about_view(
     }
     let look = FormLook::of(theme);
     let s = &theme.spacing;
-    let surface = theme.surface.overlay;
+    let adwaita = theme.preset == nd_theme::Preset::Adwaita;
+    let surface = if adwaita { adw_dialog_bg(theme) } else { theme.surface.overlay };
     let under = [theme.scrim, surface];
     marks.fill("about", surface, &[theme.scrim]);
     let mut column = div().flex().flex_col().items_center().gap(s.md).px(s.xl).pt(s.xl + s.md).pb(s.xl);
@@ -424,18 +432,24 @@ pub fn about_view(
             Some(build) => format!("{version} ({build})").into(),
             None => version.clone(),
         };
-        let (bg, fg) = (theme.accent_container.bg, theme.accent_container.fg);
+        // AdwAboutDialog's `.app-version`: a regular pill button, accent text, 3 px by 18 px.
+        let (bg, fg, weight, (px_x, px_y)) = if adwaita {
+            let fills = crate::forms::look::AdwButton::Regular.fills(theme);
+            (fills.rest, theme.text.accent, FontWeight::BOLD, (px(18.), px(3.)))
+        } else {
+            (theme.accent_container.bg, theme.accent_container.fg, FontWeight::SEMIBOLD, (s.md, s.xs))
+        };
         marks.fill("version", bg, &under);
-        marks.text(&text, fg, &[theme.scrim, surface, bg], look.text_size, FontWeight::SEMIBOLD);
+        marks.text(&text, fg, &[theme.scrim, surface, bg], look.text_size, weight);
         column = column.child(
             div()
-                .px(s.md)
-                .py(s.xs)
-                .rounded(theme.radius.xl)
+                .px(px_x)
+                .py(px_y)
+                .rounded(if adwaita { px(999.) } else { theme.radius.xl })
                 .bg(bg)
                 .text_color(fg)
                 .text_size(look.text_size)
-                .font_weight(FontWeight::SEMIBOLD)
+                .font_weight(weight)
                 .child(text),
         );
     }
@@ -482,18 +496,38 @@ pub fn about_view(
         .role(gpui::Role::Button)
         .aria_label("Close")
         .absolute()
-        .top(s.sm)
-        .right(s.sm)
         .size(side)
         .flex()
         .items_center()
         .justify_center()
-        .rounded_full()
-        .hover({
-            let hover = theme.hover(surface);
-            move |st| st.bg(hover)
-        })
-        .child(glyph(Glyph::Clear, look.icon_size, theme.text.primary, look.glyph_stroke));
+        .rounded_full();
+    close = if adwaita {
+        // The dialog header bar's close button: a 24 px circle of the regular button fills,
+        // 34 px wide, centred in a 47 px header bar 6 px in from the edge.
+        let fills = crate::forms::look::AdwButton::Regular.fills(theme);
+        let (hover, active) = (fills.hover, fills.active);
+        close.top(px(6.5)).right(px(6.)).group("nd-about-close").child(
+            div()
+                .id("nd-about-close-circle")
+                .size(px(24.))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded_full()
+                .bg(fills.rest)
+                .group_hover("nd-about-close", move |st| st.bg(hover))
+                .group_active("nd-about-close", move |st| st.bg(active))
+                .child(glyph(Glyph::Clear, look.icon_size, theme.text.primary, look.glyph_stroke)),
+        )
+    } else {
+        let hover = theme.hover(surface);
+        close.top(s.sm).right(s.sm).hover(move |st| st.bg(hover)).child(glyph(
+            Glyph::Clear,
+            look.icon_size,
+            theme.text.primary,
+            look.glyph_stroke,
+        ))
+    };
     marks.fill("close", theme.text.primary, &under);
     if let Some(on_input) = on_input.clone() {
         close = close.on_click(move |_, window, cx| on_input(DialogInput::Close, window, cx));
