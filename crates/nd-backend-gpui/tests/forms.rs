@@ -675,9 +675,9 @@ mod forms {
                 compare(scheme, &capture.png);
             }
         }
-        // The Windows skin drawn on Linux (what `ND_PRESET=fluent` shows), so it is checked
+        // The Windows skin drawn off Windows (what `ND_PRESET=fluent` shows), so it is checked
         // without a Windows machine.
-        if cfg!(target_os = "linux") {
+        {
             for (scheme, appearance) in
                 [("fluent-light", WindowAppearance::Light), ("fluent-dark", WindowAppearance::Dark)]
             {
@@ -706,9 +706,13 @@ mod forms {
             println!("recorded {}", path.display());
             return;
         }
-        let expected = image::open(&path)
-            .unwrap_or_else(|e| panic!("{}: {e} (record with ND_UPDATE_GOLDENS=1)", path.display()))
-            .to_rgba8();
+        let expected = match image::open(&path) {
+            Ok(image) => image.to_rgba8(),
+            Err(e) => {
+                let _ = std::fs::write(path.with_extension("actual.png"), png);
+                panic!("{}: {e} (record with ND_UPDATE_GOLDENS=1)", path.display())
+            }
+        };
         let actual = image::load_from_memory(png).expect("png").to_rgba8();
         let fail = |why: String| {
             let out = path.with_extension("actual.png");

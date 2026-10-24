@@ -653,8 +653,8 @@ mod gate_m6 {
                     failed.push(e);
                 }
             }
-            // WinUI's ContentDialog, drawn on Linux as `ND_PRESET=fluent` shows it.
-            if cfg!(target_os = "linux") {
+            // The Fluent look as `ND_PRESET=fluent` draws it off Windows.
+            {
                 for view in ["alert-fluent", "about-fluent", "chrome-fluent", "chrome-backdrop-fluent", "search-fluent"] {
                     if let Err(e) = golden(view, scheme) {
                         failed.push(e);
@@ -719,6 +719,7 @@ fn golden(view: &str, scheme: Scheme) -> Result<(), String> {
         return Ok(());
     }
     if !path.exists() {
+        let _ = image.save(path.with_extension("actual.png"));
         return Err(format!("{} is missing (record it with ND_UPDATE_GOLDENS=1)", path.display()));
     }
     let expected = image::open(&path).map_err(|e| e.to_string())?.to_rgba8();
