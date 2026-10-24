@@ -23,7 +23,9 @@ use nd_gpui::gpui::{
 use nd_ui::TitlebarInsets;
 
 use crate::backdrop::{self, Backdrop};
-use crate::caption::{CaptionButton, CaptionLayout, CaptionState, FLUENT_BUTTON_WIDTH, FLUENT_TITLE_HEIGHT, Rect};
+use crate::caption::{
+    CLOSE_HOVER_RGB, CaptionButton, CaptionLayout, CaptionState, FLUENT_BUTTON_WIDTH, FLUENT_TITLE_HEIGHT, Rect,
+};
 use crate::chrome::{Chrome, ChromeEvent};
 use crate::pointer::PointerPhase;
 
@@ -233,15 +235,16 @@ impl OsHooks for WindowsHooks {
     }
 }
 
-/// One Fluent caption button: Segoe Fluent Icons glyph, subtle fill on hover and press, red
-/// behind close.
+/// One Fluent caption button: Segoe Fluent Icons glyph, subtle fill on hover and press, the
+/// system's red behind close whatever the theme.
 fn caption_button(which: CaptionButton, state: CaptionState, look: Look, maximized: bool) -> impl IntoElement {
     let hovered = state.hovered == Some(which);
     let pressed = state.pressed == Some(which);
     let close = which == CaptionButton::Close;
+    let red: gpui::Hsla = gpui::rgb(CLOSE_HOVER_RGB).into();
     let (bg, fg) = match (close, pressed, hovered) {
-        (true, true, _) => (look.close_hover.opacity(0.9), gpui::white()),
-        (true, false, true) => (look.close_hover, gpui::white()),
+        (true, true, _) => (red.opacity(0.9), gpui::white()),
+        (true, false, true) => (red, gpui::white()),
         (false, true, _) => (look.control_active, look.text),
         (false, false, true) => (look.control_hover, look.text),
         _ => (gpui::transparent_black(), look.text),

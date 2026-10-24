@@ -51,6 +51,10 @@ pub enum Hit {
     Resize(Edge),
 }
 
+/// Windows 11's close button fill on hover, the same in light and dark, under a white glyph.
+/// Pressed is this at 90%.
+pub const CLOSE_HOVER_RGB: u32 = 0xC42B1C;
+
 /// Fluent caption button width in effective pixels (WinUI `TitleBar`, Windows 11 system frame).
 pub const FLUENT_BUTTON_WIDTH: f32 = 46.;
 /// Title row height of a standard Fluent window; 48 is the tall variant that holds a search box.
