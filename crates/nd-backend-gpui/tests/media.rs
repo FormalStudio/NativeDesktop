@@ -290,11 +290,12 @@ fn open_in(preset: Preset, appearance: WindowAppearance) -> Rig {
     Rig { cx, host, window: window.expect("window"), log, view }
 }
 
-/// Player bars below the width that keeps their extra controls, in both layouts that take them.
+/// Player bars below the width that keeps their extra controls, in each layout that takes them.
 struct NarrowBars;
 
 /// Bar widths in points under the 440 where a full bar drops its trailing controls. The pill
-/// drops them under 400, so at 420 it keeps them and loses only its volume slider.
+/// drops them under 400, so at 420 it keeps them and loses only its volume slider; the centred
+/// and toolbar bars drop them under 560.
 const NARROW: [f32; 2] = [360., 420.];
 
 impl Render for NarrowBars {
@@ -305,7 +306,12 @@ impl Render for NarrowBars {
             .clock(PlaybackClock::paused(secs(72.)))
             .duration(secs(214.))
             .volume(0.6, false);
-        let layouts = [("full", TransportLayout::Full), ("pill", TransportLayout::Pill)];
+        let layouts = [
+            ("full", TransportLayout::Full),
+            ("pill", TransportLayout::Pill),
+            ("centered", TransportLayout::Centered),
+            ("toolbar", TransportLayout::Toolbar),
+        ];
         v_flex().p(px(16.)).gap(px(16.)).children(layouts.into_iter().flat_map(|(name, layout)| {
             let now = now.clone();
             NARROW.into_iter().map(move |w| {
@@ -327,7 +333,7 @@ fn open_narrow_bars() -> (HeadlessAppContext, GpuiHost, WindowId) {
     let host = cx.update(|cx| {
         GpuiHost::builder().quit_when_empty(false).start(cx, |app| {
             let handle = app
-                .open_window(WindowOptions::main("bars").title("Bars").size(size(px(480.), px(320.))), |_, cx| {
+                .open_window(WindowOptions::main("bars").title("Bars").size(size(px(480.), px(640.))), |_, cx| {
                     cx.new(|_| NarrowBars)
                 });
             window = Some(handle.id());
@@ -339,6 +345,55 @@ fn open_narrow_bars() -> (HeadlessAppContext, GpuiHost, WindowId) {
         settle(&mut cx, &host);
     }
     (cx, host, window.expect("window"))
+}
+
+/// A music app's window with its player bar along the bottom, built as FormalMusic builds it:
+/// rating and More beside the song, repeat, shuffle and the queue after the volume.
+struct AppBar(TransportLayout);
+
+impl Render for AppBar {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        let now = NowPlaying::new("Paper Moon")
+            .subtitle("The Night Shift")
+            .artwork(picture("art", [60, 40, 140], [200, 80, 160]))
+            .clock(PlaybackClock::paused(secs(72.)))
+            .duration(secs(214.))
+            .buffered(secs(130.))
+            .volume(0.6, false);
+        let bar = player_bar("bar", now)
+            .layout(self.0)
+            .accessory(icon_button("bar.like", Icon::ThumbsUp))
+            .accessory(icon_button("bar.more", Icon::Ellipsis))
+            .trailing(icon_button("bar.repeat", Icon::Repeat))
+            .trailing(icon_button("bar.shuffle", Icon::Shuffle).checked(true))
+            .trailing(icon_button("bar.queue", Icon::ListMusic))
+            .open_button(icon_button("bar.open", Icon::ChevronUp))
+            .w_full();
+        v_flex().size_full().child(div().flex_1()).child(bar)
+    }
+}
+
+/// The app bar in `layout`, drawn in `preset`, at `width` points.
+fn open_app_bar(preset: Preset, appearance: WindowAppearance, layout: TransportLayout, width: f32) -> Rig {
+    let mut cx = headless();
+    let mut window = None;
+    let host = cx.update(|cx| {
+        GpuiHost::builder().quit_when_empty(false).start(cx, |app| {
+            let handle = app
+                .open_window(WindowOptions::main("bar").title("Bar").size(size(px(width), px(160.))), |_, cx| {
+                    cx.new(|_| AppBar(layout))
+                });
+            window = Some(handle.id());
+        })
+    });
+    let mut registry = ThemeRegistry::new(preset);
+    let scheme = if matches!(appearance, WindowAppearance::Dark) { Scheme::Dark } else { Scheme::Light };
+    registry.set_os(OsTheme { scheme: Some(scheme), ..registry.os().clone() });
+    host.backend().set_theme(registry);
+    for _ in 0..3 {
+        settle(&mut cx, &host);
+    }
+    Rig { cx, host, window: window.expect("window"), log: Rc::default(), view: Rc::default() }
 }
 
 fn open() -> Rig {
@@ -705,7 +760,7 @@ mod media {
         let (_cx, host, window) = open_narrow_bars();
         let tree = host.read(|app| app.semantic_window(window).expect("window"));
         let node = |id: &str| find(&tree.root, &|n| n.test_id.as_deref() == Some(id));
-        for (name, cut) in [("full", 440.), ("pill", 400.)] {
+        for (name, cut) in [("full", 440.), ("pill", 400.), ("centered", 560.), ("toolbar", 560.)] {
             for w in NARROW {
                 let id = format!("{name}-{w}");
                 let bar = node(&id).and_then(|n| n.bounds).unwrap_or_else(|| panic!("{id} laid out"));
@@ -745,6 +800,30 @@ mod media {
             let path = PathBuf::from(dir).join("narrow-bars.png");
             std::fs::create_dir_all(path.parent().expect("dir")).expect("shot dir");
             std::fs::write(&path, &capture.png).expect("write shot");
+        }
+    }
+
+    /// FormalMusic's bar as each drawn platform lays it out, in light and dark, against
+    /// `media-bar-<preset>-<scheme>.png`.
+    pub fn app_bar_goldens() {
+        if nd_gpui::gpui_platform::current_headless_renderer().ok().flatten().is_none() {
+            println!("skipped: GPUI has no headless renderer on this OS");
+            return;
+        }
+        let looks = [
+            ("fluent", Preset::Fluent, TransportLayout::Centered),
+            ("adwaita", Preset::Adwaita, TransportLayout::Toolbar),
+        ];
+        for (name, preset, layout) in looks {
+            for (scheme, appearance) in [("light", WindowAppearance::Light), ("dark", WindowAppearance::Dark)] {
+                let mut rig = open_app_bar(preset, appearance, layout, 1000.);
+                for _ in 0..20 {
+                    std::thread::sleep(Duration::from_millis(10));
+                    rig.settle();
+                }
+                let capture = rig.host.job(|app| app.capture(rig.window)).expect("capture");
+                compare(&format!("bar-{name}-{scheme}"), &capture.png);
+            }
         }
     }
 
@@ -842,6 +921,7 @@ fn main() {
             media::a_narrow_bar_keeps_its_open_button_and_stays_inside_its_width,
         ),
         ("media::goldens", media::goldens),
+        ("media::app_bar_goldens", media::app_bar_goldens),
     ];
     harness(&args, &tests);
 }

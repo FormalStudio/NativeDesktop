@@ -17,6 +17,9 @@ use crate::forms::{Sink, with_style};
 use crate::nav::Marks;
 use crate::render::Build;
 
+/// The bar, whose hover and press a slider look's thumb shows.
+const SEEK_GROUP: &str = "nd-seek";
+
 #[derive(Default)]
 pub(crate) struct Seek {
     pub model: SeekModel,
@@ -65,8 +68,14 @@ pub(super) fn seek_bar(
         window.request_animation_frame();
     }
     let played = p.fraction(shown);
-    let buffered = p.buffered_fraction(played);
+    // WinUI and libadwaita draw a player's position as their own slider: the look's track and
+    // thumb, the thumb always shown. libadwaita's fill level marks what is buffered; WinUI's
+    // slider has none.
+    let look = ctl.look;
+    let slider = !p.line && matches!(look.preset, nd_theme::Preset::Fluent | nd_theme::Preset::Adwaita);
+    let buffered = if slider && look.preset == nd_theme::Preset::Fluent { played } else { p.buffered_fraction(played) };
     let thickness = match (p.line, active) {
+        _ if slider => look.track_thickness.as_f32(),
         (true, true) => SEEK.track,
         (true, false) => SEEK.line,
         (false, true) => SEEK.track_active,
@@ -74,7 +83,13 @@ pub(super) fn seek_bar(
     };
     let fill = if p.line { theme.text.secondary } else { theme.accent };
     let accent = if p.enabled { fill } else { theme.disabled(fill) };
-    let (track, loaded) = (theme.border.subtle, if p.line { theme.border.subtle } else { theme.border.strong });
+    let (track, loaded) = match () {
+        _ if slider => (look.track, look.track_active),
+        _ => (theme.border.subtle, if p.line { theme.border.subtle } else { theme.border.strong }),
+    };
+    // The thumb's half at each end, so it stops at the track's ends inside the bar.
+    let knob = if slider { look.slider_knob.as_f32() } else { 0. };
+    let hit = if slider { knob + 6. } else { SEEK.hit };
     marks.fill("seek track", track, &[]);
     if buffered > played {
         marks.fill("seek buffered", loaded, &[track]);
@@ -86,20 +101,32 @@ pub(super) fn seek_bar(
     let bar_fill = |fraction: f32, color| {
         div().absolute().left_0().top_0().bottom_0().w(relative(fraction)).rounded_full().bg(color)
     };
-    let inset = p.track_inset();
-    let mut bar = div().id("track").relative().flex_1().min_w_0().h(px(SEEK.hit)).child(
+    let inset = p.track_inset() + knob / 2.;
+    let mut bar = div().id("track").relative().flex_1().min_w_0().h(px(hit)).child(
         div()
             .absolute()
-            .left_0()
-            .right_0()
-            .top(px((SEEK.hit - thickness) / 2.))
+            .left(px(knob / 2.))
+            .right(px(knob / 2.))
+            .top(px((hit - thickness) / 2.))
             .h(px(thickness))
             .rounded_full()
             .bg(track)
             .when(buffered > played, |t| t.child(bar_fill(buffered, loaded)))
             .when(played > 0., |t| t.child(bar_fill(played, accent))),
     );
-    if active && !p.line {
+    if slider && seekable {
+        marks.fill("seek thumb", accent, &[]);
+        let thumb = crate::forms::value::thumb(look, "thumb".into(), true, SEEK_GROUP, ctl.ring());
+        bar = bar.group(SEEK_GROUP).child(
+            div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left(px(knob / 2.))
+                .right(px(knob / 2.))
+                .child(thumb.top(px((hit - knob) / 2. - 3.)).left(relative(played)).ml(px(-knob / 2. - 3.))),
+        );
+    } else if active && !p.line {
         marks.fill("seek thumb", accent, &[]);
         bar = bar.child(
             div()

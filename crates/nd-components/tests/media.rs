@@ -408,7 +408,8 @@ fn player_view(s: &Player, cx: &mut Context<Host<Player>>) -> AnyElement {
 
 #[test]
 fn player_bar_is_built_from_native_controls_and_sends_commands() {
-    let mut rig = Rig::new(Player::default(), player_view);
+    // Wide enough that the bar keeps its volume slider.
+    let mut rig = Rig::sized(nd_ui::Size { width: 900., ..WINDOW }, |_| Player::default(), player_view);
     assert!(rig.kind_is::<SeekBarKind>("player.seek"));
     assert!(rig.kind_is::<ImageKind>("player.art"));
     assert_eq!(rig.sem("player.seek").value.as_deref(), Some("0:30 of 3:00"));

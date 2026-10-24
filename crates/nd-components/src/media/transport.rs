@@ -28,6 +28,7 @@ use super::pipeline::ImageSource;
 use crate::controls::{ButtonExt, icon_button};
 use crate::forms::{LabelTone, SliderChanged, TextStyle, guard, label, leaf, not_taken, slider};
 use crate::icon::Icon;
+use nd_theme::Preset;
 
 /// Seek bar geometry: the component's design, the same on every backend.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -458,14 +459,48 @@ pub enum TransportLayout {
     /// end, the song on two lines over a thin seek bar in the middle, the item's controls and
     /// volume at the trailing end. Sits in a [`crate::bottom_accessory`].
     Pill,
+    /// Windows 11's Media Player: the seek bar with its times across the top, then the song at
+    /// the leading edge, the transport centred around a large round play button, and volume and
+    /// the extras at the trailing edge.
+    Centered,
+    /// GNOME Music's player bar: the song at the leading edge, the transport centred around a
+    /// wide pill play button with the seek bar and its times under it, the extras at the
+    /// trailing edge.
+    Toolbar,
 }
 
 impl TransportLayout {
-    /// The bar the platform's music players use: the pill on macOS, the bottom bar elsewhere.
+    /// The bar the platform's music players use: Music's pill on macOS, Media Player's bar under
+    /// the Fluent look, GNOME Music's under Adwaita.
     pub fn platform() -> Self {
-        if cfg!(target_os = "macos") { Self::Pill } else { Self::Full }
+        if cfg!(target_os = "macos") {
+            return Self::Pill;
+        }
+        match Preset::current() {
+            Preset::Fluent => Self::Centered,
+            Preset::Adwaita => Self::Toolbar,
+            Preset::MacOs | Preset::Plain => Self::Full,
+        }
     }
 }
+
+/// The docked bars' song and play button, measured against Media Player and GNOME Music.
+pub struct DockMetrics {
+    pub art: f32,
+    pub art_radius: f32,
+    /// The play button's box and glyph size.
+    pub play: (f32, f32),
+    pub play_glyph: f32,
+    /// The seek bar's width with its times, where it sits under the transport.
+    pub seek: f32,
+    pub volume: f32,
+}
+
+pub const CENTERED: DockMetrics =
+    DockMetrics { art: 48., art_radius: 4., play: (40., 40.), play_glyph: 20., seek: 0., volume: 96. };
+
+pub const TOOLBAR: DockMetrics =
+    DockMetrics { art: 56., art_radius: 6., play: (80., 48.), play_glyph: 24., seek: 360., volume: 96. };
 
 /// How much of a bar fits its width. Music's mini player drops the volume slider first, then
 /// everything but the song and its transport.
@@ -485,6 +520,7 @@ impl Room {
     fn of(layout: TransportLayout, width: Option<f32>) -> Self {
         let (medium, wide) = match layout {
             TransportLayout::Pill => (400., 540.),
+            TransportLayout::Centered | TransportLayout::Toolbar => (560., 820.),
             _ => (440., 640.),
         };
         match width {
@@ -814,6 +850,114 @@ impl PlayerBar {
                             .when(room == Room::Wide, |row| row.child(volume))
                             .children(open_button),
                     )
+            }
+            TransportLayout::Centered | TransportLayout::Toolbar => {
+                let toolbar = layout == TransportLayout::Toolbar;
+                let m = if toolbar { &TOOLBAR } else { &CENTERED };
+                let previous = icon_button(child("previous"), Icon::SkipBack)
+                    .tooltip("Previous")
+                    .disabled(!now.can_previous)
+                    .on_click({
+                        let f = send(TransportCommand::Previous);
+                        move |_, w, cx| f(w, cx)
+                    })
+                    .bezel(Bezel::Borderless);
+                let mute = icon_button(child("mute"), volume_icon(now.volume, now.muted))
+                    .tooltip(if now.muted { "Unmute" } else { "Mute" })
+                    .on_click({
+                        let f = send(TransportCommand::ToggleMute);
+                        move |_, w, cx| f(w, cx)
+                    })
+                    .bezel(Bezel::Borderless);
+                let volume = {
+                    let on = on_command_of(&send);
+                    slider(child("volume"), if now.muted { 0. } else { now.volume })
+                        .label("Volume")
+                        .w(px(m.volume))
+                        .on_change(move |e: &SliderChanged, w, cx| on(TransportCommand::SetVolume(e.value))(w, cx))
+                };
+                let idle = now.title.is_empty() && now.artwork.is_none();
+                // Media Player's play button is a round raised button; GNOME Music's a wide pill
+                // in the regular button tint. Both draw the glyph larger than the skips'.
+                let play = play
+                    .bezel(Bezel::Circle)
+                    .w(px(m.play.0))
+                    .h(px(m.play.1))
+                    .rounded(px(m.play.1 / 2.))
+                    .text_size(px(m.play_glyph));
+                let next = next.disabled(!now.can_next).bezel(Bezel::Borderless);
+                // GNOME Music sets the title bold at body size, Media Player semibold a step up.
+                let title = label(now.title.clone())
+                    .rich(RichText::new([if toolbar {
+                        span(now.title.clone()).bold()
+                    } else {
+                        span(now.title.clone()).semibold()
+                    }]))
+                    .text_style(if toolbar { TextStyle::Body } else { TextStyle::Title3 })
+                    .truncate();
+                let titles = v_flex().min_w_0().child(title).when_some(now.subtitle.clone(), |el, s| {
+                    el.child(label(s).text_style(TextStyle::Body).tone(LabelTone::Secondary).truncate())
+                });
+                // The song takes its own width, so the item's buttons follow its titles.
+                let song = h_flex()
+                    .id(child("now"))
+                    .min_w_0()
+                    .gap_3()
+                    .items_center()
+                    .when(!idle, |row| row.child(art(m.art).rounded(px(m.art_radius))).child(titles))
+                    .when_some(on_open.filter(|_| !idle), |row, open| {
+                        row.role(Role::Button, format!("{}, open player", now.title))
+                            .on_tap(move |_, w, cx| open(w, cx))
+                    });
+                // The song and the trailing controls share what the transport leaves, half each,
+                // so the transport sits in the middle of the bar whatever either side holds.
+                let leading = h_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .overflow_hidden()
+                    .gap_2()
+                    .items_center()
+                    .child(song)
+                    .when(!idle && !accessories.is_empty(), |row| {
+                        row.child(h_flex().flex_none().gap_1().items_center().children(accessories))
+                    });
+                let transport = h_flex()
+                    .flex_none()
+                    .gap(px(if toolbar { 6. } else { 4. }))
+                    .items_center()
+                    .justify_center()
+                    .children(before_transport)
+                    .child(previous)
+                    .child(play)
+                    .child(next)
+                    .children(after_transport);
+                let trailing = h_flex()
+                    .flex_1()
+                    .min_w_0()
+                    .gap_1()
+                    .items_center()
+                    .justify_end()
+                    .child(mute)
+                    .when(room == Room::Wide, |row| row.child(volume))
+                    .children(trailing)
+                    .children(open_button);
+                if toolbar {
+                    let center = v_flex()
+                        .flex_none()
+                        .w(px(if room == Room::Narrow { 240. } else { m.seek }))
+                        .gap_1()
+                        .items_center()
+                        .child(transport)
+                        .child(seek.times_beside());
+                    h_flex().id(id.clone()).w_full().gap_3().items_center().child(leading).child(center).child(trailing)
+                } else {
+                    v_flex()
+                        .id(id.clone())
+                        .w_full()
+                        .gap_1()
+                        .child(seek.times_beside())
+                        .child(h_flex().w_full().gap_3().items_center().child(leading).child(transport).child(trailing))
+                }
             }
             TransportLayout::Full => {
                 let previous = icon_button(child("previous"), Icon::SkipBack)

@@ -113,62 +113,8 @@ pub(crate) fn slider(b: &Build, id: NodeId, p: &SliderProps, window: &mut Window
             rail = rail.child(tick);
         }
     }
-    let face = match look.thumb_dot {
-        // WinUI's thumb: a solid disc in an elevation border around an accent dot that grows
-        // under the pointer and shrinks while pressed.
-        Some([rest, hover, pressed]) => {
-            let mut dot = div().id("dot").size(rest).rounded_full().bg(look.accent);
-            if p.enabled {
-                dot = dot
-                    .group_hover(SLIDER_GROUP, move |s| s.size(hover))
-                    .group_active(SLIDER_GROUP, move |s| s.size(pressed));
-            }
-            div()
-                .size(knob)
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded_full()
-                .relative()
-                .bg(look.thumb_fill)
-                .border_1()
-                .border_color(look.border)
-                .children(super::toggle::elevation_edge(look, knob / 2.))
-                .child(dot)
-                .into_any_element()
-        }
-        None => {
-            let mut face = div()
-                .id(ElementId::NamedInteger("nd-slider-knob".into(), id.0))
-                .size(knob - px(2.))
-                .rounded_full()
-                .bg(look.knob)
-                .border_1()
-                .border_color(look.knob_edge);
-            if let Some(shadow) = look.knob_shadow {
-                // libadwaita's slider: a 10% shade ring and the knob shadow; white under the pointer.
-                let mut shadows = super::toggle::knob_shadow(shadow);
-                shadows.push(gpui::BoxShadow {
-                    color: shadow.opacity(0.5),
-                    offset: gpui::point(px(0.), px(0.)),
-                    blur_radius: px(0.),
-                    spread_radius: px(1.),
-                    inset: false,
-                });
-                face = face.shadow(shadows);
-            }
-            if p.enabled && look.trough_states {
-                let lit = look.knob_hover;
-                face = face.group_hover(SLIDER_GROUP, move |s| s.bg(lit));
-            }
-            face.into_any_element()
-        }
-    };
-    let thumb = div()
-        .absolute()
-        .size(knob + px(6.))
-        .when(look.thumb_dot.is_some(), |t| t.flex().items_center().justify_center())
-        .child(ring(look, ctl.ring(), knob / 2., face));
+    let thumb =
+        thumb(look, ElementId::NamedInteger("nd-slider-knob".into(), id.0), p.enabled, SLIDER_GROUP, ctl.ring());
     let thumb = if p.vertical {
         thumb.left(px(-3.)).bottom(relative(fraction)).mb(-(knob / 2.) - px(3.))
     } else {
@@ -475,4 +421,66 @@ fn number_box(
         group = pressable(group, ctl);
     }
     with_style(group.on_key_down(keys), &p.style).into_any_element()
+}
+
+/// A slider's thumb in the look's style, `knob` across inside a ring's room: WinUI's disc
+/// around an accent dot, libadwaita's shaded knob. `group` is the element whose hover and press
+/// it shows.
+pub(crate) fn thumb(
+    look: super::FormLook,
+    id: ElementId,
+    enabled: bool,
+    group: &'static str,
+    focused: bool,
+) -> gpui::Div {
+    let knob = look.slider_knob;
+    let face = match look.thumb_dot {
+        // WinUI's thumb: a solid disc in an elevation border around an accent dot that grows
+        // under the pointer and shrinks while pressed.
+        Some([rest, hover, pressed]) => {
+            let mut dot = div().id("dot").size(rest).rounded_full().bg(look.accent);
+            if enabled {
+                dot = dot.group_hover(group, move |s| s.size(hover)).group_active(group, move |s| s.size(pressed));
+            }
+            div()
+                .size(knob)
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded_full()
+                .relative()
+                .bg(look.thumb_fill)
+                .border_1()
+                .border_color(look.border)
+                .children(super::toggle::elevation_edge(look, knob / 2.))
+                .child(dot)
+                .into_any_element()
+        }
+        None => {
+            let mut face =
+                div().id(id).size(knob - px(2.)).rounded_full().bg(look.knob).border_1().border_color(look.knob_edge);
+            if let Some(shadow) = look.knob_shadow {
+                // libadwaita's slider: a 10% shade ring and the knob shadow; white under the pointer.
+                let mut shadows = super::toggle::knob_shadow(shadow);
+                shadows.push(gpui::BoxShadow {
+                    color: shadow.opacity(0.5),
+                    offset: gpui::point(px(0.), px(0.)),
+                    blur_radius: px(0.),
+                    spread_radius: px(1.),
+                    inset: false,
+                });
+                face = face.shadow(shadows);
+            }
+            if enabled && look.trough_states {
+                let lit = look.knob_hover;
+                face = face.group_hover(group, move |s| s.bg(lit));
+            }
+            face.into_any_element()
+        }
+    };
+    div()
+        .absolute()
+        .size(knob + px(6.))
+        .when(look.thumb_dot.is_some(), |t| t.flex().items_center().justify_center())
+        .child(ring(look, focused, knob / 2., face))
 }

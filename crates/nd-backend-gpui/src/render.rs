@@ -944,12 +944,15 @@ impl<'a> Build<'a> {
             .block_mouse_except_scroll();
         // A labelled button with an icon leads with it, as libadwaita's button content does.
         let leading = (!props.label.is_empty()).then(|| props.icon.as_deref().and_then(Glyph::named)).flatten();
+        // A text size on an icon-only button sizes its glyph, as AppKit sizes a symbol from the
+        // button's font: a player's play button over its skips.
+        let icon = props.style.text.font_size.map_or(px(16.), |s| s.to_pixels(px(16.)));
         button = match (glyph, leading) {
             // `button.image-button`: 34 px square; `button.text-button`: 17 px each side, 34 tall.
             (Some(g), _) if adwaita.is_some() => {
-                button.size(px(34.)).child(crate::forms::glyph::glyph(g, px(16.), ink, px(1.75)))
+                button.size(px(34.)).child(crate::forms::glyph::glyph(g, icon, ink, px(1.75)))
             }
-            (Some(g), _) => button.size(px(28.)).child(crate::forms::glyph::glyph(g, px(16.), ink, px(1.75))),
+            (Some(g), _) => button.size(px(28.)).child(crate::forms::glyph::glyph(g, icon, ink, px(1.75))),
             (None, Some(g)) => button
                 .gap(px(6.))
                 .pl(px(10.))
@@ -971,6 +974,9 @@ impl<'a> Build<'a> {
             (None, None) if fluent.is_some() => button.px(px(11.)).min_h(px(32.)).child(label),
             (None, None) => button.px(px(12.)).py(px(4.)).child(label),
         };
+        let circle = props.bezel == Bezel::Circle || filled_circle;
+        // The elevation edge follows the button's outline, which a circle rounds fully.
+        let edge_radius = if circle { px(999.) } else { theme.radius.md };
         if bezel {
             button = match &fluent {
                 Some(f) if accent => {
@@ -980,7 +986,7 @@ impl<'a> Build<'a> {
                     button.relative().border_1().border_color(with_alpha(gpui::white(), 0.078)).bg(fill).children(
                         crate::forms::toggle::elevation_edge(
                             crate::forms::FormLook { stroke_bottom: Some(edge), ..*f },
-                            theme.radius.md,
+                            edge_radius,
                         ),
                     )
                 }
@@ -989,7 +995,7 @@ impl<'a> Build<'a> {
                     .border_1()
                     .border_color(f.border)
                     .bg(fill)
-                    .children(crate::forms::toggle::elevation_edge(*f, theme.radius.md)),
+                    .children(crate::forms::toggle::elevation_edge(*f, edge_radius)),
                 // libadwaita's buttons have no border.
                 None if adwaita.is_some() => button.bg(fill),
                 None => button.border_1().border_color(look.border).bg(fill),
@@ -997,7 +1003,6 @@ impl<'a> Build<'a> {
         } else if checked {
             button = button.bg(fill);
         }
-        let circle = props.bezel == Bezel::Circle || filled_circle;
         if circle {
             button = button.rounded_full();
         }

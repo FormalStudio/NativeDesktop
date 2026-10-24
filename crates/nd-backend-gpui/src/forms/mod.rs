@@ -19,7 +19,7 @@ pub(crate) mod look;
 mod pickers;
 pub(crate) mod text;
 pub(crate) mod toggle;
-mod value;
+pub(crate) mod value;
 
 use std::any::{Any, TypeId};
 use std::cell::{Cell, RefCell};
