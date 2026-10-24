@@ -36,8 +36,12 @@ The rules and values are in [docs/dev/hig/windows.md](../dev/hig/windows.md).
 - [x] Disabled opacity 0.5. Now 0.4.
 - [x] TextBox header (form field label) was semibold. Now Body (14 regular) with 8 px to the
   control under the Fluent look (`form_field`, nd-components). Built; not yet captured.
-- [ ] Segmented control: WinUI has none built in; nd's selected segment lacks the toolkit
-  Segmented's accent indicator. Decide whether to match the toolkit or SelectorBar.
+- [x] Segmented control drew a raised segment in a filled group, which WinUI has no control
+  for. Now SelectorBar: transparent items padded 12,10,12,7 on 8 px spacing, secondary text
+  under the pointer, the selected item marked by a 16x3 accent pill on its bottom edge
+  (SelectorBar_themeresources.xaml,
+  [SelectorBar](https://learn.microsoft.com/windows/apps/develop/ui/controls/selector-bar)).
+  Headless capture on macOS.
 - [ ] Time field draws a small stepper; WinUI's TimePicker opens a looping flyout.
 - [x] Text selection was a pale accent tint under unchanged text. Now solid accent under white
   text (the accent container in dark, where the accent is too light for white), the selected
@@ -80,7 +84,19 @@ The rules and values are in [docs/dev/hig/windows.md](../dev/hig/windows.md).
 - [x] Command palette highlighted its row with the accent container. Now WinUI's list
   selection (subtle fill, accent pill, text unchanged). Built; not yet captured.
 - [ ] ListView: hover and selection pill against the ListView page.
-- [ ] ToolTip, ContentDialog, TabView, Expander: compare against their pages.
+- [x] Title bar crowded the pane toggle against the window edge and set the title right after
+  it. Now TitleBar's metrics: 2 px leading padding, a 40x44 toggle, the title (Caption) 60 px
+  from the edge behind it, Segoe glyphs on Windows and Lucide paths elsewhere for the toggle
+  and the NavigationView row icons
+  ([TitleBar](https://learn.microsoft.com/windows/apps/develop/ui/controls/title-bar),
+  TitleBar_themeresources.xaml). Headless capture on macOS.
+- [ ] Title bar app icon (16 px, 16 in) and a footer Settings item: nd has no API for either.
+- [x] A button's tooltip never showed. Now WinUI's ToolTip on hover: Caption text, padding
+  9,6,9,8, max width 320, control radius, the flyout stroke and shadow
+  (ToolTip_themeresources.xaml,
+  [Tooltips](https://learn.microsoft.com/windows/apps/develop/ui/controls/tooltips)). GPUI
+  places it at the pointer, where WinUI centres it above the control.
+- [ ] TabView, Expander: compare against their pages.
 - [ ] Pending VM captures (the VM needs 45 GB free on g815 to start): dark theme for every
   control above; context menu, popover, palette, field label and selection beside the Gallery;
   the `real_windows_job` run without the job object, which should fail.

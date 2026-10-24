@@ -16,7 +16,7 @@ use nd_gpui::gpui::prelude::FluentBuilder as _;
 use super::glyph::{Glyph, glyph};
 use super::text::{menu_item, popover};
 use super::toggle::{check_label_gap, elevation_edge, focus_visual, pressable, ring};
-use super::{Sink, with_style};
+use super::{Ctl, Sink, with_style};
 use crate::render::Build;
 
 /// The pop-up's menu while open.
@@ -197,9 +197,78 @@ fn popup(b: &Build, id: NodeId, p: &SelectProps, window: &mut Window, cx: &mut A
     root.into_any_element()
 }
 
+/// WinUI's SelectorBar: transparent items padded 12,10,12,7 on 8 px spacing, the selected one
+/// marked by a 16x3 accent pill along its bottom edge.
+fn selector_bar(id: NodeId, p: &SelectProps, ctl: Ctl) -> gpui::AnyElement {
+    let look = ctl.look;
+    let mut bar = div()
+        .id(ElementId::Integer(id.0))
+        .role(gpui::Role::RadioGroup)
+        .aria_label(name(p))
+        .flex()
+        .flex_row()
+        .gap(px(8.))
+        .py(px(4.))
+        .text_size(look.text_size)
+        .line_height(look.line_height)
+        .text_color(look.text);
+    for (index, option) in p.options.iter().enumerate() {
+        let selected = index == p.selected;
+        let mut item = div()
+            .id(ElementId::Integer(index as u64))
+            .role(gpui::Role::RadioButton)
+            .aria_label(option.clone())
+            .aria_toggled(if selected { gpui::Toggled::True } else { gpui::Toggled::False })
+            .relative()
+            .pl(px(12.))
+            .pr(px(12.))
+            .pt(px(10.))
+            .pb(px(7.))
+            .rounded(look.radius)
+            .border_2()
+            .border_color(if ctl.ring() && selected { look.focus_ring } else { gpui::transparent_black() })
+            .whitespace_nowrap()
+            .child(option.clone());
+        if selected {
+            item = item.child(
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .bottom_0()
+                    .flex()
+                    .justify_center()
+                    .child(div().w(px(16.)).h(px(3.)).rounded_full().bg(look.accent)),
+            );
+        }
+        if p.enabled {
+            let sink = ctl.sink.clone();
+            let (hover, pressed) = (look.secondary_text, with_alpha(look.secondary_text, look.secondary_text.a * 0.75));
+            item = item
+                .cursor(look.cursor)
+                .hover(move |s| s.text_color(hover))
+                .active(move |s| s.text_color(pressed))
+                .on_click(move |_, window, cx| {
+                    sink.take_focus(window, cx);
+                    sink.send(SelectChanged { index }, cx);
+                });
+        }
+        bar = bar.child(item);
+    }
+    let bar = if p.enabled {
+        bar.track_focus(ctl.focus()).on_key_down(arrows(ctl.sink.clone(), p.selected, p.options.len()))
+    } else {
+        bar.opacity(look.disabled_opacity)
+    };
+    with_style(bar, &p.style).into_any_element()
+}
+
 fn segmented(b: &Build, id: NodeId, p: &SelectProps, window: &mut Window, cx: &mut App) -> gpui::AnyElement {
     let (ctl, _) = b.ctl(id, p.enabled, window, cx, || ());
     let look = ctl.look;
+    if look.preset == nd_theme::Preset::Fluent {
+        return selector_bar(id, p, ctl);
+    }
     let inset = px(3.);
     // AdwToggleGroup nests its toggles inside its own 9 px corners; elsewhere the group grows
     // around the control radius.
