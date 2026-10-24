@@ -639,11 +639,16 @@ impl Build<'_> {
         let look = self.look();
         let scaffold = node.parent.and_then(|toolbar| self.nodes.get(&toolbar)).and_then(|toolbar| toolbar.parent);
         let hidden = self.backend.hidden_sidebars.clone();
-        let side = theme.control.regular;
+        // WinUI's TitleBar pane toggle: 40 wide, 2 px clear of the 48 px bar's edges.
+        let (width, height) = match theme.preset {
+            nd_theme::Preset::Fluent => (px(40.), px(44.)),
+            _ => (theme.control.regular, theme.control.regular),
+        };
         div()
             .id(ElementId::Integer(id.0))
             .flex_none()
-            .size(side)
+            .w(width)
+            .h(height)
             .flex()
             .items_center()
             .justify_center()
@@ -662,7 +667,8 @@ impl Build<'_> {
                 window.refresh();
             })
             .child(if theme.preset == nd_theme::Preset::Fluent {
-                crate::fluent_icons::glyph(crate::fluent_icons::HAMBURGER, px(16.), self.ink_text()).into_any_element()
+                // GlobalNavigationButton, from Segoe Fluent Icons where Windows ships it.
+                glyph(Glyph::of(Icon::Menu), px(16.), self.ink_text(), px(1.5))
             } else {
                 glyph(Glyph::of(Icon::PanelLeft), px(16.), self.ink_text(), px(1.75)).into_any_element()
             })
@@ -692,6 +698,10 @@ impl Build<'_> {
             _ => theme.control.regular + s.sm * 2.,
         };
         let mut row = div().id(element_id).p(s.sm).min_h(min_h);
+        // WinUI's TitleBar: 2 px of padding and the buttons' own 2 px margin before the first.
+        if theme.preset == nd_theme::Preset::Fluent {
+            row = row.pl(px(4.)).py(px(2.));
+        }
         if let Some(p) = props::<TitlebarProps>(node) {
             row.style().refine(&p.style);
         }
@@ -976,7 +986,13 @@ impl Build<'_> {
         let weight = if fluent { FontWeight::NORMAL } else { FontWeight::BOLD };
         let color = self.text_run(id, &title, Run::BODY.weight(weight), None, None);
         let label = div().min_w_0().truncate().font_weight(weight).text_color(color).child(title);
-        let label = if fluent { label.text_size(theme.type_scale.caption) } else { label };
+        // TitleBarLeftHeaderPaddingWidth: 14 px after the buttons' margin, 16 from the edge
+        // when the title leads.
+        let label = if fluent {
+            label.text_size(theme.type_scale.caption).ml(if at == 0 { px(12.) } else { px(8.) })
+        } else {
+            label
+        };
         Some((at, label.into_any_element()))
     }
 }

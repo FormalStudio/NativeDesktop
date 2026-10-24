@@ -4,8 +4,6 @@
 use nd_gpui::gpui::{Div, Hsla, ParentElement, Pixels, Styled, div};
 
 pub(crate) const FONT: &str = "Segoe Fluent Icons";
-/// GlobalNavigationButton: NavigationView's pane toggle.
-pub(crate) const HAMBURGER: char = '\u{E700}';
 
 /// `glyph` drawn `size` square in the icon font.
 pub(crate) fn glyph(glyph: char, size: Pixels, color: Hsla) -> Div {

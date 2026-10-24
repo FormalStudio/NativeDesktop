@@ -558,11 +558,9 @@ pub fn source_tree_view(
                 on_input(TreeInput::Toggle(key.clone(), expand), window, cx);
             });
         }
-        let icon = node
-            .icon
-            .filter(|_| fluent)
-            .and_then(|icon| icon.segoe_fluent())
-            .map(|code| crate::fluent_icons::glyph(code, px(16.), fg));
+        // Segoe Fluent Icons where Windows ships it, the icon's paths elsewhere.
+        let icon = node.icon.filter(|_| fluent).and_then(|icon| icon_glyph(Some(icon)))
+            .map(|g| div().flex_none().child(glyph(g, px(16.), fg, px(1.5))));
         // libadwaita's sidebar rows: 36 px at the button radius.
         let row_height = if fluent {
             px(FLUENT_ROW)
@@ -609,13 +607,7 @@ pub fn source_tree_view(
             row = row.justify_center().child(match cover {
                 Some(cover) => cover.into_any_element(),
                 None => icon
-                    .unwrap_or_else(|| {
-                        crate::fluent_icons::glyph(
-                            nd_components::Icon::FileText.segoe_fluent().unwrap_or_default(),
-                            px(16.),
-                            fg,
-                        )
-                    })
+                    .unwrap_or_else(|| div().child(glyph(Glyph::of(nd_components::Icon::FileText), px(16.), fg, px(1.5))))
                     .into_any_element(),
             });
         } else {
