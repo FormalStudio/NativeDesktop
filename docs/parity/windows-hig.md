@@ -54,6 +54,29 @@ The rules and values are in [docs/dev/hig/windows.md](../dev/hig/windows.md).
   fills, 28 px check column, overlay radius) and the flyout stroke and shadow, which popovers
   and tooltips share. Values from MenuFlyout_themeresources.xaml; not yet captured beside the
   Gallery (the VM powered off on low disk).
+- [x] Context menu submenus were hover-only and gave way the moment the pointer touched another
+  row, so a slant from a row toward its submenu (Messages' React) closed it, and a click on the
+  row did nothing. Now a click opens it, a switch to another row waits Windows' MenuShowDelay
+  (400 ms, as WinUI's CascadingMenuHelper does) and lapses once the pointer reaches the submenu,
+  and the keyboard walks it (Up, Down, Right, Left, Enter, Space; Esc closes one level).
+  `overlays::gpui_fluent_submenu_opens_and_its_item_fires` (headless, macOS).
+- [x] MenuFlyout rows: the narrow padding a mouse or keyboard opens with (11,4,11,5: 29 px rows,
+  33 apart), the CheckMark in a 28 px column, 16 px item icons in their own 28 px column (the
+  composer's "+" menu), Caption accelerator text in TextFillColorSecondary 24 px after the label,
+  and ChevronRightMed (E974, 12 px, secondary) in place of a "›" on a submenu's row.
+  [Menus and context menus](https://learn.microsoft.com/windows/apps/develop/ui/controls/menus-and-context-menus),
+  MenuFlyout_themeresources.xaml. Headless capture on macOS; not yet beside the Gallery.
+- [x] AutoSuggestBox led with the magnifier. Now its query glyph (Find, 12 px) trails after the
+  clear button, about 13 px from the edge, as the
+  [TitleBar control](https://learn.microsoft.com/windows/apps/develop/ui/controls/title-bar)
+  shows it. The title bar search stays centred in the content column up to 580 px
+  ([title bar design](https://learn.microsoft.com/windows/apps/design/basics/titlebar-design)).
+- [x] Over Mica the content layer had no edge. Now NavigationView's content grid: CardStroke on
+  its top and leading edges under the 8 px top-leading corner (NavigationView_themeresources.xaml,
+  [NavigationView](https://learn.microsoft.com/windows/apps/develop/ui/controls/navigationview)).
+- [ ] On Windows: Messages' message and "+" menus beside a WinUI 3 MenuFlyout (Segoe glyphs,
+  icon column, cascade), the AutoSuggestBox glyph beside the Gallery's, and the content stroke
+  over Mica. MenuShowDelay is the default 400 ms, not read from the registry.
 - [x] Command palette highlighted its row with the accent container. Now WinUI's list
   selection (subtle fill, accent pill, text unchanged). Built; not yet captured.
 - [ ] ListView: hover and selection pill against the ListView page.

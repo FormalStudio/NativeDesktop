@@ -143,7 +143,15 @@ impl Build<'_> {
                 PaneRole::Sidebar => (pane.border_r_1().border_color(look.border).bg(sidebar), Some(sidebar)),
                 PaneRole::Inspector => (pane.border_l_1().border_color(look.border).bg(sidebar), Some(sidebar)),
                 PaneRole::Content if clear_sidebar && self.beside_sidebar(node) => {
-                    (pane.bg(theme.surface.layer).rounded_tl(theme.radius.lg), Some(theme.surface.layer))
+                    // NavigationView's content grid: CardStrokeColorDefault on its top and
+                    // leading edges (NavigationViewContentGridBorderThickness 1,1,0,0).
+                    let black = gpui::black();
+                    let stroke = nd_theme::color::with_alpha(black, if theme.is_dark() { 0.1 } else { 0.059 });
+                    let layer = pane
+                        .bg(theme.surface.layer)
+                        .rounded_tl(theme.radius.lg)
+                        .when(fluent, |p| p.border_t_1().border_l_1().border_color(stroke));
+                    (layer, Some(theme.surface.layer))
                 }
                 PaneRole::Content | PaneRole::Overlay => (pane, None),
             };

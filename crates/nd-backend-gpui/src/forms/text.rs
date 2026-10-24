@@ -1071,7 +1071,10 @@ pub(crate) fn text_field(
     if p.enabled {
         field = field.on_key_down(on_key(&editor));
     }
-    if p.field == FieldStyle::Search {
+    // WinUI's AutoSuggestBox puts its query button (a 12 px Find glyph) at the trailing end,
+    // after the clear button; the other looks lead with the magnifier.
+    let query_trails = b.theme().preset == nd_theme::Preset::Fluent;
+    if p.field == FieldStyle::Search && !query_trails {
         field = field.child(glyph(Glyph::Search, look.icon_size, look.secondary_text, look.glyph_stroke));
     }
     if let Some(icon) = &p.leading {
@@ -1086,6 +1089,17 @@ pub(crate) fn text_field(
     if let Some(icon) = &p.trailing {
         let event = FieldIconClicked { edge: IconEdge::Trailing };
         field = field.child(edge_button(&ctl, "trailing", Glyph::of(icon.icon), icon.label.clone(), event, p.enabled));
+    }
+    if p.field == FieldStyle::Search && query_trails {
+        // The glyph ends 13 px from the field's trailing edge, as in the TitleBar control's docs.
+        let query = div()
+            .flex_none()
+            .w(px(24.))
+            .mr(px(13.) - px(6.) - look.field_padding_x)
+            .flex()
+            .justify_center()
+            .child(glyph(Glyph::Search, px(12.), look.secondary_text, look.glyph_stroke));
+        field = field.child(query);
     }
     let field = with_style(field, &p.style);
     if b.fill_field.get() == Some(id) { field.w_full().into_any_element() } else { field.into_any_element() }
