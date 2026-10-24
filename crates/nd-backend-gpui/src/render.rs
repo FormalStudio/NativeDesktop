@@ -1007,6 +1007,21 @@ impl<'a> Build<'a> {
             button = button.rounded_full();
         }
         let mut button = crate::forms::with_style(button, &props.style);
+        // WinUI's ToolTipService: a button's tooltip shows on hover.
+        if let (Some(f), Some(text)) = (&fluent, props.tooltip.clone()) {
+            let tip = FluentTip {
+                text,
+                fill: theme.surface.overlay,
+                ink: theme.text.primary,
+                stroke: f.popover_stroke,
+                shadow: f.popover_shadow,
+                family: theme.fonts.body.family.clone(),
+            };
+            button = button.tooltip(move |_, cx| {
+                use gpui::AppContext as _;
+                cx.new(|_| tip.clone()).into()
+            });
+        }
         if !props.enabled {
             return button.into_any_element();
         }
@@ -1160,4 +1175,42 @@ fn readable_ink(fill: Hsla) -> Hsla {
     use nd_gpui::gpui::{black, white};
     use nd_theme::color::contrast;
     if contrast(white(), fill) >= contrast(black(), fill) { white() } else { black() }
+}
+
+/// WinUI's ToolTip (ToolTip_themeresources.xaml): Caption text in 9,6,9,8 of padding, at most
+/// 320 wide, on the control radius with the flyout stroke and shadow.
+#[derive(Clone)]
+struct FluentTip {
+    text: gpui::SharedString,
+    fill: gpui::Hsla,
+    ink: gpui::Hsla,
+    stroke: gpui::Hsla,
+    shadow: (gpui::Hsla, gpui::Pixels, gpui::Pixels),
+    family: gpui::SharedString,
+}
+
+impl gpui::Render for FluentTip {
+    fn render(&mut self, _: &mut gpui::Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+        div()
+            .max_w(px(320.))
+            .px(px(9.))
+            .pt(px(6.))
+            .pb(px(8.))
+            .rounded(px(4.))
+            .border_1()
+            .border_color(self.stroke)
+            .bg(self.fill)
+            .shadow(vec![gpui::BoxShadow {
+                color: self.shadow.0,
+                offset: gpui::point(px(0.), self.shadow.1),
+                blur_radius: self.shadow.2,
+                spread_radius: px(0.),
+                inset: false,
+            }])
+            .font_family(self.family.clone())
+            .text_size(px(12.))
+            .line_height(px(16.))
+            .text_color(self.ink)
+            .child(self.text.clone())
+    }
 }
