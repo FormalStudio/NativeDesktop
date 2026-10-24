@@ -37,6 +37,7 @@ use nd_ui::backend::NodeKind;
 use nd_ui::{DismissCause, Dismissed, DivProps, Modality, OverlayKind, OverlayProps, Placement, SurfaceProps};
 
 use crate::backend::{GpuiBackend, Node};
+use crate::forms::glyph::{Glyph, glyph};
 use crate::occlusion::Occluding;
 use crate::render::{Build, Tracked};
 
@@ -64,6 +65,114 @@ pub(crate) struct MenuOverlay {
     pub content: MenuContent,
     /// The open submenus, each one's index among the items of the level above.
     pub open: Vec<usize>,
+    /// The row the keyboard is on, in the innermost open level.
+    pub hot: Option<usize>,
+    /// Bumped by every hover and key, so a delayed submenu switch from an older hover lapses.
+    pub hover_generation: u64,
+    /// The single keystroke bound to each action, as the menu shows it (Fluent's "Ctrl+C").
+    pub shortcuts: Vec<(Box<dyn gpui::Action>, SharedString)>,
+}
+
+impl MenuOverlay {
+    pub(crate) fn new(node: NodeId, at: Point, above: bool, content: MenuContent) -> Self {
+        Self { node, at, above, content, open: Vec::new(), hot: None, hover_generation: 0, shortcuts: Vec::new() }
+    }
+
+    fn shortcut(&self, action: &dyn gpui::Action) -> Option<SharedString> {
+        self.shortcuts.iter().find(|(a, _)| a.partial_eq(action)).map(|(_, keys)| keys.clone())
+    }
+
+    /// The rows of the innermost open level: whether each takes the keyboard, and whether it
+    /// opens a submenu.
+    fn innermost(&self) -> Vec<(bool, bool)> {
+        match &self.content {
+            MenuContent::Actions(items) => {
+                let mut level: &[MenuItem] = items;
+                for &at in &self.open {
+                    let Some(MenuItem::Submenu(sub)) = level.get(at) else { break };
+                    level = &sub.items;
+                }
+                level
+                    .iter()
+                    .map(|item| match item {
+                        MenuItem::Action { enabled, .. } => (*enabled, false),
+                        MenuItem::Submenu(_) => (true, true),
+                        MenuItem::Separator | MenuItem::Role(_) => (false, false),
+                    })
+                    .collect()
+            }
+            MenuContent::Rows(rows, _) => rows
+                .iter()
+                .map(|row| match row {
+                    MenuRow::Item { enabled, .. } => (*enabled, false),
+                    MenuRow::Separator => (false, false),
+                })
+                .collect(),
+        }
+    }
+
+    /// The action of row `at` in the innermost open level.
+    fn action_at(&self, at: usize) -> Option<Box<dyn gpui::Action>> {
+        let MenuContent::Actions(items) = &self.content else { return None };
+        let mut level: &[MenuItem] = items;
+        for &open in &self.open {
+            let Some(MenuItem::Submenu(sub)) = level.get(open) else { return None };
+            level = &sub.items;
+        }
+        match level.get(at) {
+            Some(MenuItem::Action { action, enabled: true, .. }) => Some(action.boxed_clone()),
+            _ => None,
+        }
+    }
+}
+
+/// Which leading columns a menu level keeps for its rows.
+#[derive(Clone, Copy)]
+struct Columns {
+    check: bool,
+    icon: bool,
+}
+
+/// What one menu row shows.
+struct Cell<'a> {
+    label: &'a SharedString,
+    enabled: bool,
+    checked: bool,
+    icon: Option<nd_components::Icon>,
+    shortcut: Option<SharedString>,
+    submenu: bool,
+    /// Drawn hovered: the keyboard is on it, or its submenu is open.
+    lit: bool,
+}
+
+/// MenuFlyoutSubItem's chevron: ChevronRightMed from Segoe Fluent Icons where Windows ships it.
+fn chevron_right(color: gpui::Hsla) -> AnyElement {
+    if cfg!(target_os = "windows") {
+        crate::fluent_icons::glyph('\u{E974}', px(12.), color).into_any_element()
+    } else {
+        glyph(Glyph::ChevronRight, px(12.), color, px(1.))
+    }
+}
+
+/// How long the pointer rests on another row before an open submenu gives way to it: Windows'
+/// default MenuShowDelay, which WinUI's CascadingMenuHelper reads.
+const SUBMENU_DELAY: std::time::Duration = std::time::Duration::from_millis(400);
+
+/// A key's step from `from` to the next row that takes the keyboard, wrapping, `forward` or back.
+fn step(rows: &[(bool, bool)], from: Option<usize>, forward: bool) -> Option<usize> {
+    let n = rows.len();
+    if n == 0 {
+        return None;
+    }
+    let start = match (from, forward) {
+        (Some(i), true) => i + 1,
+        (Some(i), false) => i + n - 1,
+        (None, true) => 0,
+        (None, false) => n - 1,
+    };
+    (0..n)
+        .map(|k| if forward { (start + k) % n } else { (start + n - k) % n })
+        .find(|&i| rows[i].0)
 }
 
 pub(crate) enum MenuContent {
@@ -484,53 +593,95 @@ impl Build<'_> {
         marks.fill("context menu", surface, &[]);
         let viewport = window.viewport_size();
         let window_id = self.window_id;
-        // WinUI's MenuFlyout: the overlay radius, SurfaceStrokeColorFlyout and the flyout shadow,
-        // 32 px items inset 4 across and 2 along with padding 11, subtle fills, a 28 px check
-        // column (MenuFlyout_themeresources.xaml).
+        // WinUI's MenuFlyout (MenuFlyout_themeresources.xaml): the overlay radius,
+        // SurfaceStrokeColorFlyout and the flyout shadow; items inset 4,2 on the control radius
+        // with the narrow padding 11,4,11,5 a mouse or keyboard opens them with, subtle fills,
+        // 28 px check and icon columns, Caption accelerators and a 12 px chevron 24 px after the
+        // text, both TextFillColorSecondary.
         let fluent = (theme.preset == nd_theme::Preset::Fluent).then(|| crate::forms::look::FormLook::fluent(&theme));
+        let secondary = theme.text.secondary;
         let list = |id: &'static str| {
             let list =
                 div().id(id).flex().flex_col().min_w(px(180.)).bg(surface).border_1().text_color(theme.text.primary);
             let list = match fluent {
-                Some(look) => list.py(px(2.)).rounded(theme.radius.lg).border_color(look.popover_stroke).shadow(vec![
-                    gpui::BoxShadow {
+                Some(look) => list
+                    .py(px(2.))
+                    .text_size(body)
+                    .line_height(px(20.))
+                    .rounded(theme.radius.lg)
+                    .border_color(look.popover_stroke)
+                    .shadow(vec![gpui::BoxShadow {
                         color: look.popover_shadow.0,
                         offset: point(px(0.), look.popover_shadow.1),
                         blur_radius: look.popover_shadow.2,
                         spread_radius: px(0.),
                         inset: false,
-                    },
-                ]),
+                    }]),
                 None => list.py(px(4.)).rounded(theme.radius.md).border_color(theme.border.subtle).shadow_md(),
             };
             list.occlude().on_any_mouse_down(|_, _, cx| cx.stop_propagation())
-        };
-        let entry = || match fluent {
-            Some(look) => {
-                div().mx(px(4.)).my(px(2.)).px(look.padding_x).min_h(px(32.)).flex().items_center().rounded(look.radius)
-            }
-            None => div().px(px(12.)).py(px(4.)),
         };
         let hovered = match fluent {
             Some(look) => look.subtle_hover,
             None => theme.hover(surface),
         };
-        let row = |i: usize, marked: bool, label: &SharedString, enabled: bool, checked: bool| {
-            let mut row = entry().id(ElementId::Integer(i as u64));
-            if marked {
-                let column = if fluent.is_some() { px(28.) } else { px(16.) };
-                row = row.flex().child(div().w(column).child(if checked { "\u{2713}" } else { "" }));
+        let row = |i: usize, columns: Columns, cell: Cell<'_>| {
+            let Cell { label, enabled, checked, icon, shortcut, submenu, lit } = cell;
+            let ink = if enabled { theme.text.primary } else { theme.text.tertiary };
+            marks.text(label, ink, &[surface], body, regular);
+            let mut row = match fluent {
+                Some(look) => div()
+                    .id(ElementId::Integer(i as u64))
+                    .mx(px(4.))
+                    .my(px(2.))
+                    .px(look.padding_x)
+                    .pt(px(4.))
+                    .pb(px(5.))
+                    .flex()
+                    .items_center()
+                    .rounded(look.radius),
+                None => div().id(ElementId::Integer(i as u64)).px(px(12.)).py(px(4.)),
+            };
+            if columns.check {
+                let mark = match fluent {
+                    Some(_) => div()
+                        .flex_none()
+                        .w(px(28.))
+                        .flex()
+                        .items_center()
+                        .children(checked.then(|| glyph(Glyph::Check, px(12.), ink, px(1.5))))
+                        .into_any_element(),
+                    None => div().w(px(16.)).child(if checked { "\u{2713}" } else { "" }).into_any_element(),
+                };
+                row = row.flex().child(mark);
             }
-            let row = row.child(label.clone());
+            if columns.icon {
+                let art = icon.and_then(|i| crate::nav::icon_glyph(Some(i))).map(|g| glyph(g, px(16.), ink, px(1.5)));
+                row = row.child(div().flex_none().w(px(28.)).flex().items_center().children(art));
+            }
+            row = row.child(match fluent {
+                Some(_) => div().flex_1().child(label.clone()).into_any_element(),
+                None => label.clone().into_any_element(),
+            });
+            if let Some(keys) = shortcut {
+                row = row.child(div().flex_none().ml(px(24.)).text_size(px(12.)).text_color(secondary).child(keys));
+            }
+            if submenu {
+                row = match fluent {
+                    Some(_) => row.child(div().flex_none().ml(px(24.)).child(chevron_right(secondary))),
+                    None => row.flex().justify_between().gap(px(16.)).child("\u{203a}"),
+                };
+            }
+            if lit {
+                row = row.bg(hovered);
+            }
             if enabled {
-                marks.text(label, theme.text.primary, &[surface], body, regular);
                 let pressed = match fluent {
                     Some(look) => look.subtle_active,
                     None => theme.hover(surface),
                 };
                 row.hover(move |s| s.bg(hovered)).active(move |s| s.bg(pressed))
             } else {
-                marks.text(label, theme.text.tertiary, &[surface], body, regular);
                 row.text_color(theme.text.tertiary)
             }
         };
@@ -554,31 +705,45 @@ impl Build<'_> {
                     levels[last].1 = Some(at);
                     levels.push((&sub.items, None));
                 }
+                let innermost = levels.len() - 1;
                 // Built from the innermost out: a submenu hangs off its row in the level above.
                 let mut child: Option<AnyElement> = None;
                 for (depth, (items, open)) in levels.iter().enumerate().rev() {
-                    let marked = items.iter().any(|i| matches!(i, MenuItem::Action { checked: true, .. }));
+                    let columns = Columns {
+                        check: items.iter().any(|i| matches!(i, MenuItem::Action { checked: true, .. })),
+                        icon: fluent.is_some()
+                            && items.iter().any(|i| matches!(i, MenuItem::Action { icon: Some(_), .. })),
+                    };
                     let mut level = list(if depth == 0 { "nd-context-menu" } else { "nd-context-submenu" });
+                    let path: Vec<usize> = menu.open.iter().copied().take(depth).collect();
                     for (i, item) in items.iter().enumerate() {
+                        let lit = depth == innermost && menu.hot == Some(i);
                         // Hovering a row of this level opens its submenu, or closes the open one.
                         let (backend, wake) = (self.backend.clone(), self.wake.clone());
-                        let path: Vec<usize> = menu.open.iter().copied().take(depth).collect();
-                        let hover = move |sub: Option<usize>| {
-                            let (backend, wake, path) = (backend.clone(), wake.clone(), path.clone());
+                        let hover = |sub: Option<usize>| {
+                            let (backend, wake) = (backend.clone(), wake.clone());
+                            let mut open = path.clone();
+                            open.extend(sub);
                             move |hovered: &bool, _: &mut gpui::Window, cx: &mut gpui::App| {
                                 if *hovered {
-                                    let mut open = path.clone();
-                                    open.extend(sub);
-                                    if backend.open_submenu(window_id, open) {
-                                        wake(cx);
-                                    }
+                                    backend.hover_menu(window_id, open.clone(), wake.clone(), cx);
                                 }
                             }
                         };
                         level = level.child(match item {
                             MenuItem::Separator => separator(),
-                            MenuItem::Action { label, action, enabled, checked, .. } => {
-                                let row = row(i, marked, label, *enabled, *checked).on_hover(hover(None));
+                            MenuItem::Action { label, action, enabled, checked, icon, .. } => {
+                                let shortcut = fluent.and_then(|_| menu.shortcut(&**action));
+                                let cell = Cell {
+                                    label,
+                                    enabled: *enabled,
+                                    checked: *checked,
+                                    icon: *icon,
+                                    shortcut,
+                                    submenu: false,
+                                    lit,
+                                };
+                                let row = row(i, columns, cell).on_hover(hover(None));
                                 if *enabled {
                                     let (backend, wake, action) =
                                         (self.backend.clone(), self.wake.clone(), action.boxed_clone());
@@ -593,22 +758,32 @@ impl Build<'_> {
                             }
                             MenuItem::Submenu(sub) => {
                                 let shown = *open == Some(i);
-                                let mut row = row(i, marked, &sub.title, true, false)
-                                    .relative()
-                                    .flex()
-                                    .justify_between()
-                                    .gap(px(16.))
-                                    .child("\u{203a}")
-                                    .on_hover(hover(Some(i)));
-                                if shown {
-                                    row = row.bg(hovered);
-                                    if let Some(sub) = child.take() {
-                                        // From the row to the menu's outer edge: the row's inset
-                                        // and the border.
-                                        let edge = if fluent.is_some() { px(5.) } else { px(1.) };
-                                        row = row
-                                            .child(Beside { edge, child: Occluding::surface(sub).into_any_element() });
-                                    }
+                                let cell = Cell {
+                                    label: &sub.title,
+                                    enabled: true,
+                                    checked: false,
+                                    icon: None,
+                                    shortcut: None,
+                                    submenu: true,
+                                    lit: lit || shown,
+                                };
+                                // A click opens it at once, as WinUI's MenuFlyoutSubItem does for
+                                // every pointer; hovering opens it too.
+                                let (backend, wake) = (self.backend.clone(), self.wake.clone());
+                                let mut target = path.clone();
+                                target.push(i);
+                                let mut row = row(i, columns, cell).relative().on_hover(hover(Some(i))).on_click(
+                                    move |_, _, cx| {
+                                        if backend.open_submenu(window_id, target.clone()) {
+                                            wake(cx);
+                                        }
+                                    },
+                                );
+                                if shown && let Some(sub) = child.take() {
+                                    // From the row to the menu's outer edge: the row's inset and
+                                    // the border.
+                                    let edge = if fluent.is_some() { px(5.) } else { px(1.) };
+                                    row = row.child(Beside { edge, child: Occluding::surface(sub).into_any_element() });
                                 }
                                 row.into_any_element()
                             }
@@ -620,13 +795,25 @@ impl Build<'_> {
                 child.expect("a menu has a top level")
             }
             MenuContent::Rows(rows, _) => {
-                let marked = rows.iter().any(|r| matches!(r, MenuRow::Item { checked: true, .. }));
+                let columns = Columns {
+                    check: rows.iter().any(|r| matches!(r, MenuRow::Item { checked: true, .. })),
+                    icon: false,
+                };
                 let mut level = list("nd-context-menu");
                 for (i, item) in rows.iter().enumerate() {
                     level = level.child(match item {
                         MenuRow::Separator => separator(),
                         MenuRow::Item { label, enabled, checked } => {
-                            let row = row(i, marked, label, *enabled, *checked);
+                            let cell = Cell {
+                                label,
+                                enabled: *enabled,
+                                checked: *checked,
+                                icon: None,
+                                shortcut: None,
+                                submenu: false,
+                                lit: menu.hot == Some(i),
+                            };
+                            let row = row(i, columns, cell);
                             if *enabled {
                                 let (backend, wake) = (self.backend.clone(), self.wake.clone());
                                 row.on_click(move |_, _, cx| {
@@ -733,13 +920,7 @@ impl GpuiBackend {
             state.dirty.insert(window);
             state.menus.insert(
                 window,
-                MenuOverlay {
-                    node,
-                    at: Point { x: origin.x + at.x, y: origin.y + at.y },
-                    above: false,
-                    content,
-                    open: Vec::new(),
-                },
+                MenuOverlay::new(node, Point { x: origin.x + at.x, y: origin.y + at.y }, false, content),
             )
         };
         if let Some(old) = replaced {
@@ -757,6 +938,124 @@ impl GpuiBackend {
         }
         menu.open = open;
         state.dirty.insert(window);
+        true
+    }
+
+    /// The pointer rests on a row of the window's menu whose hover asks for the submenus at
+    /// `open`. Opening one deeper is at once; closing or switching an open one waits
+    /// [`SUBMENU_DELAY`], and lapses if the pointer reaches the open submenu or its row first, so
+    /// a slant across the rows below toward the submenu keeps it.
+    pub(crate) fn hover_menu(&self, window: WindowId, open: Vec<usize>, wake: crate::backend::Wake, cx: &mut gpui::App) {
+        let generation = {
+            let mut state = self.state.borrow_mut();
+            let Some(menu) = state.menus.get_mut(&window) else { return };
+            menu.hover_generation += 1;
+            let lit = menu.hot.take().is_some();
+            if menu.open == open || open.starts_with(&menu.open) {
+                let opened = menu.open != open;
+                menu.open = open;
+                if opened || lit {
+                    state.dirty.insert(window);
+                    drop(state);
+                    wake(cx);
+                }
+                return;
+            }
+            let generation = menu.hover_generation;
+            if lit {
+                state.dirty.insert(window);
+            }
+            generation
+        };
+        let backend = self.clone();
+        cx.spawn(async move |cx| {
+            cx.background_executor().timer(SUBMENU_DELAY).await;
+            cx.update(|cx| {
+                let switched = {
+                    let mut state = backend.state.borrow_mut();
+                    match state.menus.get_mut(&window) {
+                        Some(menu) if menu.hover_generation == generation && menu.open != open => {
+                            menu.open = open;
+                            state.dirty.insert(window);
+                            true
+                        }
+                        _ => false,
+                    }
+                };
+                if switched {
+                    wake(cx);
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// A key while the window's menu is open, as WinUI's menus take it: Up and Down move along
+    /// the innermost level, Right, Enter and Space open the submenu under the keyboard, Left and
+    /// Esc close it (Esc closes the menu from its top level), Enter and Space choose an item.
+    /// False when the key is not the menu's.
+    pub(crate) fn menu_key(&self, window: WindowId, key: &str) -> bool {
+        enum Then {
+            Stay,
+            Close,
+            Choose(Box<dyn gpui::Action>),
+            Respond(usize),
+        }
+        let then = {
+            let mut state = self.state.borrow_mut();
+            let Some(menu) = state.menus.get_mut(&window) else { return false };
+            let rows = menu.innermost();
+            let hot = menu.hot.filter(|&h| rows.get(h).is_some_and(|r| r.0));
+            let open_hot = |menu: &mut MenuOverlay| {
+                let Some(h) = hot.filter(|&h| rows[h].1) else { return false };
+                menu.open.push(h);
+                menu.hot = step(&menu.innermost(), None, true);
+                true
+            };
+            let then = match key {
+                "down" | "up" => {
+                    menu.hot = step(&rows, hot, key == "down");
+                    Then::Stay
+                }
+                "right" => {
+                    open_hot(menu);
+                    Then::Stay
+                }
+                "left" => {
+                    if let Some(at) = menu.open.pop() {
+                        menu.hot = Some(at);
+                    }
+                    Then::Stay
+                }
+                "escape" => match menu.open.pop() {
+                    Some(at) => {
+                        menu.hot = Some(at);
+                        Then::Stay
+                    }
+                    None => Then::Close,
+                },
+                "enter" | "space" => match hot {
+                    Some(_) if open_hot(menu) => Then::Stay,
+                    Some(h) => match &menu.content {
+                        MenuContent::Rows(..) => Then::Respond(h),
+                        MenuContent::Actions(_) => menu.action_at(h).map_or(Then::Stay, Then::Choose),
+                    },
+                    None => Then::Stay,
+                },
+                _ => return false,
+            };
+            menu.hover_generation += 1;
+            state.dirty.insert(window);
+            then
+        };
+        match then {
+            Then::Stay => {}
+            Then::Close => {
+                self.close_menu(window);
+            }
+            Then::Choose(action) => self.choose(window, action),
+            Then::Respond(row) => self.respond(window, Some(row)),
+        }
         true
     }
 
@@ -832,7 +1131,7 @@ impl ChromeServices for GpuiChrome {
 
     fn show_context_menu(
         &self,
-        _cx: &mut nd_ui::App,
+        cx: &mut nd_ui::App,
         window: WindowId,
         node: NodeId,
         x: f32,
@@ -841,19 +1140,20 @@ impl ChromeServices for GpuiChrome {
     ) {
         let origin = self.0.bounds(node).map_or(Point::default(), |b| b.origin);
         let at = Point { x: origin.x + x, y: origin.y + y };
+        let mut overlay = MenuOverlay::new(node, at, menu.above, MenuContent::Actions(menu.items));
+        overlay.shortcuts = cx
+            .key_bindings()
+            .iter()
+            .rev()
+            .filter_map(|b| match b.keystrokes() {
+                [one] => Some((b.action().boxed_clone(), accelerator_text(one.modifiers(), one.key()))),
+                _ => None,
+            })
+            .collect();
         let replaced = {
             let mut state = self.0.state.borrow_mut();
             state.dirty.insert(window);
-            state.menus.insert(
-                window,
-                MenuOverlay {
-                    node,
-                    at,
-                    above: menu.above,
-                    content: MenuContent::Actions(menu.items),
-                    open: Vec::new(),
-                },
-            )
+            state.menus.insert(window, overlay)
         };
         if let Some(old) = replaced {
             old.dismissed();
@@ -875,6 +1175,38 @@ impl ChromeServices for GpuiChrome {
     fn save_dialog(&self, cx: &mut nd_ui::App, _window: WindowId, _dialog: SaveDialog, done: SaveCallback) {
         done(None, cx);
     }
+}
+
+/// A key binding as a menu row shows it on Windows: "Ctrl+Shift+S".
+fn accelerator_text(modifiers: &gpui::Modifiers, key: &str) -> SharedString {
+    let mut parts: Vec<String> = Vec::new();
+    for (on, name) in [
+        (modifiers.control, "Ctrl"),
+        (modifiers.platform && !cfg!(target_os = "macos"), "Win"),
+        (modifiers.platform && cfg!(target_os = "macos"), "Cmd"),
+        (modifiers.alt, "Alt"),
+        (modifiers.shift, "Shift"),
+    ] {
+        if on {
+            parts.push(name.into());
+        }
+    }
+    let mut chars = key.chars();
+    let key = match key {
+        "backspace" => "Backspace".into(),
+        "delete" => "Del".into(),
+        "escape" => "Esc".into(),
+        "enter" => "Enter".into(),
+        "space" => "Space".into(),
+        "tab" => "Tab".into(),
+        "up" => "Up".into(),
+        "down" => "Down".into(),
+        "left" => "Left".into(),
+        "right" => "Right".into(),
+        _ => chars.next().map(|c| c.to_uppercase().chain(chars).collect()).unwrap_or_default(),
+    };
+    parts.push(key);
+    parts.join("+").into()
 }
 
 /// Seconds and curve an overlay takes to leave, by look: WinUI's "gentle exit"

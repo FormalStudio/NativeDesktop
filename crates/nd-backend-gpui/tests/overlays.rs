@@ -219,6 +219,19 @@ fn post(o: &mut Opened, events: Vec<PlatformInput>) {
     }
 }
 
+/// Lets the pointer rest past the menu's submenu delay (Windows' 400 ms MenuShowDelay).
+fn rest(o: &mut Opened) {
+    o.cx.advance_clock(std::time::Duration::from_millis(500));
+    settle(&mut o.cx, &o.host);
+}
+
+fn key(o: &mut Opened, name: &str) {
+    let key = Keystroke::parse(name).expect("keystroke");
+    o.cx.update(|cx| o.host.update(cx, |app| app.synthesize(o.window, &nd_ui::semantics::SyntheticInput::Key(key))))
+        .expect("posted");
+    settle(&mut o.cx, &o.host);
+}
+
 fn click(at: nd_ui::Point, button: GpuiButton) -> Vec<PlatformInput> {
     let position = point(px(at.x), px(at.y));
     let modifiers = Modifiers::default();
@@ -464,7 +477,63 @@ mod gate_m4_overlays {
         post(&mut o, wiggle(more));
         assert!(drawn(&o, "Deeper"));
         post(&mut o, wiggle(nd_ui::Point { x: open_at.x + 30., y: open_at.y + 5. + 14. }));
-        assert!(!drawn(&o, "Deeper"), "hovering another row shuts the submenu");
+        assert!(drawn(&o, "Deeper"), "the submenu waits out the menu delay before it gives way");
+        rest(&mut o);
+        assert!(!drawn(&o, "Deeper"), "resting on another row shuts the submenu");
+    }
+
+    /// WinUI's MenuFlyoutSubItem under the Fluent look: a click opens the submenu, the pointer
+    /// can slant across the rows below toward it without it closing, its item fires, and the
+    /// keyboard walks into and out of it.
+    pub fn gpui_fluent_submenu_opens_and_its_item_fires() {
+        let mut o = open();
+        o.host.backend().set_theme(nd_theme::ThemeRegistry::new(nd_theme::Preset::Fluent));
+        settle(&mut o.cx, &o.host);
+        let surface = by_test_id(&o.host, o.window, "surface").and_then(|n| n.bounds).expect("surface bounds");
+        let open_at = nd_ui::Point { x: surface.origin.x + 10., y: surface.origin.y + 20. };
+        let drawn = |o: &Opened, label: &str| {
+            o.host.backend().paints(o.window).expect("paints").iter().any(|p| p.label == label)
+        };
+        // MenuFlyout: a 1 px border and 2 px padding, then rows 29 px tall (4 + 20 + 5) inset 2
+        // along, and a separator 1 px clear of them: Choose, the separator, Again, More.
+        let row = |n: f32, separators: f32| open_at.y + 1. + 2. + n * 33. + separators * 3. + 2. + 14.5;
+        let (again, more) = (row(1., 1.), row(2., 1.));
+        let chosen = |o: &Opened| o.host.read(|app| o.scene.read(app).chosen);
+
+        post(&mut o, click(open_at, GpuiButton::Right));
+        assert!(!drawn(&o, "Deeper"));
+        post(&mut o, click(nd_ui::Point { x: open_at.x + 30., y: more }, GpuiButton::Left));
+        assert!(o.host.backend().menu_open(o.window), "a click on a submenu's row keeps the menu");
+        assert!(drawn(&o, "Deeper"), "and opens the submenu");
+
+        // A slant from More down across Again's row (below it in a taller menu) to the submenu.
+        post(&mut o, wiggle(nd_ui::Point { x: open_at.x + 150., y: again }));
+        assert!(drawn(&o, "Deeper"), "crossing another row on the way keeps the submenu");
+        let deeper = nd_ui::Point { x: open_at.x + 220., y: more };
+        post(&mut o, wiggle(deeper));
+        rest(&mut o);
+        assert!(drawn(&o, "Deeper"), "reaching the submenu cancels the switch");
+        post(&mut o, click(deeper, GpuiButton::Left));
+        assert!(!o.host.backend().menu_open(o.window), "choosing the submenu's item closes the menu");
+        assert_eq!(chosen(&o), 1, "the submenu's item fired");
+
+        // Keyboard: Up lands on More (the last row), Right opens it on Deeper, Left closes it,
+        // Enter on More opens it again and Enter on Deeper fires.
+        post(&mut o, click(open_at, GpuiButton::Right));
+        key(&mut o, "up");
+        key(&mut o, "right");
+        assert!(drawn(&o, "Deeper"), "Right opens the submenu");
+        key(&mut o, "left");
+        assert!(!drawn(&o, "Deeper"), "Left closes it");
+        assert!(o.host.backend().menu_open(o.window), "and keeps the menu");
+        key(&mut o, "enter");
+        assert!(drawn(&o, "Deeper"), "Enter opens it");
+        key(&mut o, "escape");
+        assert!(!drawn(&o, "Deeper") && o.host.backend().menu_open(o.window), "Esc closes only the submenu");
+        key(&mut o, "right");
+        key(&mut o, "enter");
+        assert!(!o.host.backend().menu_open(o.window));
+        assert_eq!(chosen(&o), 2, "Enter fires the submenu's item");
     }
 
     /// A submenu with no room past the menu's trailing edge opens past its leading edge, beside
@@ -490,7 +559,8 @@ mod gate_m4_overlays {
         // Again, a row above More: still the menu's own, not covered by the submenu.
         let again = nd_ui::Point { x: open_at.x + 30., y: more.y - 28. };
         post(&mut o, wiggle(again));
-        assert!(!drawn(&o, "Deeper"), "the menu's rows stay uncovered, so hovering Again shuts the submenu");
+        rest(&mut o);
+        assert!(!drawn(&o, "Deeper"), "the menu's rows stay uncovered, so resting on Again shuts the submenu");
         post(&mut o, wiggle(more));
         assert!(drawn(&o, "Deeper"));
         // The submenu's first row, level with More, before the menu's leading edge.
@@ -572,6 +642,10 @@ fn main() {
         (
             "gate_m4_overlays::gpui_context_submenu_opens_on_hover",
             gate_m4_overlays::gpui_context_submenu_opens_on_hover,
+        ),
+        (
+            "gate_m4_overlays::gpui_fluent_submenu_opens_and_its_item_fires",
+            gate_m4_overlays::gpui_fluent_submenu_opens_and_its_item_fires,
         ),
         (
             "gate_m4_overlays::gpui_a_submenu_at_the_window_edge_opens_on_the_other_side",

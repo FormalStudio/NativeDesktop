@@ -420,7 +420,7 @@ impl Inner {
                     ..InputRecord::default()
                 });
             }
-            if event.keystroke.key == "escape" && inner.backend.close_menu(id) {
+            if !event.keystroke.modifiers.modified() && inner.backend.menu_key(id, &event.keystroke.key) {
                 cx.stop_propagation();
                 (inner.wake())(cx);
                 return;
