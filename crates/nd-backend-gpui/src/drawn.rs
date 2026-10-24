@@ -262,6 +262,15 @@ impl Build<'_> {
                     window,
                 ));
                 let header = self.title_row(id, ElementId::Integer(id.0), node, rest, centered, content, window);
+                // A search over the sidebar opens its bar under the sidebar's header, as a
+                // conversation list's search does in Fractal and Polari.
+                let (sidebar_bar, bar) = match search {
+                    Some((at, _, _)) if at < over_sidebar => (bar, None),
+                    _ => (None, bar),
+                };
+                if let Some(head) = split.sidebar.take() {
+                    split.sidebar = Some(with_bar(head, sidebar_bar));
+                }
                 split.content = Some(with_bar(header, bar));
                 if let Some(insets) = inspector {
                     split.inspector = Some(self.title_row(
@@ -914,13 +923,27 @@ impl Build<'_> {
         let system =
             |c: &NodeId| self.nodes.get(c).and_then(|n| n.props.downcast_ref::<SystemItemProps>()).map(|p| p.item);
         let item = |c: &NodeId| self.nodes.get(c).and_then(|n| n.props.downcast_ref::<ToolbarItemProps>());
-        node.children
+        // Spaces between leading items stay over the sidebar, so its header bar can hold start and
+        // end buttons; spaces after the last one belong to the content.
+        let run = node
+            .children
             .iter()
             .take_while(|c| {
-                matches!(system(c), Some(SystemItem::ToggleSidebar | SystemItem::SidebarTrackingSeparator))
-                    || item(c).is_some_and(|p| p.leading)
+                matches!(
+                    system(c),
+                    Some(
+                        SystemItem::ToggleSidebar
+                            | SystemItem::SidebarTrackingSeparator
+                            | SystemItem::FlexibleSpace
+                            | SystemItem::Space
+                    )
+                ) || item(c).is_some_and(|p| p.leading)
             })
-            .count()
+            .count();
+        node.children[..run]
+            .iter()
+            .rposition(|c| !matches!(system(c), Some(SystemItem::FlexibleSpace | SystemItem::Space)))
+            .map_or(0, |last| last + 1)
     }
 
     /// Whether a scaffold's toolbar splits into a header bar per pane, as libadwaita's
