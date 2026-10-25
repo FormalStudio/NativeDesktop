@@ -122,6 +122,30 @@ impl Render for Overlays {
     }
 }
 
+/// Light text in a dark subtree with no surface of its own, reading on the dimmed backdrop
+/// drawn under it as an earlier sibling, as a presentation's backdrop sits under its content.
+struct Backdrop;
+
+impl Render for Backdrop {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .relative()
+            .size_full()
+            .child(div().absolute().top_0().left_0().size_full().bg(hsla(0., 0., 0., 0.7)))
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full()
+                    .p_3()
+                    .theme(|t| t.appearance(Appearance::Dark))
+                    .bg(hsla(0., 0., 0., 0.))
+                    .child(text("Over the backdrop")),
+            )
+    }
+}
+
 fn main() {
     nd::audit::Audit::new("intents", || Application::new(nd::manifest!()))
         .window("gallery", |cx| {
@@ -139,6 +163,12 @@ fn main() {
         .window("overlays", |cx| {
             cx.open_window(WindowOptions::main("overlays").title("Overlays").size(size(px(640.), px(420.))), |_, cx| {
                 cx.new(|_| Overlays)
+            })
+            .id()
+        })
+        .window("backdrop", |cx| {
+            cx.open_window(WindowOptions::main("backdrop").title("Backdrop").size(size(px(480.), px(320.))), |_, cx| {
+                cx.new(|_| Backdrop)
             })
             .id()
         })

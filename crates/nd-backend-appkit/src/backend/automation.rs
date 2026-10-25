@@ -31,7 +31,8 @@ use nd_ui::Scope;
 use nd_ui::prelude::Hsla;
 use nd_ui::semantics::{Paint, PaintKind};
 use objc2_app_kit::{
-    NSAppearance, NSBackgroundStyle, NSColor, NSColorType, NSControl, NSFont, NSTableRowView, NSTableView, NSTextField,
+    NSAppearance, NSBackgroundStyle, NSColor, NSColorType, NSControl, NSFont, NSGlassEffectView, NSTableRowView,
+    NSTableView, NSTextField, NSVisualEffectView,
 };
 
 use super::{AppKitBackend, Native, State, WindowRecord};
@@ -471,7 +472,8 @@ impl AppKitBackend {
         }
         let background = resolve(&record.window.backgroundColor(), &record.window.effectiveAppearance())
             .ok_or_else(|| not_actionable("window background has no sRGB value"))?;
-        let mut walk = Walk { state: &state, owners, paints: Vec::new() };
+        let window_background = record.window.backgroundColor();
+        let mut walk = Walk { state: &state, owners, window: &window_background, paints: Vec::new() };
         walk.view(&content, None, background);
         Ok(walk.paints)
     }
@@ -488,6 +490,8 @@ fn resolve(color: &NSColor, appearance: &NSAppearance) -> Option<Hsla> {
 struct Walk<'a> {
     state: &'a State,
     owners: HashMap<*const NSView, NodeId>,
+    /// The window's background colour, which a material stands for.
+    window: &'a NSColor,
     paints: Vec<Paint>,
 }
 
@@ -511,14 +515,15 @@ impl Walk<'_> {
         self.paints.push(Paint { node, kind, color, background, scopes, label });
     }
 
-    fn view(&mut self, view: &NSView, node: Option<NodeId>, mut background: Hsla) {
+    /// Records `view`'s paints over `background` and returns what then covers all of `view`.
+    fn view(&mut self, view: &NSView, node: Option<NodeId>, mut background: Hsla) -> Hsla {
         if view.isHidden() || view.alphaValue() <= 0. {
-            return;
+            return background;
         }
         // The title bar is the window server's: its title and buttons follow the OS.
         // KVO subclasses the class at runtime, so the name can carry a prefix.
         if view.class().name().to_str().is_ok_and(|n| n.contains("NSTitlebar")) {
-            return;
+            return background;
         }
         let node = self.owners.get(&(view as *const NSView)).copied().or(node);
         if let Some(id) = node
@@ -534,11 +539,17 @@ impl Walk<'_> {
                 self.push(node, kind, paint.color, under, paint.label);
             }
             if custom.container().is_none() {
-                return;
+                return background;
             }
         }
         let appearance = view.effectiveAppearance();
         let alpha = view.alphaValue() as f32;
+        let glass = crate::glass::has_liquid_glass() && view.downcast_ref::<NSGlassEffectView>().is_some();
+        if (glass || view.downcast_ref::<NSVisualEffectView>().is_some())
+            && let Some(window) = resolve(self.window, &appearance)
+        {
+            background = window;
+        }
         if let Some(layer) = view.downcast_ref::<NdLayerView>()
             && let Some(fill) = layer.look().background
             && let Some(color) = resolve(&fill.ns_color(), &appearance).filter(|c| c.a > 0.)
@@ -576,11 +587,11 @@ impl Walk<'_> {
                 let color = with_alpha(color, color.a * alpha);
                 self.push(node, PaintKind::Text { size, weight }, color, background, look.text);
             }
-            return;
+            return background;
         }
         if let Some(field) = view.downcast_ref::<NSTextField>() {
             if field.isEditable() || field.isBezeled() {
-                return;
+                return background;
             }
             let own = field.drawsBackground().then(|| field.backgroundColor()).flatten();
             let under = match own.and_then(|c| resolve(&c, &appearance)).filter(|c| c.a > 0.) {
@@ -604,14 +615,29 @@ impl Walk<'_> {
                     self.push(node, PaintKind::Text { size, weight: 400. }, color, under, text);
                 }
             }
-            return;
+            return background;
         }
         // Tables and outlines are controls too, but their rows are views with labels in them.
         if view.downcast_ref::<NSControl>().is_some() && view.downcast_ref::<NSTableView>().is_none() {
-            return;
+            return background;
         }
+        // A child that fills the view, a backdrop under an overlay say, is what the later
+        // siblings draw over.
+        let bounds = view.bounds();
         for child in view.subviews().iter() {
-            self.view(&child, node, background);
+            let drawn = self.view(&child, node, background);
+            if fills(child.frame(), bounds) {
+                background = over(with_alpha(drawn, drawn.a * child.alphaValue() as f32), background);
+            }
         }
+        background
     }
+}
+
+fn fills(frame: objc2_foundation::NSRect, bounds: objc2_foundation::NSRect) -> bool {
+    let near = |a: f64, b: f64| (a - b).abs() < 0.5;
+    near(frame.origin.x, bounds.origin.x)
+        && near(frame.origin.y, bounds.origin.y)
+        && near(frame.size.width, bounds.size.width)
+        && near(frame.size.height, bounds.size.height)
 }

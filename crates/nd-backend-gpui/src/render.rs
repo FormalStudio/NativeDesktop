@@ -205,6 +205,8 @@ struct Ink {
     background: Hsla,
     /// The surface a scope that flipped the scheme leaves for its node to paint.
     surface: Option<Hsla>,
+    /// The node whose fill this is.
+    owner: Option<NodeId>,
 }
 
 /// What a text run is drawn at, for its paint record.
@@ -262,6 +264,8 @@ pub(crate) struct Build<'a> {
     registry: &'a ThemeRegistry,
     ink: RefCell<Vec<Ink>>,
     paints: RefCell<Vec<Paint>>,
+    /// What covers each node built so far once its fill and its children have painted.
+    covers: RefCell<HashMap<NodeId, Hsla>>,
     /// A group window's tab bar, placed under the first title row (toolbar or titlebar) built.
     pub(crate) under_title: RefCell<Option<AnyElement>>,
     /// Bottom edge of the title rows (toolbar or titlebar) as last laid out, 0 without one.
@@ -295,6 +299,7 @@ impl<'a> Build<'a> {
             refinement: None,
             scopes: Vec::new(),
             surface: None,
+            owner: None,
         };
         Self {
             backend,
@@ -307,6 +312,7 @@ impl<'a> Build<'a> {
             registry,
             ink: RefCell::new(vec![ink]),
             paints: RefCell::default(),
+            covers: RefCell::default(),
             under_title: RefCell::default(),
             title_bottom: Cell::default(),
             split: RefCell::default(),
@@ -374,6 +380,7 @@ impl<'a> Build<'a> {
     ) -> R {
         let mut ink = self.top();
         ink.surface = None;
+        ink.owner = Some(node);
         if let Some(fill) = fill.filter(|c| c.a > 0.) {
             self.paints.borrow_mut().push(Paint {
                 node: Some(node),
@@ -390,7 +397,9 @@ impl<'a> Build<'a> {
         }
         self.ink.borrow_mut().push(ink);
         let out = inside();
-        self.ink.borrow_mut().pop();
+        if let Some(done) = self.ink.borrow_mut().pop() {
+            self.covers.borrow_mut().insert(node, done.background);
+        }
         out
     }
 
@@ -455,6 +464,7 @@ impl<'a> Build<'a> {
             refinement: Some(composed),
             scopes,
             surface,
+            owner: None,
         });
         let out = inside();
         self.ink.borrow_mut().pop();
@@ -482,8 +492,23 @@ impl<'a> Build<'a> {
     }
 
     fn element(&self, id: NodeId, node: &Node, window: &mut gpui::Window, cx: &mut App) -> AnyElement {
+        // A child that filled this node last frame, a backdrop under an overlay say, is what
+        // the later children draw over.
         let children = |w: &mut gpui::Window, cx: &mut App| -> Vec<AnyElement> {
-            node.children.iter().map(|c| self.node(*c, w, cx)).collect()
+            let at = self.backend.bounds.borrow().get(&id).copied();
+            let mut out = Vec::with_capacity(node.children.len());
+            for child in &node.children {
+                self.covers.borrow_mut().remove(child);
+                out.push(self.node(*child, w, cx));
+                let fills = at.is_some_and(|at| self.backend.bounds.borrow().get(child).is_some_and(|b| same(*b, at)));
+                if fills
+                    && let Some(cover) = self.covers.borrow().get(child).copied()
+                    && let Some(ink) = self.ink.borrow_mut().last_mut().filter(|i| i.owner == Some(id))
+                {
+                    ink.background = cover;
+                }
+            }
+            out
         };
         match node.kind {
             NodeKind::Root => {
@@ -522,6 +547,7 @@ impl<'a> Build<'a> {
                 };
                 if props.style.visibility == Some(gpui::Visibility::Hidden) {
                     self.paints.borrow_mut().truncate(painted);
+                    self.covers.borrow_mut().remove(&id);
                     return HiddenSubtree(element).into_any_element();
                 }
                 // A hero in flight crosses what is drawn after it (the player bar under an
@@ -1168,6 +1194,14 @@ pub(crate) fn start_window_move(window: &mut gpui::Window) {
     if std::env::var_os("ND_DIAG_WINDOW").is_some_and(|v| v == "1") {
         eprintln!("nd: window move");
     }
+}
+
+fn same(a: Rect, b: Rect) -> bool {
+    let near = |a: f32, b: f32| (a - b).abs() < 0.5;
+    near(a.origin.x, b.origin.x)
+        && near(a.origin.y, b.origin.y)
+        && near(a.size.width, b.size.width)
+        && near(a.size.height, b.size.height)
 }
 
 /// White or black, whichever reads better on `fill`.
