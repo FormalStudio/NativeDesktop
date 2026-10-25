@@ -452,6 +452,15 @@ impl Rig {
         Point { x: b.origin.x + b.size.width * fx, y: b.origin.y + b.size.height * fy }
     }
 
+    /// `fraction` along the seek bar's track, on its bar row. WinUI and libadwaita draw the
+    /// position as their slider, whose track stops half its 20 pt thumb in from each end.
+    fn on_track(&self, id: &str, fraction: f32) -> Point {
+        let inset = if matches!(Preset::current(), Preset::Fluent | Preset::Adwaita) { 10. } else { 0. };
+        let b = self.node(id).bounds.unwrap_or_else(|| panic!("{id} laid out"));
+        let x = b.origin.x + inset + (b.size.width - 2. * inset) * fraction;
+        Point { x, y: b.origin.y + b.size.height * 0.25 }
+    }
+
     fn pointer(&mut self, phase: PointerPhase, at: Point) {
         self.input(vec![SyntheticInput::Pointer { phase, at, button: MouseButton::Left, click_count: 1 }]);
     }
@@ -521,7 +530,7 @@ mod media {
 
     pub fn seek_bar_drag_scrubs_then_commits_once() {
         let mut rig = opened();
-        let (from, to) = (rig.at("seek", 0.1, 0.25), rig.at("seek", 0.5, 0.25));
+        let (from, to) = (rig.on_track("seek", 0.1), rig.on_track("seek", 0.5));
         rig.pointer(PointerPhase::Down, from);
         rig.pointer(PointerPhase::Move, to);
         assert_eq!(rig.node("seek").value.as_deref(), Some("0:50 of 1:40"), "the bar shows the drag");
@@ -596,17 +605,32 @@ mod media {
         quiet(&mut rig);
     }
 
-    /// The send button sits inside the field at its trailing bottom corner, as the composer lays
-    /// it out (a button's own position and inset reach GPUI).
-    pub fn composer_send_sits_inside_the_field() {
+    /// On macOS the send button sits inside the field at its trailing bottom corner, as the
+    /// composer lays it out (a button's own position and inset reach GPUI). WinUI and libadwaita
+    /// send from a button after the emoji button, on the field's bottom line.
+    pub fn composer_send_sits_where_the_preset_puts_it() {
         let rig = opened();
         let field = rig.node("composer.field").bounds.expect("field laid out");
         let send = rig.node("composer.send").bounds.expect("send laid out");
         let (fr, fb) = (field.origin.x + field.size.width, field.origin.y + field.size.height);
         let (sr, sb) = (send.origin.x + send.size.width, send.origin.y + send.size.height);
-        assert!(send.origin.x > field.origin.x && sr <= fr + 0.5, "send {send:?} inside field {field:?} across");
-        assert!(send.origin.y >= field.origin.y - 0.5 && sb <= fb + 0.5, "send {send:?} inside field {field:?} down");
-        assert!(fr - sr < 8., "send hugs the trailing edge ({} px in)", fr - sr);
+        if Preset::current() == Preset::MacOs {
+            assert!(send.origin.x > field.origin.x && sr <= fr + 0.5, "send {send:?} inside field {field:?} across");
+            assert!(
+                send.origin.y >= field.origin.y - 0.5 && sb <= fb + 0.5,
+                "send {send:?} inside field {field:?} down"
+            );
+            assert!(fr - sr < 8., "send hugs the trailing edge ({} px in)", fr - sr);
+        } else {
+            let emoji = rig.node("composer.emoji").bounds.expect("emoji laid out");
+            let er = emoji.origin.x + emoji.size.width;
+            assert!(
+                emoji.origin.x >= fr && send.origin.x >= er,
+                "field {field:?}, emoji {emoji:?}, then send {send:?}"
+            );
+            assert!((sb - fb).abs() <= 0.5, "send {send:?} on the field's bottom line {field:?}");
+            assert!(send.origin.x - er <= 10., "send follows the emoji button ({} px after)", send.origin.x - er);
+        }
     }
 
     /// Where the platform has no emoji picker (Linux), the composer's button opens nd's at the
@@ -679,7 +703,9 @@ mod media {
         let field = rig.node("composer.field").bounds.expect("field laid out");
         let emoji = rig.node("composer.emoji").bounds.expect("emoji laid out");
         let over = Point { x: emoji.origin.x + emoji.size.width - 4., y: emoji.origin.y - 8. };
-        assert!(over.x - field.origin.x > 340., "a picker at the caret would not reach {over:?} from {field:?}");
+        // The picker is eight 36 pt columns and its inset, under 320 pt; at the caret its left
+        // edge is inside the field.
+        assert!(over.x - field.origin.x > 320., "a picker at the caret would not reach {over:?} from {field:?}");
         rig.click_point(rig.at("composer.emoji", 0.5, 0.5));
         let before = edited(&rig);
         rig.click_point(over);
@@ -744,7 +770,7 @@ mod media {
     /// not make it report again or loop.
     pub fn reentrancy() {
         let mut rig = opened();
-        let (from, to) = (rig.at("seek", 0.2, 0.25), rig.at("seek", 0.8, 0.25));
+        let (from, to) = (rig.on_track("seek", 0.2), rig.on_track("seek", 0.8));
         rig.input(vec![SyntheticInput::Drag { from, to, steps: 6 }]);
         let log = rig.take();
         assert_eq!(log.iter().filter(|l| l.starts_with("seek:Committed")).count(), 1, "{log:?}");
@@ -906,7 +932,7 @@ fn main() {
             "media::text_area_return_submits_and_shift_return_breaks",
             media::text_area_return_submits_and_shift_return_breaks,
         ),
-        ("media::composer_send_sits_inside_the_field", media::composer_send_sits_inside_the_field),
+        ("media::composer_send_sits_where_the_preset_puts_it", media::composer_send_sits_where_the_preset_puts_it),
         (
             "media::emoji_picker_searches_and_inserts_at_the_caret",
             media::emoji_picker_searches_and_inserts_at_the_caret,
