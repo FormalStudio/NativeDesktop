@@ -144,11 +144,22 @@ fn hit_path(
 /// one does: a layer drawn over the content that is empty where the pointer is (the scaffold's
 /// overlay pane, a full-size toast host) lets the gesture through to what is under it, as GPUI
 /// lets a click through an element with no hitbox.
+///
+/// A child painted at no size is still searched: a toolbar split over libadwaita's panes takes
+/// no room itself and draws its items in the panes' header bars, so a tap on one (Messages'
+/// conversation title) has to reach it through the bar.
 fn descend(nodes: &HashMap<NodeId, Node>, bounds: &HashMap<NodeId, Rect>, node: NodeId, at: Point) -> Vec<NodeId> {
     let mut first: Option<Vec<NodeId>> = None;
     if let Some(n) = nodes.get(&node) {
         for c in n.children.iter().rev() {
-            if nodes.get(c).is_some_and(hidden) || !bounds.get(c).is_some_and(|b| contains(b, at)) {
+            let Some(b) = bounds.get(c).filter(|_| !nodes.get(c).is_some_and(hidden)) else { continue };
+            if !contains(b, at) {
+                if b.size.width <= 0. || b.size.height <= 0. {
+                    let path = descend(nodes, bounds, *c, at);
+                    if path.iter().any(|p| nodes.get(p).and_then(gestures_of).is_some()) {
+                        return std::iter::once(node).chain(path).collect();
+                    }
+                }
                 continue;
             }
             let path = descend(nodes, bounds, *c, at);
@@ -607,6 +618,25 @@ mod tests {
         let bounds = HashMap::from([(root, full), (content, full), (layer, full)]);
         let path = hit_path(&nodes, &bounds, root, Point { x: 50., y: 50. }, false);
         assert_eq!(path, vec![content, root], "the tap reaches the content under the empty layer");
+    }
+
+    #[test]
+    fn a_tap_reaches_an_item_a_sizeless_bar_draws_elsewhere() {
+        let (root, content, bar, title) = (NodeId(1), NodeId(2), NodeId(3), NodeId(4));
+        let nodes = HashMap::from([
+            (root, view(None, vec![content, bar], false)),
+            (content, view(Some(root), vec![], false)),
+            (bar, view(Some(root), vec![title], false)),
+            (title, view(Some(bar), vec![], true)),
+        ]);
+        let bounds = HashMap::from([
+            (root, Rect::new(0., 0., 100., 100.)),
+            (content, Rect::new(0., 0., 100., 100.)),
+            (bar, Rect::new(0., 0., 0., 0.)),
+            (title, Rect::new(40., 0., 20., 10.)),
+        ]);
+        assert_eq!(hit_path(&nodes, &bounds, root, Point { x: 50., y: 5. }, false), vec![title, bar, root]);
+        assert_eq!(hit_path(&nodes, &bounds, root, Point { x: 50., y: 50. }, false), vec![content, root]);
     }
 
     #[test]
