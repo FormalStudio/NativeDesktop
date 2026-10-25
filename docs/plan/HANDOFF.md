@@ -1,8 +1,46 @@
-# Handoff, 2026-10-22
+# Handoff, 2026-10-25
 
 Resume from here. Read first: `docs/plan/PROMPT.md` (verbatim request plus every dated decision),
 `docs/plan/STATUS.md`, `docs/plan/TODO.md`, `docs/dev/setup.md` (machine rules), and the platform
 guidelines in `docs/dev/hig/{macos,linux,windows}.md`.
+
+## 2026-10-24 to 25: WinUI and Adwaita pass, Messages frame, player bars
+
+Request (2026-10-24): bring the Fluent look closer to WinUI, a smaller Adwaita pass, fix the
+FormalMusic player bar off macOS, redesign the Messages frame per platform off macOS, screenshots
+on all three platforms.
+
+Heads: nd `94bf188e`, Messages `f880762`, FormalMusic `2aab94e` (still locks nd `c397d6d6`), nix
+`edba73cc`. Everything is merged and pushed; the session's worktrees and branches are removed.
+
+- nd: WinUI title bar, glyphs, tooltips, SelectorBar for segmented controls, Fluent goldens that
+  also run on macOS; Adwaita sheets and spacing; player bars; Linux goldens re-recorded
+  (`407c5df2`); `render_to_image` reads back on Linux (`c397d6d6`); a tap reaches toolbar items in
+  libadwaita's split header bars (`94bf188e`, this is what broke opening chat details on Linux).
+- Messages: Fluent and Adwaita frames, composer send button, chat details from the header (and an
+  info button on Fluent), pinned chats as a Phone Link style strip. `crates/desktop/tests/frame.rs`
+  captures every scene in both looks and schemes; it now runs `nd::system::run_pending` so the
+  video poster lands, and app content gets the dark tokens.
+- FormalMusic: player bar off macOS; empty macOS home fixed (`75d7b47`, covers go through the
+  store's `ArtCache` off the main thread).
+- Installed: g815 Linux through nix `edba73cc`; Windows FormalMusic 0.1.3 and Messages 0.1.3 built
+  against nd `94bf188e` (`Update.exe apply`).
+- READMEs of both apps carry a Linux screenshot. macOS captures are in
+  `~/Developer/ecosystem/nativedesktop-wt/screens/macos/`, Linux ones in
+  `~/Developer/ecosystem/nativedesktop-wt/linux-goldens-review/screens/`.
+
+Open:
+- Windows screenshots: none. The GPUI headless renderer exists only on macOS and Linux, so
+  `frame.rs` skips on Windows and FormalMusic's capture tests open real windows. Needs a Windows
+  headless renderer or a capture Kyan takes himself; then compare against the WinUI 3 Gallery.
+- nd API gaps: a 16 px app icon in the title bar, a footer Settings item, tooltips centred above
+  the control as WinUI does (they sit at the pointer today).
+- GPUI image bubbles have no tail (the video poster has a square bottom corner where AppKit draws
+  one).
+- FormalMusic bump to nd `94bf188e`; Messages has no package script (FormalMusic installs nd-cli
+  from git, mirror that).
+- "crash helper unavailable (os error 10061)" at FormalMusic startup on Windows, not investigated.
+- g815 Tumbleweed vs NixOS: waiting on Kyan.
 
 ## Where things are
 
