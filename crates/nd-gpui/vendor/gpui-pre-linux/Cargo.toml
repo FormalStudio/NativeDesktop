@@ -43,7 +43,11 @@ screen-capture = [
     "gpui/screen-capture",
     "scap",
 ]
-test-support = ["gpui/test-support"]
+test-support = [
+    "gpui/test-support",
+    "gpui_wgpu?/test-support",
+    "dep:image",
+]
 wayland = [
     "dep:accesskit_unix",
     "gpui_wgpu",
@@ -145,6 +149,11 @@ package = "gpui-pre-wgpu"
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.http_client]
 version = "=0.3.9"
 package = "gpui-pre-http-client"
+
+[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.image]
+version = "0.25.1"
+optional = true
+default-features = false
 
 [target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies.libc]
 version = "0.2"

@@ -2137,6 +2137,15 @@ impl PlatformWindow for WaylandWindow {
         self.0.schedule_frame();
     }
 
+    #[cfg(feature = "test-support")]
+    fn render_to_image(&self, scene: &Scene) -> anyhow::Result<image::RgbaImage> {
+        self.borrow_mut()
+            .renderer
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("the window has no renderer"))?
+            .render_to_image(scene)
+    }
+
     fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas> {
         self.borrow()
             .renderer

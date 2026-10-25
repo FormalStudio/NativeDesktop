@@ -2763,6 +2763,7 @@ dependencies = [
  "gpui-pre-collections",
  "gpui-pre-http-client",
  "gpui-pre-util",
+ "image",
  "libc",
  "log",
  "notify-rust",
@@ -3105,6 +3106,7 @@ dependencies = [
  "gpui-pre-http-client",
  "gpui-pre-util",
  "gpui-pre-wgpu",
+ "image",
  "libc",
  "log",
  "notify-rust",
@@ -4913,8 +4915,10 @@ name = "nd-gpui"
 version = "0.6.1"
 dependencies = [
  "gpui-fast",
+ "gpui-fast-linux",
  "gpui-fast-platform",
  "gpui-pre",
+ "gpui-pre-linux",
  "gpui-pre-platform",
  "taffy 0.13.0",
  "taffy 0.14.0",

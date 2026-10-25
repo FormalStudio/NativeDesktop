@@ -45,6 +45,8 @@ gpui = { package = "gpui-pre", version = "=0.3.9", default-features = false }
 gpui_platform = { package = "gpui-pre-platform", version = "=0.3.9", default-features = false }
 gpui_fast = { package = "gpui-fast", version = "=0.1.7", default-features = false }
 gpui_fast_platform = { package = "gpui-fast-platform", version = "=0.1.7", default-features = false }
+gpui_linux = { package = "gpui-pre-linux", version = "=0.3.9", default-features = false }
+gpui_fast_linux = { package = "gpui-fast-linux", version = "=0.1.7", default-features = false }
 # Same version and features as gpui-pre, so its style enums convert into these types.
 taffy = { version = "0.13.0", default-features = false, features = ["std", "taffy_tree", "flexbox", "block_layout", "content_size"] }
 # What gpui-fast pins, for `nd-gpui/fast`.
