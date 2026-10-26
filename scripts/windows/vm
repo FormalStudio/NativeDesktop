@@ -1,0 +1,160 @@
+#!/usr/bin/env bash
+# Drives a Windows guest from the macbook for screenshot and GUI runs. The default target is the
+# Windows 11 KVM guest on g815 (systemd `windows-vm`, ssh on g815's 127.0.0.1:2222): builds run as
+# `kyan`, anything with a window runs in `ndvm`'s autologon session. ND_WINDOWS_HOST=<ssh host>
+# (e.g. `windows`, the same install booted bare metal) targets that host instead, where one user
+# does both and start/stop are no-ops. Other repos call this by path.
+#
+#   vm start                       start the guest (needs 45 GB free on g815's /)
+#   vm wait                        until prep is done and the GUI user's console session is Active
+#   vm ps [--gui] '<powershell>'   run PowerShell as the build user, or as the GUI user
+#   vm src <repo> <C:\dir>         copy the repo's HEAD into <C:\dir>
+#   vm cargo <C:\dir> <args..>     cargo in a synced checkout (MSVC, two jobs, no debug info)
+#   vm push <local> <C:\path>      copy a file in
+#   vm pull <C:\path> <local>      copy a file out
+#   vm lock | vm unlock            one Windows capture at a time (C:\nd\shots.lock)
+#   vm shoot <C:\exe> <local.png> [--env K=V].. [--click <test id>].. [--settle <s>] [--size WxH]
+#                                  launch the exe in the GUI session through the ndshell agent,
+#                                  dark, with a fresh data dir, click test ids over the automation
+#                                  pipe, and capture its window
+#   vm stop                        stop the guest (its overlay and everything in it go away)
+set -euo pipefail
+# `query user` exits 1 even when it lists sessions, so its pipelines tolerate that below.
+
+here=$(cd "$(dirname "$0")" && pwd)
+quiet='post-quantum|store now|openssh.com/pq'
+filter() { { grep -Ev "$quiet" || true; } }
+
+if [[ -n "${ND_WINDOWS_HOST:-}" ]]; then
+  vm=0
+  build=(ssh -o ServerAliveInterval=30 -o ConnectTimeout=10 -o BatchMode=yes "$ND_WINDOWS_HOST")
+  gui=("${build[@]}")
+  scp_build=(scp -q)
+  build_at="$ND_WINDOWS_HOST"
+else
+  vm=1
+  opts=(-o ServerAliveInterval=30 -o ConnectTimeout=10 -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR)
+  build=(ssh "${opts[@]}" -J g815 -p 2222 kyan@127.0.0.1)
+  gui=(ssh "${opts[@]}" -J g815 -p 2222 ndvm@127.0.0.1)
+  scp_build=(scp -q "${opts[@]}" -J g815 -P 2222)
+  build_at=kyan@127.0.0.1
+fi
+
+# Encoded, so the remote login shell (PowerShell too) expands none of the script's `$`. Errors
+# go to stdout as text: an encoded command writes its error stream as CLIXML. The exit status is
+# the last native command's, else 1 when anything wrote an error.
+ps_as() {
+  local -n who=$1
+  local encoded script
+  script="\$ErrorActionPreference = 'Continue'; \$ProgressPreference = 'SilentlyContinue'; \$failed = \$false
+try { & { $2 } 2>&1 | ForEach-Object { if (\$_ -is [Management.Automation.ErrorRecord]) { \$failed = \$true }; \"\$_\" } }
+catch { \"\$_\"; \$failed = \$true; \$LASTEXITCODE = \$null }
+exit \$(if (\$null -ne \$LASTEXITCODE) { \$LASTEXITCODE } elseif (\$failed) { 1 } else { 0 })"
+  encoded=$(printf '%s' "$script" | iconv -f UTF-8 -t UTF-16LE | base64 | tr -d '\n')
+  "${who[@]}" "powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand $encoded" 2>&1 | tr -d '\r' | filter
+}
+# scp wants forward slashes in a Windows remote path.
+remote() { printf '%s:%s' "$build_at" "${1//\\//}"; }
+# g815's login shell is fish; sudo reaches its own agent socket (a forwarded one is not trusted).
+g815() { ssh g815 "bash -c '$1'" 2>&1 | filter; }
+
+case "${1:-}" in
+  start)
+    ((vm)) || exit 0
+    [[ $(g815 'systemctl is-active windows-vm') == active ]] && exit 0
+    free=$(g815 'df -BG --output=avail / | tail -1 | tr -dc 0-9')
+    ((free >= 45)) || { echo "g815: ${free}G free on /, windows-vm needs 45G" >&2; exit 1; }
+    g815 'SSH_AUTH_SOCK=/run/user/$(id -u)/gcr/ssh sudo -n systemctl start windows-vm'
+    echo "windows-vm started"
+    ;;
+  wait)
+    if ((vm)); then
+      # windows-vm-prep reboots the guest into ndvm about 12 minutes after a start.
+      until [[ $(g815 'systemctl is-active windows-vm-prep') == inactive ]] &&
+        { "${gui[@]}" 'query user' 2>/dev/null || true; } | grep -Eiq 'console +[0-9]+ +Active'; do
+        sleep 15
+      done
+    else
+      until { "${gui[@]}" 'query user' 2>/dev/null || true; } | grep -Eiq 'console +[0-9]+ +Active'; do
+        sleep 15
+      done
+    fi
+    echo "windows: console session active"
+    ;;
+  ps)
+    if [[ "${2:-}" == --gui ]]; then ps_as gui "${3:?usage: vm ps --gui <powershell>}"; else ps_as build "${2:?usage: vm ps <powershell>}"; fi
+    ;;
+  src)
+    repo=$(cd "${2:?usage: vm src <repo> <C:\\dir>}" && pwd)
+    dir=${3:?usage: vm src <repo> <C:\\dir>}
+    mkdir -p "$repo/target"
+    tarball="$repo/target/vm-src.tar"
+    # The committed tree: a peer's half-done edit in the checkout must not break the guest build.
+    git -C "$repo" archive --format=tar -o "$tarball" HEAD
+    ps_as build "New-Item -ItemType Directory -Force $dir | Out-Null"
+    "${scp_build[@]}" "$tarball" "$(remote "$dir\\src.tar")" 2>&1 | filter
+    rm -f "$tarball"
+    ps_as build "tar -xf $dir\\src.tar -C $dir; Remove-Item $dir\\src.tar; 'synced $dir'"
+    ;;
+  cargo)
+    dir=${2:?usage: vm cargo <C:\\dir> <cargo args..>}
+    shift 2
+    ps_as build "New-Item -ItemType Directory -Force C:\\nd\\shots | Out-Null"
+    "${scp_build[@]}" "$here/cargo.ps1" "$(remote 'C:\nd\shots\cargo.ps1')" 2>&1 | filter
+    ps_as build "& C:\\nd\\shots\\cargo.ps1 $dir $*"
+    ;;
+  push)
+    "${scp_build[@]}" "${2:?usage: vm push <local> <C:\\path>}" "$(remote "${3:?}")" 2>&1 | filter
+    ;;
+  pull)
+    "${scp_build[@]}" "$(remote "${2:?usage: vm pull <C:\\path> <local>}")" "${3:?}" 2>&1 | filter
+    ;;
+  lock)
+    until [[ $(ps_as build "New-Item -ItemType Directory -Path C:\\nd -Force | Out-Null; if (New-Item -ItemType Directory C:\\nd\\shots.lock -ErrorAction SilentlyContinue) { 'held' }") == held ]]; do
+      echo "windows: another capture holds C:\\nd\\shots.lock" >&2
+      sleep 30
+    done
+    ;;
+  unlock)
+    ps_as build "Remove-Item C:\\nd\\shots.lock -ErrorAction SilentlyContinue"
+    ;;
+  shoot)
+    exe=${2:?usage: vm shoot <C:\\exe> <local.png> [--env K=V].. [--click <test id>].. [--settle <s>] [--size WxH]}
+    out=${3:?}
+    shift 3
+    args=() envs=() clicks=()
+    while (($#)); do
+      case "$1" in
+        --env) envs+=("'$2'") ;;
+        --click) clicks+=("'$2'") ;;
+        --settle) args+=(-Settle "$2") ;;
+        --size) args+=(-Size "'$2'") ;;
+        *) echo "vm shoot: unknown argument $1" >&2; exit 2 ;;
+      esac
+      shift 2
+    done
+    # PowerShell takes a repeated parameter as one comma-separated list.
+    ((${#envs[@]})) && args+=(-Env "$(IFS=,; echo "${envs[*]}")")
+    ((${#clicks[@]})) && args+=(-Click "$(IFS=,; echo "${clicks[*]}")")
+    if [[ $(ps_as build "Test-Path C:\\nd\\shots\\ndshell.exe") != True ]]; then
+      "$0" src "$here/../.." 'C:\nd\shots\nd'
+      "$0" cargo 'C:\nd\shots\nd' build -p ndshell
+      ps_as build "Copy-Item C:\\nd\\shots\\nd\\target\\debug\\ndshell.exe C:\\nd\\shots\\ndshell.exe"
+    fi
+    "${scp_build[@]}" "$here/shoot.ps1" "$(remote 'C:\nd\shots\shoot.ps1')" 2>&1 | filter
+    ps_as gui "& C:\\nd\\shots\\shoot.ps1 -Exe '$exe' -Out C:\\nd\\shots\\shot.png ${args[*]}"
+    mkdir -p "$(dirname "$out")"
+    "${scp_build[@]}" "$(remote 'C:\nd\shots\shot.png')" "$out" 2>&1 | filter
+    [[ -s "$out" ]] || { echo "vm shoot: no capture came back" >&2; exit 1; }
+    echo "wrote $out"
+    ;;
+  stop)
+    ((vm)) || exit 0
+    g815 'SSH_AUTH_SOCK=/run/user/$(id -u)/gcr/ssh sudo -n systemctl stop windows-vm'
+    echo "windows-vm stopped"
+    ;;
+  *)
+    sed -n '2,20p' "$0"
+    exit 2
+    ;;
+esac

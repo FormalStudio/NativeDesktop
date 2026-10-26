@@ -1,0 +1,152 @@
+#!/usr/bin/env python3
+"""Launches an nd app on the mac, dark and with a fresh data dir, and captures its window.
+
+  scripts/mac/shoot <exe> <out.png> [--env K=V].. [--click <test id>].. [--settle <s>]
+
+The capture goes through ndshot, not screencapture: agent terminals cannot be granted Screen
+Recording, and ndshot is its own TCC responsible process with a standing grant. $ND_NDSHOT
+overrides the binary (default ~/Developer/NativeDesktop/tools/ndshot/bin/ndshot).
+"""
+
+import argparse
+import json
+import os
+import shutil
+import socket
+import struct
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+NDSHOT = os.environ.get("ND_NDSHOT", str(Path.home() / "Developer/NativeDesktop/tools/ndshot/bin/ndshot"))
+
+
+def until(what, seconds, probe):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        value = probe()
+        if value:
+            return value
+        time.sleep(0.5)
+    sys.exit(f"shoot: {what} within {seconds}s")
+
+
+class Rpc:
+    """nd automation: JSON-RPC 2.0 frames behind a little-endian u32 length."""
+
+    def __init__(self, path):
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.connect(str(path))
+        self.id = 0
+
+    def read(self, n):
+        buf = b""
+        while len(buf) < n:
+            chunk = self.sock.recv(n - len(buf))
+            if not chunk:
+                sys.exit("shoot: the app closed its automation socket")
+            buf += chunk
+        return buf
+
+    def call(self, method, params=None):
+        self.id += 1
+        body = json.dumps({"jsonrpc": "2.0", "id": self.id, "method": method, "params": params or {}}).encode()
+        self.sock.sendall(struct.pack("<I", len(body)) + body)
+        reply = json.loads(self.read(struct.unpack("<I", self.read(4))[0]))
+        if "error" in reply:
+            raise RuntimeError(f"{method}: {reply['error'].get('message')} {reply['error'].get('data') or ''}")
+        return reply["result"]
+
+
+def find(node, test_id):
+    if node.get("testId") == test_id and node.get("visible") and node.get("bounds"):
+        return node
+    for child in node.get("children", []):
+        hit = find(child, test_id)
+        if hit:
+            return hit
+    return None
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="shoot")
+    parser.add_argument("exe")
+    parser.add_argument("out")
+    parser.add_argument("--env", action="append", default=[])
+    parser.add_argument("--click", action="append", default=[])
+    parser.add_argument("--settle", type=float, default=3)
+    args = parser.parse_args()
+
+    if subprocess.run([NDSHOT, "doctor"], capture_output=True).returncode != 0:
+        sys.exit(f"shoot: {NDSHOT} has no Screen Recording grant (run it with doctor)")
+
+    # Unix socket paths stop at 104 bytes, so the run dir sits next to the binary in target/.
+    run = Path(args.exe).resolve().parent / "shots-run"
+    shutil.rmtree(run, ignore_errors=True)
+    (run / "data").mkdir(parents=True)
+    (run / "theme.toml").write_text('appearance = "dark"\n')
+    sock = run / "nd.sock"
+    env = dict(os.environ)
+    env.update(
+        NATIVE_AUTOMATION="1",
+        ND_AUTOMATION_SOCKET=str(sock),
+        ND_APP_DATA_DIR=str(run / "data"),
+        ND_THEME_TOML=str(run / "theme.toml"),
+        ND_THEME_JSON="",
+    )
+    env.update(pair.split("=", 1) for pair in args.env)
+
+    app = subprocess.Popen([args.exe], env=env, cwd=run, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        until("no automation socket", 60, sock.exists)
+        rpc = until("automation socket refused", 30, lambda: _connect(sock))
+        until("no visible window", 60, lambda: any(w.get("visible") for w in rpc.call("windows")))
+        for test_id in args.click:
+            # A pointer click at the node's middle, as nd_test's mouse().click does: rows answer a
+            # pointer but not the semantic click. Rows load after the window shows.
+            node = until(
+                f"no visible node {test_id}",
+                30,
+                lambda: next(filter(None, (find(w["root"], test_id) for w in rpc.call("getTree")["windows"])), None),
+            )
+            b = node["bounds"]
+            x, y = b["x"] + b["width"] / 2, b["y"] + b["height"] / 2
+            for phase in ("down", "up"):
+                rpc.call("pointer", {"phase": phase, "x": x, "y": y, "clickCount": 1})
+            time.sleep(1.5)
+        time.sleep(args.settle)
+        out = Path(args.out).resolve()
+        # --pid alone takes the pid's first window, which can be an offscreen helper (messages has a
+        # blank 1000x1000 one), so pick the largest on-screen window and capture it by id.
+        listed = subprocess.run([NDSHOT, "list"], capture_output=True, text=True).stdout.splitlines()
+        windows = [w for w in map(json.loads, listed) if w.get("pid") == app.pid and w.get("onScreen")]
+        if not windows:
+            sys.exit("shoot: ndshot lists no on-screen window for the app")
+        window = max(windows, key=lambda w: w["width"] * w["height"])
+        shot = subprocess.run(
+            [NDSHOT, "capture", "--window-id", str(window["windowID"]), "--out", str(out)],
+            capture_output=True,
+            text=True,
+        )
+        if shot.returncode != 0 or not out.is_file():
+            sys.exit(f"shoot: ndshot capture: {shot.stderr.strip()}")
+        print(f"wrote {out}")
+    finally:
+        app.terminate()
+        try:
+            app.wait(10)
+        except subprocess.TimeoutExpired:
+            app.kill()
+        shutil.rmtree(run, ignore_errors=True)
+
+
+def _connect(path):
+    try:
+        return Rpc(path)
+    except OSError:
+        return None
+
+
+if __name__ == "__main__":
+    main()

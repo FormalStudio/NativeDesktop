@@ -13,6 +13,12 @@ Web pages show in a window through `webview()`, on WKWebView or, opt-in, CEF. Ap
 
 Docs: https://native.formalsnake.dev (the sources are in [docs/content](docs/content)).
 
+| macOS | Linux | Windows |
+| --- | --- | --- |
+| ![The gallery example on macOS, in dark mode](docs/shots/macos.png) | ![The gallery example on Linux, in dark mode](docs/shots/linux.png) | ![The gallery example on Windows, in dark mode](docs/shots/windows.png) |
+
+The gallery example (`examples/gallery`) on each OS. `scripts/shots all` regenerates these.
+
 ## Getting started
 
 Releases are git tags, not crates.io versions, because nd builds on a patched GPUI. You need rustup, git and, on macOS, Xcode or the Command Line Tools. Install the CLI from a tag:

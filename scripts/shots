@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# Regenerates the README screenshots of the gallery example, dark, at its default window size:
+# docs/shots/<os>.png. Runs from the macbook.
+#
+#   scripts/shots macos|linux|windows|all
+#
+# linux is `nd docs capture gallery`; macos and windows make the same launch through
+# scripts/mac/shoot and scripts/windows/vm shoot. macos builds here; linux builds and captures on
+# g815 through scripts/linux-gate, into $ND_LINUX_BUILD_ROOT (default ~/build/nd-shots on g815's
+# root disk); windows builds and captures in the g815 Windows guest, or on $ND_WINDOWS_HOST.
+set -euo pipefail
+
+root=$(cd "$(dirname "$0")/.." && pwd)
+vm="$root/scripts/windows/vm"
+shots="$root/docs/shots"
+mkdir -p "$shots"
+
+macos() {
+  (cd "$root" && CARGO_BUILD_JOBS=2 taskpolicy -c utility cargo build -q -p gallery)
+  "$root/scripts/mac/shoot" "$(cd "$root" && cargo metadata -q --format-version 1 | jq -r .target_directory)/debug/gallery" "$shots/macos.png"
+}
+
+linux() {
+  export ND_LINUX_BUILD_ROOT=${ND_LINUX_BUILD_ROOT:-/home/kyandesutter/build/nd-shots}
+  export ND_LINUX_GATE_TIMEOUT_MIN=${ND_LINUX_GATE_TIMEOUT_MIN:-120}
+  local host=${ND_LINUX_HOST:-g815}
+  local dir="Developer/nativedesktop-$(git -C "$root" rev-parse --abbrev-ref HEAD)"
+  "$root/scripts/linux-gate" sync
+  "$root/scripts/linux-gate" run 'cargo run -q -p nd-cli -- docs capture gallery'
+  scp -q "$host:$dir/docs/app/assets/captures/gallery/linux-dark.png" "$shots/linux.png"
+}
+
+windows() {
+  local src='C:\nd\shots\nd'
+  "$vm" start
+  "$vm" wait
+  "$vm" lock
+  trap '"$vm" unlock' EXIT
+  "$vm" src "$root" "$src"
+  "$vm" cargo "$src" build -p gallery -p ndshell
+  "$vm" ps "Copy-Item $src\\target\\debug\\ndshell.exe C:\\nd\\shots\\ndshell.exe"
+  "$vm" shoot "$src\\target\\debug\\gallery.exe" "$shots/windows.png"
+}
+
+case "${1:-}" in
+  macos | linux | windows) "$1" ;;
+  all) macos && linux && windows ;;
+  *)
+    sed -n '2,11p' "$0"
+    exit 2
+    ;;
+esac
