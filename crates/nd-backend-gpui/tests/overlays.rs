@@ -482,6 +482,36 @@ mod gate_m4_overlays {
         assert!(!drawn(&o, "Deeper"), "resting on another row shuts the submenu");
     }
 
+    /// A submenu shuts once the pointer has left the whole menu for the menu delay, and stays
+    /// while the pointer is in it.
+    pub fn gpui_context_submenu_closes_when_the_pointer_leaves_the_menu() {
+        let mut o = open();
+        let surface = by_test_id(&o.host, o.window, "surface").and_then(|n| n.bounds).expect("surface bounds");
+        let open_at = nd_ui::Point { x: surface.origin.x + 10., y: surface.origin.y + 20. };
+        post(&mut o, click(open_at, GpuiButton::Right));
+        let drawn = |o: &Opened, label: &str| {
+            o.host.backend().paints(o.window).expect("paints").iter().any(|p| p.label == label)
+        };
+        let more = nd_ui::Point { x: open_at.x + 30., y: open_at.y + 5. + 28. + 9. + 28. + 14. };
+        post(&mut o, wiggle(more));
+        assert!(drawn(&o, "Deeper"));
+        // Below the menu, still in the window.
+        let outside = nd_ui::Point { x: open_at.x + 30., y: open_at.y + 160. };
+        post(&mut o, wiggle(outside));
+        assert!(drawn(&o, "Deeper"), "the submenu waits out the menu delay");
+        rest(&mut o);
+        assert!(!drawn(&o, "Deeper"), "the pointer left the menu, so the submenu shuts");
+        assert!(o.host.backend().menu_open(o.window), "the menu itself stays open");
+
+        // Into the submenu by way of its row: it stays.
+        post(&mut o, wiggle(more));
+        let deeper = nd_ui::Point { x: open_at.x + 220., y: more.y };
+        post(&mut o, wiggle(deeper));
+        rest(&mut o);
+        assert!(drawn(&o, "Deeper"), "the pointer is in the submenu");
+
+    }
+
     /// WinUI's MenuFlyoutSubItem under the Fluent look: a click opens the submenu, the pointer
     /// can slant across the rows below toward it without it closing, its item fires, and the
     /// keyboard walks into and out of it.
@@ -642,6 +672,10 @@ fn main() {
         (
             "gate_m4_overlays::gpui_context_submenu_opens_on_hover",
             gate_m4_overlays::gpui_context_submenu_opens_on_hover,
+        ),
+        (
+            "gate_m4_overlays::gpui_context_submenu_closes_when_the_pointer_leaves_the_menu",
+            gate_m4_overlays::gpui_context_submenu_closes_when_the_pointer_leaves_the_menu,
         ),
         (
             "gate_m4_overlays::gpui_fluent_submenu_opens_and_its_item_fires",

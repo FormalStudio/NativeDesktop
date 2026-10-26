@@ -69,13 +69,25 @@ pub(crate) struct MenuOverlay {
     pub hot: Option<usize>,
     /// Bumped by every hover and key, so a delayed submenu switch from an older hover lapses.
     pub hover_generation: u64,
+    /// The levels the pointer is over, by depth.
+    pub pointer_in: std::collections::BTreeSet<usize>,
     /// The single keystroke bound to each action, as the menu shows it (Fluent's "Ctrl+C").
     pub shortcuts: Vec<(Box<dyn gpui::Action>, SharedString)>,
 }
 
 impl MenuOverlay {
     pub(crate) fn new(node: NodeId, at: Point, above: bool, content: MenuContent) -> Self {
-        Self { node, at, above, content, open: Vec::new(), hot: None, hover_generation: 0, shortcuts: Vec::new() }
+        Self {
+            node,
+            at,
+            above,
+            content,
+            open: Vec::new(),
+            hot: None,
+            hover_generation: 0,
+            pointer_in: Default::default(),
+            shortcuts: Vec::new(),
+        }
     }
 
     fn shortcut(&self, action: &dyn gpui::Action) -> Option<SharedString> {
@@ -714,7 +726,12 @@ impl Build<'_> {
                         icon: fluent.is_some()
                             && items.iter().any(|i| matches!(i, MenuItem::Action { icon: Some(_), .. })),
                     };
-                    let mut level = list(if depth == 0 { "nd-context-menu" } else { "nd-context-submenu" });
+                    let (backend, wake) = (self.backend.clone(), self.wake.clone());
+                    let mut level = list(if depth == 0 { "nd-context-menu" } else { "nd-context-submenu" }).on_hover(
+                        move |hovered: &bool, _, cx| {
+                            backend.point_at_menu_level(window_id, depth, *hovered, wake.clone(), cx)
+                        },
+                    );
                     let path: Vec<usize> = menu.open.iter().copied().take(depth).collect();
                     for (i, item) in items.iter().enumerate() {
                         let lit = depth == innermost && menu.hot == Some(i);
@@ -964,6 +981,8 @@ impl GpuiBackend {
             let generation = menu.hover_generation;
             if lit {
                 state.dirty.insert(window);
+                drop(state);
+                wake(cx);
             }
             generation
         };
@@ -983,6 +1002,57 @@ impl GpuiBackend {
                     }
                 };
                 if switched {
+                    wake(cx);
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// The pointer entered or left the menu level at `depth`. Once it has been outside every
+    /// level for [`SUBMENU_DELAY`], the open submenus close.
+    pub(crate) fn point_at_menu_level(
+        &self,
+        window: WindowId,
+        depth: usize,
+        inside: bool,
+        wake: crate::backend::Wake,
+        cx: &mut gpui::App,
+    ) {
+        let generation = {
+            let mut state = self.state.borrow_mut();
+            let Some(menu) = state.menus.get_mut(&window) else { return };
+            menu.hover_generation += 1;
+            if inside {
+                menu.pointer_in.insert(depth);
+                return;
+            }
+            menu.pointer_in.remove(&depth);
+            if menu.open.is_empty() {
+                return;
+            }
+            menu.hover_generation
+        };
+        let backend = self.clone();
+        cx.spawn(async move |cx| {
+            cx.background_executor().timer(SUBMENU_DELAY).await;
+            cx.update(|cx| {
+                let closed = {
+                    let mut state = backend.state.borrow_mut();
+                    match state.menus.get_mut(&window) {
+                        // A level that closed under the pointer never reports it left.
+                        Some(menu)
+                            if menu.hover_generation == generation
+                                && !menu.pointer_in.iter().any(|&d| d <= menu.open.len()) =>
+                        {
+                            menu.open.clear();
+                            state.dirty.insert(window);
+                            true
+                        }
+                        _ => false,
+                    }
+                };
+                if closed {
                     wake(cx);
                 }
             });
