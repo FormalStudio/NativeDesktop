@@ -326,8 +326,13 @@ impl gpui::Element for VirtualList {
     ) {
         let emit = self.emit.clone();
         let wake = self.wake.clone();
-        let rows: Vec<(RowId, Bounds<Pixels>)> =
-            prepainted.placed.iter().map(|(i, b)| (self.rows[*i].tag.row, *b)).collect();
+        // An unselectable row leaves the pointer and presses to its own content.
+        let rows: Vec<(RowId, Bounds<Pixels>)> = prepainted
+            .placed
+            .iter()
+            .filter(|(i, _)| self.rows[*i].tag.selectable)
+            .map(|(i, b)| (self.rows[*i].tag.row, *b))
+            .collect();
         let disclosures: Vec<(RowId, Bounds<Pixels>, bool)> = prepainted
             .placed
             .iter()

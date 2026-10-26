@@ -300,6 +300,38 @@ pub fn row_hover_follows_the_pointer() {
     assert!(washed(&mut cx, &host, window, &state).is_empty(), "no stale wash once the pointer leaves the list");
 }
 
+struct Sidebar {
+    list: ListState<u32>,
+}
+
+impl Render for Sidebar {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        v_flex().size_full().child(
+            div().h(px(200.)).w_full().child(
+                list("chats", &self.list, |row: u32, _, _| div().h(px(40.)).w_full().child(format!("chat {row}")))
+                    .inset()
+                    .selection(nd_virtual::Selection::single())
+                    .selectable(|row, _| *row != 0),
+            ),
+        )
+    }
+}
+
+/// A row the list may not select, such as a strip of pinned cells heading a sidebar, ignores a
+/// press on it; the rows below it still select.
+pub fn unselectable_row_takes_no_selection() {
+    let (mut cx, host, window, view) = open(300., |cx| {
+        let mut list = ListState::new(cx);
+        list.set_items((0..4).collect::<Vec<u32>>(), cx);
+        Sidebar { list }
+    });
+    let state = host.read(|app| view.read(app).list.clone());
+    click(&mut cx, &host, window, 150., 20.);
+    assert!(state.selected().is_empty(), "the unselectable row stays unselected");
+    click(&mut cx, &host, window, 150., 60.);
+    assert_eq!(state.selected(), vec![1], "the row below it selects");
+}
+
 struct Plain {
     list: ListState<u32>,
 }
@@ -342,8 +374,9 @@ pub fn scroll_into_view_reaches_a_row_below_the_fold() {
 }
 
 fn main() {
-    let tests: [(&str, fn()); 5] = [
+    let tests: [(&str, fn()); 6] = [
         ("gate_m5::gpui_kinds::row_hover_follows_the_pointer", row_hover_follows_the_pointer),
+        ("gate_m5::gpui_kinds::unselectable_row_takes_no_selection", unselectable_row_takes_no_selection),
         (
             "gate_m5::gpui_kinds::scroll_into_view_reaches_a_row_below_the_fold",
             scroll_into_view_reaches_a_row_below_the_fold,

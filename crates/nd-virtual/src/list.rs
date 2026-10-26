@@ -186,6 +186,9 @@ pub struct RowTag {
     pub depth: u16,
     pub expandable: bool,
     pub expanded: bool,
+    /// False for a row the list neither selects nor highlights under the pointer, such as a
+    /// strip of cells that are each their own button.
+    pub selectable: bool,
 }
 
 /// Hung on each cell of a table row, with the column's index.
@@ -366,6 +369,7 @@ pub struct TreeNode<K> {
 }
 
 type ActionsFn<K> = Rc<dyn Fn(K, &App) -> RowActions>;
+type SelectableFn<K> = Rc<dyn Fn(&K, &App) -> bool>;
 type Handler<E> = Rc<dyn Fn(&E, &mut Window, &mut App)>;
 type RenderFn<K> = Rc<dyn Fn(K, &mut Window, &mut App) -> AnyElement>;
 type CellFn<K> = Rc<dyn Fn(K, usize, &mut Window, &mut App) -> AnyElement>;
@@ -396,6 +400,7 @@ struct Inner<K: RowKey> {
     views: HashMap<RowId, Entity<RowView<K>>>,
     renderer: Option<Renderer<K>>,
     row_actions: Option<ActionsFn<K>>,
+    selectable: Option<SelectableFn<K>>,
     /// Each rendered row's actions as its last render built them, to run when picked.
     actions: HashMap<RowId, RowActions>,
     selected: Vec<K>,
@@ -436,6 +441,7 @@ impl<K: RowKey> ListState<K> {
                 views: HashMap::new(),
                 renderer: None,
                 row_actions: None,
+                selectable: None,
                 actions: HashMap::new(),
                 selected: Vec::new(),
                 tree: None,
@@ -834,11 +840,18 @@ pub struct RowView<K: RowKey> {
 impl<K: RowKey> Render for RowView<K> {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let Some(list) = self.list.upgrade() else { return div().into_any_element() };
-        let (renderer, meta, expanded, actions_fn) = {
+        let (renderer, meta, expanded, actions_fn, selectable_fn) = {
             let inner = list.borrow();
             let meta = inner.meta.get(&self.row).copied().unwrap_or_default();
-            (inner.renderer.clone(), meta, inner.expanded.contains(&self.key), inner.row_actions.clone())
+            (
+                inner.renderer.clone(),
+                meta,
+                inner.expanded.contains(&self.key),
+                inner.row_actions.clone(),
+                inner.selectable.clone(),
+            )
         };
+        let selectable = selectable_fn.is_none_or(|f| f(&self.key, cx));
         let actions = actions_fn.map(|f| f(self.key.clone(), cx)).filter(|a| !a.is_empty());
         let spec = actions.as_ref().map(RowActions::spec);
         if let Some(actions) = actions.clone() {
@@ -846,8 +859,14 @@ impl<K: RowKey> Render for RowView<K> {
         } else {
             list.borrow_mut().actions.remove(&self.row);
         }
-        let tag =
-            RowTag { row: self.row, actions: spec.clone(), depth: meta.depth, expandable: meta.expandable, expanded };
+        let tag = RowTag {
+            row: self.row,
+            actions: spec.clone(),
+            depth: meta.depth,
+            expandable: meta.expandable,
+            expanded,
+            selectable,
+        };
         let swipe = self.swipe;
         let this = cx.weak_entity();
         let row = div().w_full().flex().flex_col();
@@ -1070,6 +1089,12 @@ impl<K: RowKey> List<K> {
     /// draws them and follows nd-gesture's row swipe.
     pub fn row_actions(self, f: impl Fn(K, &App) -> RowActions + 'static) -> Self {
         self.state.inner.borrow_mut().row_actions = Some(Rc::new(f));
+        self
+    }
+
+    /// Which rows take selection and the pointer's highlight; every row when unset.
+    pub fn selectable(self, f: impl Fn(&K, &App) -> bool + 'static) -> Self {
+        self.state.inner.borrow_mut().selectable = Some(Rc::new(f));
         self
     }
 

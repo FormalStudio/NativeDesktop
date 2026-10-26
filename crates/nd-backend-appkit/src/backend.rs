@@ -613,7 +613,7 @@ impl State {
         if list == parent {
             if let Some(row) = row {
                 l.attach_row(node, row.row, &view);
-                l.set_row_actions(row.row, row.actions);
+                l.set_row_tag(&row);
                 return true;
             }
             return false;
@@ -1489,7 +1489,7 @@ impl Backend for AppKitBackend {
                 && let Some(Native::List(l)) = state.nodes.get_mut(&list)
                 && l.is_row(node)
             {
-                l.set_row_actions(tag.row, tag.actions);
+                l.set_row_tag(&tag);
             }
         }
         if let (Some(axes), Some(Native::Layer(v))) = (scroll_axes, state.nodes.get(&node)) {

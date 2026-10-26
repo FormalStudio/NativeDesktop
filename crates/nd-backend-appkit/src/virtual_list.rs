@@ -113,6 +113,8 @@ pub struct Shared {
     rows: RefCell<HashMap<RowId, RowNodes>>,
     /// Each rendered row's swipe actions, from its tag; the table's row actions answer from it.
     actions: RefCell<HashMap<RowId, nd_virtual::RowActionsSpec>>,
+    /// Rendered rows whose tag says the table may not select them.
+    unselectable: RefCell<HashSet<RowId>>,
     /// Outline items: one object per row, which the outline tracks by identity.
     items: RefCell<HashMap<RowId, Retained<NSNumber>>>,
     emit: Emit,
@@ -144,6 +146,7 @@ impl Shared {
             containers: RefCell::default(),
             rows: RefCell::default(),
             actions: RefCell::default(),
+            unselectable: RefCell::default(),
             items: RefCell::default(),
             emit,
             wake,
@@ -356,8 +359,11 @@ define_class!(
         }
 
         #[unsafe(method(tableView:shouldSelectRow:))]
-        fn should_select(&self, _table: &NSTableView, _row: NSInteger) -> bool {
-            self.ivars().shared.selection.get() != Selection::None
+        fn should_select(&self, _table: &NSTableView, row: NSInteger) -> bool {
+            let shared = &self.ivars().shared;
+            let id = shared.snap.borrow().ids.get(row.max(0) as usize).copied();
+            shared.selection.get() != Selection::None
+                && id.is_none_or(|id| !shared.unselectable.borrow().contains(&id))
         }
 
         #[unsafe(method(tableView:didClickTableColumn:))]
@@ -728,6 +734,7 @@ impl TableNative {
     pub fn detach_row(&mut self, node: NodeId) {
         let Some(row) = self.node_rows.remove(&node) else { return };
         self.shared.actions.borrow_mut().remove(&row);
+        self.shared.unselectable.borrow_mut().remove(&row);
         if let Some(table) = self.table.downcast_ref::<swipe::NdTableView>() {
             table.forget(row);
         }
@@ -744,12 +751,18 @@ impl TableNative {
         matches!(self.props.kind, ListKind::Table(_))
     }
 
-    pub fn set_row_actions(&mut self, row: RowId, actions: Option<nd_virtual::RowActionsSpec>) {
+    pub fn set_row_tag(&mut self, tag: &nd_virtual::RowTag) {
         let mut map = self.shared.actions.borrow_mut();
-        match actions {
-            Some(a) => map.insert(row, a),
-            None => map.remove(&row),
+        match tag.actions.clone() {
+            Some(a) => map.insert(tag.row, a),
+            None => map.remove(&tag.row),
         };
+        let mut unselectable = self.shared.unselectable.borrow_mut();
+        if tag.selectable {
+            unselectable.remove(&tag.row);
+        } else {
+            unselectable.insert(tag.row);
+        }
     }
 
     /// Titles of the row actions a swipe on the table's `row` reveals on one edge.
@@ -1439,10 +1452,10 @@ impl ListNative {
         Some(())
     }
 
-    /// Grids have no row actions; tables, lists and trees show them natively.
-    pub fn set_row_actions(&mut self, row: RowId, actions: Option<nd_virtual::RowActionsSpec>) {
+    /// Grids have no row actions or row selection rules; tables, lists and trees take them.
+    pub fn set_row_tag(&mut self, tag: &nd_virtual::RowTag) {
         if let ListNative::Table(t) = self {
-            t.set_row_actions(row, actions);
+            t.set_row_tag(tag);
         }
     }
 
