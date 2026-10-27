@@ -55,6 +55,9 @@ const GAP: f32 = 4.;
 /// A panel's top edge sits this far down the window, as a fraction of its height.
 const PANEL_TOP: f32 = 0.18;
 
+/// Where each open submenu was last placed, in window coordinates, by depth.
+type Placed = Rc<RefCell<std::collections::BTreeMap<usize, Bounds<Pixels>>>>;
+
 /// An open drawn context menu: where, and its items.
 pub(crate) struct MenuOverlay {
     /// The node that asked for it, which its paints are recorded under.
@@ -71,6 +74,9 @@ pub(crate) struct MenuOverlay {
     pub hover_generation: u64,
     /// The levels the pointer is over, by depth.
     pub pointer_in: std::collections::BTreeSet<usize>,
+    /// Where the pointer last moved over a row.
+    pub pointer: Option<Point>,
+    pub placed: Placed,
     /// The single keystroke bound to each action, as the menu shows it (Fluent's "Ctrl+C").
     pub shortcuts: Vec<(Box<dyn gpui::Action>, SharedString)>,
 }
@@ -86,6 +92,8 @@ impl MenuOverlay {
             hot: None,
             hover_generation: 0,
             pointer_in: Default::default(),
+            pointer: None,
+            placed: Default::default(),
             shortcuts: Vec::new(),
         }
     }
@@ -166,9 +174,33 @@ fn chevron_right(color: gpui::Hsla) -> AnyElement {
     }
 }
 
-/// How long the pointer rests on another row before an open submenu gives way to it: Windows'
-/// default MenuShowDelay, which WinUI's CascadingMenuHelper reads.
+/// How long the pointer stays off the menu before its open submenus close: Windows' default
+/// MenuShowDelay, which WinUI's CascadingMenuHelper reads.
 const SUBMENU_DELAY: std::time::Duration = std::time::Duration::from_millis(400);
+
+/// How long the pointer may rest while it heads for an open submenu before the row under it
+/// takes over.
+const AIM_DELAY: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Whether a pointer that moved from `from` to `to` is heading for the submenu at `sub`: `to`
+/// lies inside the triangle from `from` to the corners of the submenu's edge that faces it.
+fn heading_for(from: Point, to: Point, sub: Bounds<Pixels>) -> bool {
+    let (left, right) = (sub.left().as_f32(), sub.right().as_f32());
+    let (top, bottom) = (sub.top().as_f32(), sub.bottom().as_f32());
+    let x = if from.x <= left {
+        left
+    } else if from.x >= right {
+        right
+    } else {
+        return false;
+    };
+    let cross = |a: Point, b: Point, p: Point| (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
+    let (b, c) = (Point { x, y: top }, Point { x, y: bottom });
+    let (d1, d2, d3) = (cross(from, b, to), cross(b, c, to), cross(c, from, to));
+    let negative = d1 < 0. || d2 < 0. || d3 < 0.;
+    let positive = d1 > 0. || d2 > 0. || d3 > 0.;
+    to != from && !(negative && positive)
+}
 
 /// A key's step from `from` to the next row that takes the keyboard, wrapping, `forward` or back.
 fn step(rows: &[(bool, bool)], from: Option<usize>, forward: bool) -> Option<usize> {
@@ -735,16 +767,15 @@ impl Build<'_> {
                     let path: Vec<usize> = menu.open.iter().copied().take(depth).collect();
                     for (i, item) in items.iter().enumerate() {
                         let lit = depth == innermost && menu.hot == Some(i);
-                        // Hovering a row of this level opens its submenu, or closes the open one.
+                        // Moving over a row of this level opens its submenu, or closes the open one.
                         let (backend, wake) = (self.backend.clone(), self.wake.clone());
                         let hover = |sub: Option<usize>| {
                             let (backend, wake) = (backend.clone(), wake.clone());
                             let mut open = path.clone();
                             open.extend(sub);
-                            move |hovered: &bool, _: &mut gpui::Window, cx: &mut gpui::App| {
-                                if *hovered {
-                                    backend.hover_menu(window_id, open.clone(), wake.clone(), cx);
-                                }
+                            move |e: &MouseMoveEvent, _: &mut gpui::Window, cx: &mut gpui::App| {
+                                let at = Point { x: e.position.x.as_f32(), y: e.position.y.as_f32() };
+                                backend.hover_menu(window_id, depth, open.clone(), at, wake.clone(), cx);
                             }
                         };
                         level = level.child(match item {
@@ -760,7 +791,7 @@ impl Build<'_> {
                                     submenu: false,
                                     lit,
                                 };
-                                let row = row(i, columns, cell).on_hover(hover(None));
+                                let row = row(i, columns, cell).on_mouse_move(hover(None));
                                 if *enabled {
                                     let (backend, wake, action) =
                                         (self.backend.clone(), self.wake.clone(), action.boxed_clone());
@@ -789,7 +820,7 @@ impl Build<'_> {
                                 let (backend, wake) = (self.backend.clone(), self.wake.clone());
                                 let mut target = path.clone();
                                 target.push(i);
-                                let mut row = row(i, columns, cell).relative().on_hover(hover(Some(i))).on_click(
+                                let mut row = row(i, columns, cell).relative().on_mouse_move(hover(Some(i))).on_click(
                                     move |_, _, cx| {
                                         if backend.open_submenu(window_id, target.clone()) {
                                             wake(cx);
@@ -800,7 +831,11 @@ impl Build<'_> {
                                     // From the row to the menu's outer edge: the row's inset and
                                     // the border.
                                     let edge = if fluent.is_some() { px(5.) } else { px(1.) };
-                                    row = row.child(Beside { edge, child: Occluding::surface(sub).into_any_element() });
+                                    row = row.child(Beside {
+                                        edge,
+                                        child: Occluding::surface(sub).into_any_element(),
+                                        placed: (menu.placed.clone(), depth + 1),
+                                    });
                                 }
                                 row.into_any_element()
                             }
@@ -958,20 +993,35 @@ impl GpuiBackend {
         true
     }
 
-    /// The pointer rests on a row of the window's menu whose hover asks for the submenus at
-    /// `open`. Opening one deeper is at once; closing or switching an open one waits
-    /// [`SUBMENU_DELAY`], and lapses if the pointer reaches the open submenu or its row first, so
-    /// a slant across the rows below toward the submenu keeps it.
-    pub(crate) fn hover_menu(&self, window: WindowId, open: Vec<usize>, wake: crate::backend::Wake, cx: &mut gpui::App) {
+    /// The pointer moved to `at` over a row at `depth` of the window's menu that asks for the
+    /// submenus at `open`. Opening one deeper is at once, and so is closing or switching an open one, unless
+    /// the pointer is heading for that submenu: inside the triangle from where it last was to the
+    /// submenu's near edge, as macOS menus aim. Then the switch waits until the pointer rests for
+    /// [`AIM_DELAY`] or turns away, so a slant across the rows below keeps the submenu.
+    pub(crate) fn hover_menu(
+        &self,
+        window: WindowId,
+        depth: usize,
+        open: Vec<usize>,
+        at: Point,
+        wake: crate::backend::Wake,
+        cx: &mut gpui::App,
+    ) {
         let generation = {
             let mut state = self.state.borrow_mut();
             let Some(menu) = state.menus.get_mut(&window) else { return };
             menu.hover_generation += 1;
+            let from = menu.pointer.replace(at);
             let lit = menu.hot.take().is_some();
-            if menu.open == open || open.starts_with(&menu.open) {
-                let opened = menu.open != open;
+            let deeper = menu.open == open || open.starts_with(&menu.open);
+            let aiming = !deeper
+                && from.is_some_and(|from| {
+                    menu.placed.borrow().get(&(depth + 1)).is_some_and(|&sub| heading_for(from, at, sub))
+                });
+            if !aiming {
+                let changed = menu.open != open;
                 menu.open = open;
-                if opened || lit {
+                if changed || lit {
                     state.dirty.insert(window);
                     drop(state);
                     wake(cx);
@@ -988,7 +1038,7 @@ impl GpuiBackend {
         };
         let backend = self.clone();
         cx.spawn(async move |cx| {
-            cx.background_executor().timer(SUBMENU_DELAY).await;
+            cx.background_executor().timer(AIM_DELAY).await;
             cx.update(|cx| {
                 let switched = {
                     let mut state = backend.state.borrow_mut();
@@ -1365,6 +1415,8 @@ struct Beside {
     /// From the row's sides to the menu's outer edges.
     edge: Pixels,
     child: AnyElement,
+    /// Where the submenu lands is recorded here under its depth, for the pointer's aim.
+    placed: (Placed, usize),
 }
 
 impl Beside {
@@ -1445,6 +1497,7 @@ impl gpui::Element for Beside {
         viewport.height -= inset * 2.;
         let row = Bounds { origin: bounds.origin - point(inset, inset), size: bounds.size };
         let at = Self::place(row, size, self.edge, viewport) + point(inset, inset);
+        self.placed.0.borrow_mut().insert(self.placed.1, Bounds { origin: at, size });
         self.child.prepaint_at(at, window, cx);
     }
 
@@ -1473,6 +1526,24 @@ impl IntoElement for Beside {
 #[cfg(test)]
 mod tests {
     use nd_gpui::gpui::{Bounds, point, px, size};
+
+    /// A submenu to the right of the pointer: moves toward its near edge aim, others do not.
+    #[test]
+    fn heading_for_the_submenus_near_edge() {
+        let sub = Bounds { origin: point(px(200.), px(100.)), size: size(px(180.), px(120.)) };
+        let from = super::Point { x: 100., y: 110. };
+        let at = |x, y| super::Point { x, y };
+        assert!(super::heading_for(from, at(150., 130.), sub), "down and right, toward the submenu");
+        assert!(super::heading_for(from, at(150., 108.), sub), "level with its top row");
+        assert!(!super::heading_for(from, at(100., 140.), sub), "straight down, away from it");
+        assert!(!super::heading_for(from, at(150., 60.), sub), "up past its top");
+        assert!(!super::heading_for(from, at(80., 110.), sub), "back to the left");
+        assert!(!super::heading_for(from, from, sub), "resting");
+        // A submenu placed to the pointer's left aims the same way, mirrored.
+        let left = Bounds { origin: point(px(-100.), px(100.)), size: size(px(80.), px(120.)) };
+        assert!(super::heading_for(from, at(60., 130.), left));
+        assert!(!super::heading_for(from, at(150., 130.), left));
+    }
 
     use super::Beside;
 

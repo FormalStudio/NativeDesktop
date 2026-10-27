@@ -477,9 +477,7 @@ mod gate_m4_overlays {
         post(&mut o, wiggle(more));
         assert!(drawn(&o, "Deeper"));
         post(&mut o, wiggle(nd_ui::Point { x: open_at.x + 30., y: open_at.y + 5. + 14. }));
-        assert!(drawn(&o, "Deeper"), "the submenu waits out the menu delay before it gives way");
-        rest(&mut o);
-        assert!(!drawn(&o, "Deeper"), "resting on another row shuts the submenu");
+        assert!(!drawn(&o, "Deeper"), "moving to another row away from the submenu shuts it at once");
     }
 
     /// A submenu shuts once the pointer has left the whole menu for the menu delay, and stays
@@ -512,9 +510,8 @@ mod gate_m4_overlays {
 
     }
 
-    /// WinUI's MenuFlyoutSubItem under the Fluent look: a click opens the submenu, the pointer
-    /// can slant across the rows below toward it without it closing, its item fires, and the
-    /// keyboard walks into and out of it.
+    /// WinUI's MenuFlyoutSubItem under the Fluent look: a click opens the submenu, another row
+    /// shuts it, its item fires, and the keyboard walks into and out of it.
     pub fn gpui_fluent_submenu_opens_and_its_item_fires() {
         let mut o = open();
         o.host.backend().set_theme(nd_theme::ThemeRegistry::new(nd_theme::Preset::Fluent));
@@ -536,9 +533,11 @@ mod gate_m4_overlays {
         assert!(o.host.backend().menu_open(o.window), "a click on a submenu's row keeps the menu");
         assert!(drawn(&o, "Deeper"), "and opens the submenu");
 
-        // A slant from More down across Again's row (below it in a taller menu) to the submenu.
-        post(&mut o, wiggle(nd_ui::Point { x: open_at.x + 150., y: again }));
-        assert!(drawn(&o, "Deeper"), "crossing another row on the way keeps the submenu");
+        // Straight up to Again heads away from the submenu beside More.
+        post(&mut o, wiggle(nd_ui::Point { x: open_at.x + 30., y: again }));
+        assert!(!drawn(&o, "Deeper"), "another row away from the submenu shuts it at once");
+        post(&mut o, wiggle(nd_ui::Point { x: open_at.x + 30., y: more }));
+        assert!(drawn(&o, "Deeper"), "back on More, it opens again");
         let deeper = nd_ui::Point { x: open_at.x + 220., y: more };
         post(&mut o, wiggle(deeper));
         rest(&mut o);
