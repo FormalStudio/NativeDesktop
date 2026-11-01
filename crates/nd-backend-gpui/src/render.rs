@@ -722,6 +722,8 @@ impl<'a> Build<'a> {
             sidebar,
             disclosure_color: self.top().text,
             edges: crate::scrollbar::adwaita_edge_colors(&theme),
+            focus: self.ctl(id, true, window, cx, || ()).0.sink,
+            accent: theme.accent,
         }
         .into_any_element()
     }

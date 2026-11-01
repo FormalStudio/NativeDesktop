@@ -6,6 +6,7 @@
 mod core;
 mod heights;
 mod list;
+pub mod selection;
 
 #[cfg(feature = "conformance")]
 pub mod conformance;
@@ -14,6 +15,6 @@ pub use crate::core::{Align, Alignment, Core, Diff, Follow, GridSpec, Layout, Pl
 pub use crate::list::{
     ActivateEvent, CellTag, Column, ColumnResized, ExpandEvent, List, ListHandle, ListKind, ListProps, ListState,
     ListWidget, ROW_ACTION_WIDTH, RowAction, RowActionInvoked, RowActionSpec, RowActions, RowActionsSpec, RowActivated,
-    RowDisclosed, RowEdge, RowKey, RowTag, RowView, RowsSelected, SelectEvent, Selection, SortChanged, SortDirection,
-    TreeNode, ViewportChanged, column, grid, list, row_action, table, tree,
+    RowDisclosed, RowEdge, RowKey, RowTag, RowView, RowsSelected, SelectEvent, Selection, SelectionChanged,
+    SortChanged, SortDirection, TreeNode, ViewportChanged, column, grid, list, row_action, table, tree,
 };

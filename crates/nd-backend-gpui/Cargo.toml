@@ -107,6 +107,11 @@ harness = false
 name = "list_kinds"
 harness = false
 
+# Selection under real pointer and key input on the GPUI presenter.
+[[test]]
+name = "list_selection"
+harness = false
+
 # Row swipe actions on the GPUI presenter.
 [[test]]
 name = "row_actions"

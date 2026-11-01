@@ -19,12 +19,14 @@ use std::sync::OnceLock;
 use nd_core::{NodeId, Rect};
 use nd_gpui::gpui::{
     self, AnyElement, App, AvailableSpace, Bounds, ContentMask, DispatchPhase, ElementId, GlobalElementId, Hitbox,
-    HitboxBehavior, Hsla, InspectorElementId, IntoElement, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent,
-    Pixels, Point, Refineable, Style, fill, point, px, size,
+    HitboxBehavior, Hsla, InspectorElementId, IntoElement, KeyDownEvent, LayoutId, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, Pixels, Point, Refineable, Style, fill, point, px, size,
 };
 use nd_ui::events::Emit;
+use nd_virtual::selection::{self, Extend, Nav};
 use nd_virtual::{
-    ListHandle, ListKind, ListProps, RowDisclosed, RowId, RowMeta, RowTag, RowsSelected, Selection, ViewportChanged,
+    Align, ListHandle, ListKind, ListProps, RowActivated, RowDisclosed, RowId, RowMeta, RowTag, RowsSelected,
+    Selection, ViewportChanged,
 };
 
 use crate::backend::Wake;
@@ -33,6 +35,10 @@ use crate::backend::Wake;
 pub(crate) const INDENT: f32 = 16.;
 /// Height of a table's header row.
 pub(crate) const HEADER: f32 = 24.;
+/// A marquee held this close to the viewport's top or bottom edge, or past it, scrolls.
+const EDGE: f32 = 24.;
+/// Points a press may travel before it is a drag rather than a click.
+const SLOP: f32 = 4.;
 
 fn now() -> f64 {
     static ORIGIN: OnceLock<Instant> = OnceLock::new();
@@ -52,6 +58,71 @@ pub struct Presenter {
     /// The rendered rows when it last asked the app for others, so it asks once per change.
     asked: Option<Range<usize>>,
     edges: (bool, bool),
+    /// Where a Shift range grows from, and the row keys move from.
+    anchor: Option<RowId>,
+    cursor: Option<RowId>,
+    /// The selection the presenter last reported, and the one the props last carried: props
+    /// moving to anything but the report are the app's own change, which resets the anchor.
+    reported: Vec<RowId>,
+    seen: Vec<RowId>,
+    marquee: Option<Marquee>,
+    /// A plain press on a row of a multiple selection: it collapses the selection to that row
+    /// on release, unless the press became a drag (the group moves together).
+    pending: Option<(RowId, Point<Pixels>)>,
+}
+
+/// A rubber band dragged out from empty space.
+struct Marquee {
+    /// The press: x in window coordinates, y in content coordinates, so the band stays on the
+    /// rows it started at while the list scrolls.
+    from: (f32, f64),
+    /// The pointer now, in window coordinates.
+    to: (f32, f32),
+    /// What was selected at the press, for a marquee that adds to it or toggles it.
+    base: Vec<RowId>,
+    extend: Extend,
+    swept: Vec<RowId>,
+}
+
+/// The rows the band touches, in list order.
+fn swept(handle: &ListHandle, view: Rect, m: &Marquee) -> Vec<RowId> {
+    let core = handle.0.borrow();
+    let top = core.scroll_top();
+    let to = top + f64::from(m.to.1 - view.origin.y);
+    let (y0, y1) = (m.from.1.min(to), m.from.1.max(to));
+    let (a, b) = (m.from.0 - view.origin.x, m.to.0 - view.origin.x);
+    let (x0, x1) = (f64::from(a.min(b)), f64::from(a.max(b)));
+    let grid = core.grid();
+    let lanes = core.lanes();
+    let mut out = Vec::new();
+    for (i, row) in core.ids().iter().enumerate() {
+        let (rt, rh) = (core.top(i), grid.map_or(core.height(i), |g| g.item_height));
+        if rt > y1 {
+            break;
+        }
+        let (rx, rw) = match grid {
+            Some(g) => ((i % lanes) as f64 * (g.item_width + g.gap), g.item_width),
+            None => (0., f64::from(view.size.width)),
+        };
+        if rt + rh >= y0 && rx <= x1 && rx + rw >= x0 {
+            out.push(*row);
+        }
+    }
+    out
+}
+
+/// Points a held marquee scrolls by this frame: towards the edge it is near, faster the further
+/// past it.
+fn edge_speed(y: f32, view: Rect) -> f32 {
+    let (top, bottom) = (view.origin.y + EDGE, view.origin.y + view.size.height - EDGE);
+    let d = if y < top {
+        y - top
+    } else if y > bottom {
+        y - bottom
+    } else {
+        0.
+    };
+    (d / 2.).clamp(-40., 40.)
 }
 
 pub(crate) type Presenters = Rc<RefCell<HashMap<NodeId, Presenter>>>;
@@ -90,6 +161,10 @@ pub(crate) struct VirtualList {
     pub disclosure_color: Hsla,
     /// libadwaita's raised and undershoot shades at the scroll edges, under that look.
     pub edges: Option<(Hsla, Hsla)>,
+    /// The list's keyboard focus: a press focuses it, keys move the selection while it holds it.
+    pub focus: crate::forms::Sink,
+    /// The marquee's band.
+    pub accent: Hsla,
 }
 
 /// How an inset list (a sidebar's) draws its selection.
@@ -126,6 +201,18 @@ fn rect(b: Bounds<Pixels>) -> Rect {
 }
 
 impl VirtualList {
+    /// The marquee's band in window coordinates, cut to the viewport.
+    fn band(&self, view: Bounds<Pixels>) -> Option<Bounds<Pixels>> {
+        let presenters = self.presenters.borrow();
+        let m = presenters.get(&self.node)?.marquee.as_ref()?;
+        let top = self.props.handle.0.borrow().scroll_top();
+        let y = view.origin.y.as_f32() + (m.from.1 - top) as f32;
+        let (x0, x1) = (m.from.0.min(m.to.0), m.from.0.max(m.to.0));
+        let (y0, y1) = (y.min(m.to.1), y.max(m.to.1));
+        let band = Bounds::from_corners(point(px(x0), px(y0)), point(px(x1), px(y1)));
+        Some(band.intersect(&view))
+    }
+
     /// Asks the app for the rows the model wants when they are not the ones rendered.
     fn ask_for_rows(&self, render: Range<usize>, edges: (bool, bool), cx: &mut App) {
         let rendered: HashSet<RowId> = self.rows.iter().map(|r| r.tag.row).collect();
@@ -180,6 +267,7 @@ impl gpui::Element for VirtualList {
         cx: &mut App,
     ) -> Prepainted {
         let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
+        window.set_focus_handle(&self.focus.focus, cx);
         let header_h = if self.header.is_some() { px(HEADER) } else { px(0.) };
         let header = self.header.as_mut().map(|h| {
             let hb = Bounds::new(bounds.origin, size(bounds.size.width, header_h));
@@ -214,6 +302,12 @@ impl gpui::Element for VirtualList {
             && routed != last
         {
             handle.0.borrow_mut().scroll_by(f64::from(routed - last));
+        }
+        let held = self.presenters.borrow().get(&self.node).and_then(|p| p.marquee.as_ref().map(|m| m.to.1));
+        let edge = held.map_or(0., |y| edge_speed(y, rect(view)));
+        if edge != 0. {
+            handle.0.borrow_mut().scroll_by(f64::from(edge));
+            window.request_animation_frame();
         }
         // Rows are laid out only where it matters: in the viewport, or with a height the model
         // has not measured at this width. Overscan rows already measured are only kept ready.
@@ -311,6 +405,27 @@ impl gpui::Element for VirtualList {
         let state = presenters.entry(self.node).or_default();
         state.painted = painted;
         state.viewport = rect(view);
+        if state.seen != self.props.selected {
+            state.seen = self.props.selected.clone();
+            if state.reported != self.props.selected {
+                state.reported = self.props.selected.clone();
+                state.anchor = self.props.selected.last().copied();
+                state.cursor = state.anchor;
+            }
+        }
+        if edge != 0.
+            && let Some(m) = state.marquee.as_mut()
+        {
+            let now = swept(&handle, rect(view), m);
+            if now != m.swept {
+                m.swept = now;
+                let rows = selection::marquee(handle.0.borrow().ids(), &m.base, &m.swept, m.extend);
+                state.reported = rows.clone();
+                self.emit.emit(RowsSelected { rows, cursor: state.cursor });
+                (self.wake)(cx);
+            }
+        }
+        drop(presenters);
         Prepainted { hitbox, placed, selected: sel, disclosures, header, scrolled: (synced, range) }
     }
 
@@ -333,6 +448,12 @@ impl gpui::Element for VirtualList {
             .filter(|(i, _)| self.rows[*i].tag.selectable)
             .map(|(i, b)| (self.rows[*i].tag.row, *b))
             .collect();
+        let unselectable: HashSet<RowId> = prepainted
+            .placed
+            .iter()
+            .filter(|(i, _)| !self.rows[*i].tag.selectable)
+            .map(|(i, _)| self.rows[*i].tag.row)
+            .collect();
         let disclosures: Vec<(RowId, Bounds<Pixels>, bool)> = prepainted
             .placed
             .iter()
@@ -343,14 +464,20 @@ impl gpui::Element for VirtualList {
         let selection = self.props.selection;
         let selected = self.props.selected.clone();
         let tree = self.props.kind == ListKind::Tree;
+        let grid = self.props.kind == ListKind::Grid;
         let hitbox = prepainted.hitbox.clone();
+        let view_rect = self.presenters.borrow().get(&self.node).map_or(rect(bounds), |p| p.viewport);
         // The row under the pointer gets the hover fill, as GTK's navigation lists and boxed
         // tables show it; a move onto another row repaints. A plain list of mixed rows (a page
         // of headers and shelves) leaves hover to the rows themselves.
         let hovers = selection != Selection::None
             && (self.props.inset || matches!(self.props.kind, ListKind::Table(_) | ListKind::Tree));
-        let row_at = |rows: &[(RowId, Bounds<Pixels>)], at: Point<Pixels>| {
-            rows.iter().find(|(_, b)| b.contains(&at)).map(|(r, b)| (*r, *b))
+        // A grid's cell is its own box; a list row takes the press across the whole width, the
+        // indent of a tree row included, as NSOutlineView's rows do.
+        let row_at = move |rows: &[(RowId, Bounds<Pixels>)], at: Point<Pixels>| {
+            rows.iter()
+                .find(|(_, b)| if grid { b.contains(&at) } else { at.y >= b.top() && at.y < b.bottom() })
+                .map(|(r, b)| (*r, *b))
         };
         let hovered = (hovers && hitbox.is_hovered(window)).then(|| row_at(&rows, window.mouse_position())).flatten();
         if hovers {
@@ -366,12 +493,32 @@ impl gpui::Element for VirtualList {
                 }
             });
         }
+        let ctx = Pick {
+            node: self.node,
+            handle: self.props.handle.clone(),
+            presenters: self.presenters.clone(),
+            emit: emit.clone(),
+            wake: wake.clone(),
+            selection,
+            selected: selected.clone(),
+            unselectable: Rc::new(unselectable),
+        };
+        let all: Vec<(RowId, Bounds<Pixels>)> =
+            prepainted.placed.iter().map(|(i, b)| (self.rows[*i].tag.row, *b)).collect();
+        let marquees = matches!(self.props.kind, ListKind::Table(_) | ListKind::Grid) && selection != Selection::None;
+        let focus = self.focus.clone();
+        let pick = ctx.clone();
         window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
-            if phase != DispatchPhase::Bubble || event.button != MouseButton::Left || !hitbox.is_hovered(window) {
+            if phase != DispatchPhase::Bubble || !hitbox.is_hovered(window) {
                 return;
             }
             let at = event.position;
+            let in_view = at.y.as_f32() >= view_rect.origin.y;
+            if event.button == MouseButton::Left && in_view {
+                focus.take_focus(window, cx);
+            }
             if tree
+                && event.button == MouseButton::Left
                 && let Some((row, _, expanded)) = disclosures.iter().find(|(_, b, _)| {
                     at.y >= b.top() && at.y < b.bottom() && at.x < b.left() && at.x >= b.left() - px(INDENT)
                 })
@@ -380,21 +527,101 @@ impl gpui::Element for VirtualList {
                 wake(cx);
                 return;
             }
-            let Some((row, _)) = rows.iter().find(|(_, b)| b.contains(&at)) else { return };
-            if event.click_count >= 2 {
-                emit.emit(nd_virtual::RowActivated(*row));
-            } else if selection != Selection::None {
-                let mut next = vec![*row];
-                if selection == Selection::Multiple && event.modifiers.secondary() {
-                    next = selected.iter().copied().filter(|r| r != row).collect();
-                    if !selected.contains(row) {
-                        next.push(*row);
+            let extend = Extend::from(crate::gestures::key_modifiers(&event.modifiers));
+            let hit = row_at(&all, at).map(|(r, _)| r);
+            match (event.button, hit) {
+                (MouseButton::Left, Some(row)) if pick.unselectable.contains(&row) => {}
+                (MouseButton::Left, Some(row)) if event.click_count >= 2 => {
+                    emit.emit(RowActivated(row));
+                    wake(cx);
+                }
+                (MouseButton::Left, Some(row)) if selection != Selection::None => {
+                    if selection == Selection::Multiple && extend == Extend::default() && selected.contains(&row) {
+                        pick.with(|p| p.pending = Some((row, at)));
+                        return;
+                    }
+                    pick.click(row, extend, cx);
+                }
+                // The context menu acts on what is selected: a right click outside the selection
+                // selects that row alone first, as Finder and Nautilus do.
+                (MouseButton::Right, Some(row))
+                    if selection != Selection::None
+                        && !selected.contains(&row)
+                        && !pick.unselectable.contains(&row) =>
+                {
+                    pick.click(row, Extend::default(), cx);
+                }
+                (MouseButton::Left, None) if in_view && selection != Selection::None => {
+                    let keep = selection == Selection::Multiple && extend != Extend::default();
+                    if !keep && !selected.is_empty() {
+                        pick.report(Vec::new(), None, cx);
+                    }
+                    if marquees && selection == Selection::Multiple {
+                        let top = pick.handle.0.borrow().scroll_top();
+                        let from = (at.x.as_f32(), top + f64::from(at.y.as_f32() - view_rect.origin.y));
+                        let base = if keep { selected.clone() } else { Vec::new() };
+                        let m = Marquee { from, to: (at.x.as_f32(), at.y.as_f32()), base, extend, swept: Vec::new() };
+                        pick.with(|p| p.marquee = Some(m));
                     }
                 }
-                emit.emit(RowsSelected(next));
+                _ => {}
             }
-            wake(cx);
         });
+        let pick = ctx.clone();
+        window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+            if phase != DispatchPhase::Bubble || event.pressed_button != Some(MouseButton::Left) {
+                return;
+            }
+            let at = (event.position.x.as_f32(), event.position.y.as_f32());
+            let moved = pick.with(|p| {
+                if p.pending.is_some_and(|(_, from)| {
+                    (from.x.as_f32() - at.0).abs() > SLOP || (from.y.as_f32() - at.1).abs() > SLOP
+                }) {
+                    p.pending = None;
+                }
+                let m = p.marquee.as_mut()?;
+                m.to = at;
+                let now = swept(&pick.handle, p.viewport, m);
+                (now != m.swept).then(|| {
+                    m.swept = now;
+                    selection::marquee(pick.handle.0.borrow().ids(), &m.base, &m.swept, m.extend)
+                })
+            });
+            if let Some(rows) = moved.flatten() {
+                let cursor = pick.with(|p| p.cursor).flatten();
+                pick.report(rows, cursor, cx);
+            }
+            if pick.with(|p| p.marquee.is_some()) == Some(true) {
+                window.refresh();
+            }
+        });
+        let pick = ctx.clone();
+        window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
+            if phase != DispatchPhase::Bubble || event.button != MouseButton::Left {
+                return;
+            }
+            let (pending, marquee) = pick.with(|p| (p.pending.take(), p.marquee.take())).unwrap_or_default();
+            if let Some((row, _)) = pending {
+                pick.click(row, Extend::default(), cx);
+            }
+            if marquee.is_some() {
+                window.refresh();
+            }
+        });
+        if selection != Selection::None {
+            let (pick, focus) = (ctx.clone(), self.focus.clone());
+            let page = (view_rect.size.height / self.props.handle.0.borrow().estimate().max(1.) as f32) as usize;
+            window.on_key_event(move |event: &KeyDownEvent, phase, window, cx| {
+                if phase != DispatchPhase::Bubble || !focus.focus.is_focused(window) {
+                    return;
+                }
+                if pick.key(event, tree, page.saturating_sub(1).max(1), cx) {
+                    focus.keyboard();
+                    cx.stop_propagation();
+                    window.refresh();
+                }
+            });
+        }
 
         if let (Some(header), Some(_)) = (self.header.as_mut(), prepainted.header) {
             header.paint(window, cx);
@@ -445,11 +672,133 @@ impl gpui::Element for VirtualList {
             for (i, _) in &prepainted.placed {
                 self.rows[*i].element.paint(window, cx);
             }
+            if let Some(band) = self.band(view) {
+                window.paint_quad(fill(band, self.accent.opacity(0.2)));
+                window.paint_quad(gpui::outline(band, self.accent.opacity(0.8), gpui::BorderStyle::Solid));
+            }
             if let Some(edges) = self.edges {
                 let (offset, max) = prepainted.scrolled;
                 crate::scrollbar::paint_adwaita_edges(window, view, edges, offset, max);
             }
         });
+    }
+}
+
+/// What the presenter's input handlers share: the list, its presenter state and the way to
+/// report a selection.
+#[derive(Clone)]
+struct Pick {
+    node: NodeId,
+    handle: ListHandle,
+    presenters: Presenters,
+    emit: Emit,
+    wake: Wake,
+    selection: Selection,
+    selected: Vec<RowId>,
+    unselectable: Rc<HashSet<RowId>>,
+}
+
+impl Pick {
+    fn with<T>(&self, f: impl FnOnce(&mut Presenter) -> T) -> Option<T> {
+        self.presenters.borrow_mut().get_mut(&self.node).map(f)
+    }
+
+    fn report(&self, rows: Vec<RowId>, cursor: Option<RowId>, cx: &mut App) {
+        self.with(|p| p.reported = rows.clone());
+        self.emit.emit(RowsSelected { rows, cursor });
+        (self.wake)(cx);
+    }
+
+    fn click(&self, row: RowId, extend: Extend, cx: &mut App) {
+        let anchor = self.with(|p| p.anchor).flatten();
+        let picked = {
+            let core = self.handle.0.borrow();
+            selection::click(core.ids(), &self.selected, anchor, row, self.selection, extend)
+        };
+        self.with(|p| {
+            p.anchor = picked.anchor;
+            p.cursor = picked.cursor;
+        });
+        self.report(picked.selected, picked.cursor, cx);
+    }
+
+    /// A key while the list has focus; true when it was the list's.
+    fn key(&self, event: &KeyDownEvent, tree: bool, page: usize, cx: &mut App) -> bool {
+        let k = &event.keystroke;
+        let m = k.modifiers;
+        let (anchor, cursor) = self.with(|p| (p.anchor, p.cursor)).unwrap_or_default();
+        let (ids, lanes) = {
+            let core = self.handle.0.borrow();
+            (core.ids().to_vec(), core.lanes())
+        };
+        if k.key == "a" && m.secondary() && !m.shift && !m.alt {
+            if self.selection != Selection::Multiple {
+                return false;
+            }
+            let rows: Vec<RowId> = ids.iter().copied().filter(|r| !self.unselectable.contains(r)).collect();
+            self.report(rows, cursor, cx);
+            return true;
+        }
+        if m.secondary() || m.alt {
+            return false;
+        }
+        let at = cursor.and_then(|c| ids.iter().position(|r| *r == c));
+        if (k.key == "enter" || k.key == "kp_enter") && !m.shift {
+            let Some(row) = cursor else { return false };
+            self.emit.emit(RowActivated(row));
+            (self.wake)(cx);
+            return true;
+        }
+        if tree
+            && let (Some(i), Some(row)) = (at, cursor)
+            && (k.key == "left" || k.key == "right")
+        {
+            let meta = self.handle.0.borrow().meta(i);
+            let open = k.key == "right";
+            if meta.expandable && meta.expanded != open {
+                self.emit.emit(RowDisclosed { row, expanded: open });
+                (self.wake)(cx);
+                return true;
+            }
+            // Left on a collapsed row goes to its parent, right on an open one to its first
+            // child, as in NSOutlineView.
+            let target = if open {
+                (meta.expandable && i + 1 < ids.len()).then_some(i + 1)
+            } else {
+                (0..i).rev().find(|j| self.handle.0.borrow().meta(*j).depth < meta.depth)
+            };
+            if let Some(t) = target {
+                self.land(&ids, anchor, t, false, cx);
+            }
+            return true;
+        }
+        let nav = match k.key.as_str() {
+            "up" => Nav::Up,
+            "down" => Nav::Down,
+            "left" => Nav::Left,
+            "right" => Nav::Right,
+            "home" => Nav::Home,
+            "end" => Nav::End,
+            "pageup" => Nav::PageUp,
+            "pagedown" => Nav::PageDown,
+            _ => return false,
+        };
+        let Some(t) = selection::step(ids.len(), lanes, at, nav, page, |i| !self.unselectable.contains(&ids[i])) else {
+            return matches!(nav, Nav::Up | Nav::Down) || lanes > 1;
+        };
+        self.land(&ids, anchor, t, m.shift, cx);
+        true
+    }
+
+    /// The cursor moved by a key to the row at `index`: select and scroll it into view.
+    fn land(&self, ids: &[RowId], anchor: Option<RowId>, index: usize, range: bool, cx: &mut App) {
+        let picked = selection::key(ids, anchor, ids[index], self.selection, range);
+        self.handle.0.borrow_mut().scroll_to(ids[index], Align::Nearest, 0., false);
+        self.with(|p| {
+            p.anchor = picked.anchor;
+            p.cursor = picked.cursor;
+        });
+        self.report(picked.selected, picked.cursor, cx);
     }
 }
 

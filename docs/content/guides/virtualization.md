@@ -84,9 +84,31 @@ For everything else, use `scroll_to_top`, `scroll_to_end`, and `scroll_by`.
 ## Selection, activation, and row actions
 
 To turn on selection, pass `.selection(Selection::single())` or `Selection::multiple()`.
-`.on_select` reports the clicked key and the whole selected set. `.on_activate` fires on a double
-click. To set the selection from code, call `select(key)` or `set_selected(keys)`. The list drops
-keys that are no longer in it.
+`.on_select` reports the key the click or key landed on and the whole selected set, in list
+order. `.on_selection_change` reports every change, including a click on empty space that clears
+the selection, which `.on_select` skips because there is no key to report. `.on_activate` fires on
+a double click or Return. To set the selection from code, call `select(key)` or
+`set_selected(keys)`. The list drops keys that are no longer in it, and rows `.selectable` turns
+down.
+
+```rust
+table("files", &self.files, columns, render_cell)
+    .selection(Selection::multiple())
+    .on_selection_change(cx.listener(|this, e: &SelectionChanged<FileId>, _, cx| this.show(&e.keys, cx)))
+```
+
+Both presenters select the way AppKit does. A click selects one row. The secondary key (Command
+on macOS, Control elsewhere) toggles a row. Shift selects the range from the anchor, and Shift
+with the secondary key adds that range. A plain press on a row of a multiple selection keeps the
+group until the release, so the group can be dragged. A right click outside the selection selects
+that row alone before the context menu opens. With the list focused, the arrow keys move the
+cursor (by line and by cell in a grid), Home, End, Page Up and Page Down jump, Shift extends from
+the anchor, the secondary key with A selects every row, and the row moved to scrolls into view.
+In a tree, Left and Right collapse and expand, then move to the parent or the first child. In a
+table or grid, a drag from empty space draws a marquee that replaces the selection, adds to it
+with Shift, or toggles what it sweeps with the secondary key, and scrolls when held near an edge.
+On macOS this is `NSTableView` and `NSCollectionView` behaviour; the GPUI presenter implements the
+same rules in `nd_virtual::selection`. A middle click goes to the row's own `.on_middle_click`.
 
 Row actions are a method of the list, which asks for them per row. The closure runs for the row
 that the user swipes:
@@ -137,8 +159,7 @@ AppKit callbacks. The data source answers from rows that are already rendered. T
 doesn't use GPUI's own `ListState`. That type requires that rows outside the viewport never change
 height without a `splice`, and that rule is what makes the last rows vanish.
 
-The GPUI presenter doesn't have sticky headers, drag reorder, column resize, or keyboard selection
-yet. Neither presenter ships type-ahead. On macOS, trees and grids apply changes with a full
+The GPUI presenter doesn't have sticky headers, drag reorder, or column resize yet. Neither presenter ships type-ahead. On macOS, trees and grids apply changes with a full
 reload, so they don't animate inserts. For the open list, see [TODO.md](../../plan/TODO.md).
 
 ## The last-row bug class

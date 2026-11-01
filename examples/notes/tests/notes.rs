@@ -199,7 +199,7 @@ fn opening_a_note_does_not_reorder_the_list() {
     let mut rig = open();
     let list = rig.node("notes").id;
     let row = rig.row_id(4);
-    rig.cx.emit(list, RowsSelected(vec![row]));
+    rig.cx.emit(list, RowsSelected::new(vec![row]));
     assert!(rig.editor_text().contains("A file manager"), "{}", rig.editor_text());
     assert_eq!(rig.rows(), ["note-1", "note-2", "note-3", "note-4"], "set_text records Replaced, not Edited");
 }

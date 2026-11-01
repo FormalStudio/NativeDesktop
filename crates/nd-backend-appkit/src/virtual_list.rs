@@ -353,8 +353,10 @@ define_class!(
             let selected = table.selectedRowIndexes();
             let snap = shared.snap.borrow();
             let rows: Vec<RowId> = (0..snap.ids.len()).filter(|i| selected.containsIndex(*i)).map(|i| snap.ids[i]).collect();
+            // selectedRow is the row selected last: the one the click or key landed on.
+            let cursor = usize::try_from(table.selectedRow()).ok().and_then(|i| snap.ids.get(i).copied());
             drop(snap);
-            shared.emit.emit(RowsSelected(rows));
+            shared.emit.emit(RowsSelected { rows, cursor });
             shared.wake.wake();
         }
 
@@ -459,7 +461,8 @@ define_class!(
                 .filter(|i| selected.containsIndex(*i))
                 .filter_map(|i| Shared::row_of_item(outline.itemAtRow(i as NSInteger).as_deref()))
                 .collect();
-            shared.emit.emit(RowsSelected(rows));
+            let cursor = Shared::row_of_item(outline.itemAtRow(outline.selectedRow()).as_deref());
+            shared.emit.emit(RowsSelected { rows, cursor });
             shared.wake.wake();
         }
 
@@ -1155,7 +1158,7 @@ impl NdGridSource {
             .collect();
         drop(snap);
         rows.sort_unstable();
-        shared.emit.emit(RowsSelected(rows.into_iter().map(|(_, r)| r).collect()));
+        shared.emit.emit(RowsSelected::new(rows.into_iter().map(|(_, r)| r).collect()));
         shared.wake.wake();
     }
 }
@@ -1444,7 +1447,7 @@ impl ListNative {
                 shared.programmatic(|| g.collection.setSelectionIndexPaths(&set));
             }
         }
-        shared.emit.emit(RowsSelected(vec![row]));
+        shared.emit.emit(RowsSelected::new(vec![row]));
         if activate {
             shared.emit.emit(RowActivated(row));
         }

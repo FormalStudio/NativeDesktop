@@ -9,6 +9,13 @@ and the one it moves to.
   `KeyModifiers` with `secondary()`). `.on_middle_click` reports a middle click and
   `.on_navigate` the mouse's back and forward buttons (and the three-finger swipe on macOS).
   `TapEvent` and `DragEvent` gained a field: build a `TapEvent` with `TapEvent::new`.
+- Lists, tables and grids on the GPUI backend select as AppKit does: Shift ranges from the
+  anchor, Shift with Control adds the range, a click on empty space clears, the arrow keys, Home,
+  End and Page Up/Down move and extend, Control+A (Command+A on macOS) selects all, a marquee from empty space in a
+  table or grid, and a right click selects the row under it (on macOS too).
+  `List::on_selection_change` sees every change, an emptied selection included. `SelectEvent::key`
+  is the row the click landed on. `RowsSelected` is now `{ rows, cursor }`
+  (`RowsSelected::new(rows)` for the old shape).
 
 ## v0.6.1
 

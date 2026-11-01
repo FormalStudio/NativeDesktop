@@ -204,9 +204,22 @@ pub struct ViewportChanged {
     pub at_end: bool,
 }
 
-/// The user changed the selection.
+/// The user changed the selection: `rows` in list order, empty when a click on empty space
+/// cleared it. `cursor` is the row the click or key landed on, which a Shift range grows from
+/// the anchor towards.
 #[derive(Clone, Debug, PartialEq)]
-pub struct RowsSelected(pub Vec<RowId>);
+pub struct RowsSelected {
+    pub rows: Vec<RowId>,
+    pub cursor: Option<RowId>,
+}
+
+impl RowsSelected {
+    /// `rows` with the last of them as the cursor.
+    pub fn new(rows: Vec<RowId>) -> Self {
+        let cursor = rows.last().copied();
+        Self { rows, cursor }
+    }
+}
 
 /// The user activated a row (double click, Return).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -342,11 +355,20 @@ pub struct SortChanged {
 
 // Events the app handles.
 
-/// The user selected `key` (the last row clicked); `keys` is the whole selection.
+/// The user selected `key` (the row the click or key landed on); `keys` is the whole selection
+/// in list order.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SelectEvent<K> {
     pub key: K,
     pub keys: Vec<K>,
+}
+
+/// Any change the user made to the selection, an emptied one included: `keys` in list order,
+/// `cursor` the row the click or key landed on.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SelectionChanged<K> {
+    pub keys: Vec<K>,
+    pub cursor: Option<K>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -975,6 +997,7 @@ pub struct List<K: RowKey> {
     inset: bool,
     empty: Option<AnyElement>,
     on_select: Option<Handler<SelectEvent<K>>>,
+    on_selection_change: Option<Handler<SelectionChanged<K>>>,
     on_activate: Option<Handler<ActivateEvent<K>>>,
     on_expand: Option<Handler<ExpandEvent<K>>>,
     on_near_start: Option<Handler<()>>,
@@ -994,6 +1017,7 @@ fn build<K: RowKey>(id: SharedString, state: &ListState<K>, kind: ListKind, rend
         inset: false,
         empty: None,
         on_select: None,
+        on_selection_change: None,
         on_activate: None,
         on_expand: None,
         on_near_start: None,
@@ -1113,6 +1137,16 @@ impl<K: RowKey> List<K> {
         self
     }
 
+    /// Every change the user makes to the selection, including a click on empty space that
+    /// clears it, which [`Self::on_select`] does not see.
+    pub fn on_selection_change(mut self, f: impl Fn(&SelectionChanged<K>, &mut Window, &mut App) + 'static) -> Self {
+        self.on_selection_change = Some(Rc::new(f));
+        if self.selection == Selection::None {
+            self.selection = Selection::Single;
+        }
+        self
+    }
+
     pub fn on_activate(mut self, f: impl Fn(&ActivateEvent<K>, &mut Window, &mut App) + 'static) -> Self {
         self.on_activate = Some(Rc::new(f));
         self
@@ -1179,11 +1213,21 @@ impl<K: RowKey> IntoElement for List<K> {
             }
         });
         let s = state.clone();
-        let on_select = self.on_select;
+        let (on_select, on_change) = (self.on_select, self.on_selection_change);
         let el = el.on(move |e: &RowsSelected, window, cx| {
-            let keys: Vec<K> = e.0.iter().filter_map(|r| s.key_of(*r)).collect();
+            let selectable = s.inner.borrow().selectable.clone();
+            let keys: Vec<K> = e
+                .rows
+                .iter()
+                .filter_map(|r| s.key_of(*r))
+                .filter(|k| selectable.as_ref().is_none_or(|f| f(k, cx)))
+                .collect();
+            let cursor = e.cursor.and_then(|r| s.key_of(r)).filter(|k| keys.contains(k));
             s.clone().set_selected(keys.clone(), cx);
-            if let (Some(f), Some(key)) = (&on_select, keys.last().cloned()) {
+            if let Some(f) = &on_change {
+                f(&SelectionChanged { keys: keys.clone(), cursor: cursor.clone() }, window, cx);
+            }
+            if let (Some(f), Some(key)) = (&on_select, cursor.or_else(|| keys.last().cloned())) {
                 f(&SelectEvent { key, keys }, window, cx);
             }
         });
