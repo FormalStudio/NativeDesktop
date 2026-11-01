@@ -66,6 +66,8 @@ pub(crate) trait FormControl {
     /// The control now sits in a `form()` row, where System Settings draws some controls
     /// smaller than they stand alone.
     fn placed_in_form_row(&self) {}
+    /// nd focus just made [`Self::focus_view`] first responder.
+    fn focused(&self) {}
 }
 
 /// What a control needs to report user changes.

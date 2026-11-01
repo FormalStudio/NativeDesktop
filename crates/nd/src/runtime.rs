@@ -58,11 +58,11 @@ pub mod prelude {
     pub use crate::chrome::{
         ButtonGroup, Checkbox, CivilDateTime, Clamp, ColorChanged, ColorWell, ComboBox, DateChanged, DatePicker,
         DatePickerMode, DatePickerStyle, FieldIconClicked, FormField, FormSection, IconEdge, Label, LabelTone, Link,
-        LinkActivated, Progress, RowActivated, Stepper, StepperChanged, Switch, TextArea, TextChanged, TextEvent,
-        TextField, TextFieldState, TextStyle, TextSubmitted, Toggled, button_group, checkbox, clamp, color_well,
-        combo_box, date_picker, form_field, label, link, navigation_row, progress, radio_group, row, search_field,
-        secure_field, segmented, settings_group, sheet_layout, spinner, stepper, switch, switch_row, text_area,
-        text_field,
+        LinkActivated, Progress, RowActivated, Stepper, StepperChanged, Switch, TextArea, TextCancelled, TextChanged,
+        TextEditingEnded, TextEvent, TextField, TextFieldState, TextStyle, TextSubmitted, Toggled, button_group,
+        checkbox, clamp, color_well, combo_box, date_picker, form_field, label, link, navigation_row, progress,
+        radio_group, row, search_field, secure_field, segmented, settings_group, sheet_layout, spinner, stepper,
+        switch, switch_row, text_area, text_field,
     };
     pub use crate::chrome::{PlayerLayout, PlayerLayoutState, player_layout};
     pub use crate::chrome::{SidebarRevealed, Tile, TileGrid, TileMoved, tile, tile_grid};

@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use nd_backend_gpui::GpuiHost;
+use nd_components::forms::{TextCancelled, TextChanged, TextEditingEnded, text_field};
 use nd_gpui::gpui::{
     HeadlessAppContext, KeyDownEvent, Keystroke, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
     PlatformInput, point,
@@ -250,8 +251,96 @@ pub fn a_right_click_selects_the_row_and_a_middle_click_reaches_it() {
     assert_eq!(list.selected(), vec![6], "a middle click does not select");
 }
 
+type Log = Rc<RefCell<Vec<String>>>;
+
+/// A table whose row 2 is being renamed: a text field in its cell, as a file manager opens one.
+struct Rename {
+    list: ListState<u32>,
+    log: Log,
+}
+
+impl Render for Rename {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        let log = self.log.clone();
+        table("files", &self.list, vec![column("name", "Name").width(300.)], move |row: u32, _, _, _| {
+            if row != 2 {
+                return div().h(px(24.)).child(format!("file-{row}")).into_any_element();
+            }
+            let (changed, ended, cancelled) = (log.clone(), log.clone(), log.clone());
+            text_field("rename")
+                .text("notes.txt")
+                .select_on_focus(0..5)
+                .on_change(move |e: &TextChanged, _, _| changed.borrow_mut().push(format!("text:{}", e.text)))
+                .on_end_editing(move |e: &TextEditingEnded, _, _| ended.borrow_mut().push(format!("end:{}", e.text)))
+                .on_cancel(move |_: &TextCancelled, _, _| cancelled.borrow_mut().push("cancel".into()))
+                .into_any_element()
+        })
+    }
+}
+
+fn keys(cx: &mut HeadlessAppContext, host: &GpuiHost, window: WindowId, keys: &[&str]) {
+    cx.update(|cx| {
+        host.update(cx, |app| {
+            for k in keys {
+                let key = nd_ui::semantics::SyntheticInput::Key(Keystroke::parse(k).expect("keystroke"));
+                app.synthesize(window, &key).expect("posted");
+            }
+        })
+    });
+    frames(cx, host, 3);
+}
+
+/// Inline rename in a table cell: focused from code with the stem selected, typing replaces
+/// the stem, Return commits once, Escape abandons without a commit on the blur after it, and
+/// focus leaving commits.
+pub fn a_cell_field_renames_inline() {
+    let log: Log = Rc::default();
+    let l = log.clone();
+    let (mut cx, host, window, _) = open(move |cx| {
+        let mut list = ListState::new(cx);
+        list.set_items(0..5, cx);
+        Rename { list, log: l }
+    });
+    let focus = |cx: &mut HeadlessAppContext| {
+        assert!(cx.update(|cx| host.update(cx, |app| app.focus_id(window, "rename"))), "the cell field takes focus");
+        frames(cx, &host, 3);
+    };
+    let blur = |cx: &mut HeadlessAppContext| {
+        cx.update(|cx| host.update(cx, |app| app.blur(window)));
+        frames(cx, &host, 3);
+    };
+    focus(&mut cx);
+    keys(&mut cx, &host, window, &["x"]);
+    assert_eq!(std::mem::take(&mut *log.borrow_mut()), ["text:x.txt"], "typing replaced the selected stem");
+    keys(&mut cx, &host, window, &["enter"]);
+    assert_eq!(std::mem::take(&mut *log.borrow_mut()), ["end:x.txt"]);
+    blur(&mut cx);
+    assert!(log.borrow().is_empty(), "Return already ended the edit: {:?}", log.borrow());
+
+    focus(&mut cx);
+    keys(&mut cx, &host, window, &["escape"]);
+    blur(&mut cx);
+    assert_eq!(std::mem::take(&mut *log.borrow_mut()), ["cancel"], "no commit after Escape");
+
+    focus(&mut cx);
+    keys(&mut cx, &host, window, &["end", "s"]);
+    blur(&mut cx);
+    assert_eq!(std::mem::take(&mut *log.borrow_mut()), ["text:x.txts", "end:x.txts"], "focus leaving commits");
+
+    // A click into the field edits it rather than handing the keys to the list.
+    let field = host.read(|app| {
+        let tree = app.semantic_window(window).expect("window");
+        tree.root.iter().find(|n| n.test_id.as_deref() == Some("rename")).and_then(|n| n.bounds).expect("field")
+    });
+    let (x, y) = (field.origin.x + field.size.width - 4., field.origin.y + field.size.height / 2.);
+    dispatch(&mut cx, &host, window, press(MouseButton::Left, x, y, Modifiers::none()));
+    keys(&mut cx, &host, window, &["end", "2"]);
+    assert_eq!(std::mem::take(&mut *log.borrow_mut()), ["text:x.txts2"]);
+}
+
 fn main() {
-    let tests: [(&str, fn()); 5] = [
+    let tests: [(&str, fn()); 6] = [
+        ("gpui_selection::a_cell_field_renames_inline", a_cell_field_renames_inline),
         ("gpui_selection::a_marquee_past_the_edge_scrolls", a_marquee_past_the_edge_scrolls),
         (
             "gpui_selection::shift_and_the_secondary_key_select_like_appkit",

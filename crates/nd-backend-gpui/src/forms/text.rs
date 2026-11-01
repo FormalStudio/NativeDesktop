@@ -83,6 +83,13 @@ pub(crate) struct Editor {
     /// The button that asked for the open picker, in window coordinates: nd's picker hangs from
     /// it, and the platform's reads it as the caret until text next goes in.
     picker_from: Option<Bounds<Pixels>>,
+    /// A single-line field's edit session: open from taking focus (or the next edit) until
+    /// Return, Escape or focus leaving it ends it, so each ends once.
+    editing: bool,
+    /// The field had focus at the last build.
+    had_focus: bool,
+    /// Characters selected each time the field takes focus.
+    select_on_focus: Option<Range<usize>>,
 }
 
 impl Editor {
@@ -115,6 +122,9 @@ impl Editor {
             emoji: None,
             picker: None,
             picker_from: None,
+            editing: false,
+            had_focus: false,
+            select_on_focus: None,
         }
     }
 
@@ -240,6 +250,7 @@ impl Editor {
     }
 
     fn edited(&mut self, cx: &mut App) {
+        self.editing = true;
         match self.commit {
             Commit::Text => {
                 if let Some(sink) = &self.sink {
@@ -256,8 +267,37 @@ impl Editor {
                 if let Some(sink) = &self.sink {
                     sink.send(TextSubmitted { text: self.text.clone().into() }, cx);
                 }
+                self.end_editing(cx);
             }
             Commit::Parse(_) => self.commit(cx),
+        }
+    }
+
+    fn end_editing(&mut self, cx: &mut App) {
+        if !self.multiline
+            && std::mem::take(&mut self.editing)
+            && let Some(sink) = &self.sink
+        {
+            sink.send(TextEditingEnded { text: self.text.clone().into() }, cx);
+        }
+    }
+
+    /// Focus came or went since the last build: taking it opens an edit session and selects
+    /// `select_on_focus`, losing it ends the session.
+    fn focus_moved(&mut self, focused: bool, cx: &mut App) {
+        if focused == std::mem::replace(&mut self.had_focus, focused) {
+            return;
+        }
+        if !focused {
+            self.end_editing(cx);
+            return;
+        }
+        self.editing = true;
+        if let Some(r) = self.select_on_focus.clone() {
+            let at = |n: usize| self.text.char_indices().nth(n).map_or(self.text.len(), |(i, _)| i);
+            self.selected = at(r.start)..at(r.end.max(r.start));
+            self.reversed = false;
+            self.reveal = true;
         }
     }
 
@@ -437,6 +477,14 @@ impl Editor {
             "enter" if self.multiline && self.submit_on_return && !m.shift && !m.alt && !shortcut => self.submit(cx),
             "enter" if self.multiline && !shortcut => self.replace(self.selected.clone(), "\n", cx),
             "enter" => self.submit(cx),
+            // The app abandons its inline edit; Escape still goes on to close a sheet or popover.
+            "escape" if !self.multiline && self.editing => {
+                self.editing = false;
+                if let Some(sink) = &self.sink {
+                    sink.send(TextCancelled, cx);
+                }
+                return false;
+            }
             "a" if shortcut => {
                 self.selected = 0..self.text.len();
                 self.reversed = false;
@@ -1049,6 +1097,11 @@ pub(crate) fn text_field(
         completes: false,
     };
     let (ctl, editor) = editor(b, id, &f, || Commit::Text, window, cx);
+    {
+        let mut e = editor.borrow_mut();
+        e.select_on_focus = p.select_on_focus.clone();
+        e.focus_moved(ctl.focused, cx);
+    }
     let look = ctl.look;
     let role = match p.field {
         FieldStyle::Plain => gpui::Role::TextInput,

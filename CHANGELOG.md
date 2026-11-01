@@ -21,6 +21,10 @@ and the one it moves to.
   `icons`.
 - `source_node(..).meter(f)` and `source_item(..).meter(f)`: a capacity bar under the title on
   the GPUI backend, none on macOS. `SourceNode` and `SourceItem` gained `meter`.
+- Inline rename: `text_field(..).select_on_focus(range)`, `.on_end_editing` (`TextEditingEnded`
+  on Return or focus loss) and `.on_cancel` (`TextCancelled` on Escape). A press inside a list
+  row's own control no longer selects or activates the row. `TextFieldProps` gained
+  `select_on_focus`.
 
 ## v0.6.1
 

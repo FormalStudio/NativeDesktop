@@ -27,6 +27,17 @@ pub struct TextSubmitted {
     pub text: SharedString,
 }
 
+/// A text field's editing ended, by Return or by focus leaving it, with its text: where an
+/// inline rename commits. Escape ends it with [`TextCancelled`] instead.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TextEditingEnded {
+    pub text: SharedString,
+}
+
+/// Escape in a text field: an inline edit is abandoned.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TextCancelled;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum IconEdge {
     Leading,
@@ -134,6 +145,9 @@ pub struct TextFieldProps {
     pub editable: bool,
     /// The platform's largest field size, for a field that heads a pane, like a sidebar's search.
     pub large: bool,
+    /// The characters selected each time the field takes focus, instead of all of them: a file
+    /// name's stem in a rename.
+    pub select_on_focus: Option<std::ops::Range<usize>>,
     /// Accessible name when no visible label names the field.
     pub label: Option<SharedString>,
     pub enabled: bool,
@@ -346,6 +360,7 @@ fn field(id: impl Into<SharedString>, style: FieldStyle) -> TextField {
         trailing: None,
         editable: true,
         large: false,
+        select_on_focus: None,
         label: None,
         enabled: true,
         tooltip: None,
@@ -522,6 +537,25 @@ impl TextField {
 
     pub fn on_icon_click(mut self, f: impl Fn(&FieldIconClicked, &mut Window, &mut App) + 'static) -> Self {
         self.on_icon = Some(Rc::new(f));
+        self
+    }
+
+    /// Selects the characters in `range` (counted in chars) each time the field takes focus,
+    /// as Finder selects a name without its extension. Focus it with `window.focus_id(cx, id)`.
+    pub fn select_on_focus(mut self, range: std::ops::Range<usize>) -> Self {
+        self.element.props_mut().select_on_focus = Some(range);
+        self
+    }
+
+    /// Return, or focus leaving the field, with its text: where an inline rename commits.
+    pub fn on_end_editing(mut self, f: impl Fn(&TextEditingEnded, &mut Window, &mut App) + 'static) -> Self {
+        self.element = self.element.on(f);
+        self
+    }
+
+    /// Escape: the edit is abandoned, and editing ends without [`TextEditingEnded`].
+    pub fn on_cancel(mut self, f: impl Fn(&TextCancelled, &mut Window, &mut App) + 'static) -> Self {
+        self.element = self.element.on(f);
         self
     }
 }

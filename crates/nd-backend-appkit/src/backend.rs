@@ -1651,6 +1651,10 @@ impl Backend for AppKitBackend {
         let view = native.and_then(Native::key_view);
         drop(state);
         window.make_first_responder_from_nd(view.as_deref());
+        let state = self.0.borrow();
+        if let Some(Native::Control(c)) = node.and_then(|n| state.nodes.get(&n)) {
+            c.control.focused();
+        }
     }
 
     fn release(&mut self, node: NodeId) {

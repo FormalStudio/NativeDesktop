@@ -508,8 +508,21 @@ impl gpui::Element for VirtualList {
         let marquees = matches!(self.props.kind, ListKind::Table(_) | ListKind::Grid) && selection != Selection::None;
         let focus = self.focus.clone();
         let pick = ctx.clone();
+        // A press a row's own control took focus for (a text field renaming the row) is that
+        // control's: the list neither selects, activates nor takes the keys.
+        let before: Rc<RefCell<Option<gpui::FocusHandle>>> = Rc::default();
+        let held = before.clone();
+        window.on_mouse_event(move |_: &MouseDownEvent, phase, window, cx| {
+            if phase == DispatchPhase::Capture {
+                *held.borrow_mut() = window.focused(cx);
+            }
+        });
         window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
             if phase != DispatchPhase::Bubble || !hitbox.is_hovered(window) {
+                return;
+            }
+            let now = window.focused(cx);
+            if now.is_some() && now != before.borrow_mut().take() && now.as_ref() != Some(&focus.focus) {
                 return;
             }
             let at = event.position;

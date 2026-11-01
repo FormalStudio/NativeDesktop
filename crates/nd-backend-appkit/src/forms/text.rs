@@ -16,7 +16,7 @@ use std::rc::Rc;
 
 use nd_components::forms::{
     ComboBoxProps, FieldIcon, FieldIconClicked, FieldStyle, FilesDropped, IconEdge, ImagesPasted, PastedImage,
-    SelectChanged, TextAreaProps, TextChanged, TextFieldProps, TextSubmitted,
+    SelectChanged, TextAreaProps, TextCancelled, TextChanged, TextEditingEnded, TextFieldProps, TextSubmitted,
 };
 use nd_core::Size;
 use nd_ui::backend::Props;
@@ -173,6 +173,8 @@ struct Core {
     text: RefCell<Synced<SharedString>>,
     pending: RefCell<Option<SharedString>>,
     options: RefCell<Vec<SharedString>>,
+    /// Escape abandoned the edit: the end of editing that follows is no commit.
+    cancelled: Cell<bool>,
 }
 
 impl Core {
@@ -185,6 +187,7 @@ impl Core {
             text: RefCell::default(),
             pending: RefCell::default(),
             options: RefCell::default(),
+            cancelled: Cell::new(false),
         })
     }
 
@@ -256,6 +259,7 @@ impl Core {
         if self.text.borrow().value() == Some(&text) {
             return;
         }
+        self.cancelled.set(false);
         self.text.borrow_mut().report(text.clone());
         self.cx.send(TextChanged { text });
     }
@@ -345,7 +349,11 @@ define_class!(
 
         #[unsafe(method(controlTextDidEndEditing:))]
         fn control_text_did_end_editing(&self, _n: &NSNotification) {
-            self.ivars().core.ended();
+            let core = &self.ivars().core;
+            if !core.cancelled.replace(false) {
+                core.cx.send(TextEditingEnded { text: core.current().into() });
+            }
+            core.ended();
         }
 
         #[unsafe(method(control:textView:doCommandBySelector:))]
@@ -354,6 +362,11 @@ define_class!(
             // A search field submits through its own action.
             if command == sel!(insertNewline:) && !core.search {
                 core.submitted();
+            }
+            // Escape: AppKit goes on up the responder chain (a sheet's cancel button).
+            if command == sel!(cancelOperation:) {
+                core.cancelled.set(true);
+                core.cx.send(TextCancelled);
             }
             false
         }
@@ -661,6 +674,14 @@ impl Drop for TextFieldControl {
 impl FormControl for TextFieldControl {
     fn view(&self) -> &NSView {
         &self.field
+    }
+
+    fn focused(&self) {
+        let (Some(r), Some(editor)) = (self.props.select_on_focus.clone(), self.field.currentEditor()) else { return };
+        let text = self.core.current();
+        let utf16 = |n: usize| text.chars().take(n).map(char::len_utf16).sum::<usize>();
+        let (start, end) = (utf16(r.start), utf16(r.end.max(r.start)));
+        editor.setSelectedRange(objc2_foundation::NSRange::new(start, end - start));
     }
 
     fn update(&mut self, old: &Props, new: &Props) -> bool {
