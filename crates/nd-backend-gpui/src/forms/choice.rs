@@ -199,7 +199,27 @@ fn popup(b: &Build, id: NodeId, p: &SelectProps, window: &mut Window, cx: &mut A
 
 /// WinUI's SelectorBar: transparent items padded 12,10,12,7 on 8 px spacing, the selected one
 /// marked by a 16x3 accent pill along its bottom edge.
-fn selector_bar(id: NodeId, p: &SelectProps, ctl: Ctl) -> gpui::AnyElement {
+/// A segment's face: its icon where it has one nd can draw, else its title.
+fn face(p: &SelectProps, index: usize, color: gpui::Hsla) -> gpui::AnyElement {
+    match p.icons.get(index).copied().flatten().filter(|i| i.shape().is_some()) {
+        Some(icon) => glyph(Glyph::of(icon), px(16.), color, px(1.5)),
+        None => p.options[index].clone().into_any_element(),
+    }
+}
+
+/// An icon segment shows its title on hover.
+fn titled<E: StatefulInteractiveElement>(segment: E, p: &SelectProps, index: usize, theme: &nd_theme::Theme) -> E {
+    if p.icons.get(index).copied().flatten().is_none() {
+        return segment;
+    }
+    let tip = crate::render::FluentTip::of(theme, p.options[index].clone());
+    segment.tooltip(move |_, cx| {
+        use gpui::AppContext as _;
+        cx.new(|_| tip.clone()).into()
+    })
+}
+
+fn selector_bar(id: NodeId, p: &SelectProps, ctl: Ctl, theme: &nd_theme::Theme) -> gpui::AnyElement {
     let look = ctl.look;
     let mut bar = div()
         .id(ElementId::Integer(id.0))
@@ -228,7 +248,8 @@ fn selector_bar(id: NodeId, p: &SelectProps, ctl: Ctl) -> gpui::AnyElement {
             .border_2()
             .border_color(if ctl.ring() && selected { look.focus_ring } else { gpui::transparent_black() })
             .whitespace_nowrap()
-            .child(option.clone());
+            .child(face(p, index, look.text));
+        item = titled(item, p, index, theme);
         if selected {
             item = item.child(
                 div()
@@ -267,7 +288,7 @@ fn segmented(b: &Build, id: NodeId, p: &SelectProps, window: &mut Window, cx: &m
     let (ctl, _) = b.ctl(id, p.enabled, window, cx, || ());
     let look = ctl.look;
     if look.preset == nd_theme::Preset::Fluent {
-        return selector_bar(id, p, ctl);
+        return selector_bar(id, p, ctl, &b.theme());
     }
     let inset = px(3.);
     // AdwToggleGroup nests its toggles inside its own 9 px corners; elsewhere the group grows
@@ -304,7 +325,8 @@ fn segmented(b: &Build, id: NodeId, p: &SelectProps, window: &mut Window, cx: &m
             .px(if adwaita { px(8.) } else { look.padding_x })
             .rounded(segment_radius)
             .whitespace_nowrap()
-            .child(option.clone());
+            .child(face(p, index, look.text));
+        segment = titled(segment, p, index, &b.theme());
         if adwaita {
             // AdwToggleGroup's toggles are bold buttons.
             segment = segment.font_weight(gpui::FontWeight::BOLD);

@@ -1216,13 +1216,28 @@ fn readable_ink(fill: Hsla) -> Hsla {
 /// WinUI's ToolTip (ToolTip_themeresources.xaml): Caption text in 9,6,9,8 of padding, at most
 /// 320 wide, on the control radius with the flyout stroke and shadow.
 #[derive(Clone)]
-struct FluentTip {
+pub(crate) struct FluentTip {
     text: gpui::SharedString,
     fill: gpui::Hsla,
     ink: gpui::Hsla,
     stroke: gpui::Hsla,
     shadow: (gpui::Hsla, gpui::Pixels, gpui::Pixels),
     family: gpui::SharedString,
+}
+
+impl FluentTip {
+    /// A tooltip on the theme's overlay surface, for drawn controls that show one on hover.
+    pub(crate) fn of(theme: &nd_theme::Theme, text: gpui::SharedString) -> Self {
+        let look = crate::forms::FormLook::fluent(theme);
+        Self {
+            text,
+            fill: theme.surface.overlay,
+            ink: theme.text.primary,
+            stroke: look.popover_stroke,
+            shadow: look.popover_shadow,
+            family: theme.fonts.body.family.clone(),
+        }
+    }
 }
 
 impl gpui::Render for FluentTip {

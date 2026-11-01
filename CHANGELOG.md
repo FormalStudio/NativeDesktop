@@ -16,6 +16,9 @@ and the one it moves to.
   `List::on_selection_change` sees every change, an emptied selection included. `SelectEvent::key`
   is the row the click landed on. `RowsSelected` is now `{ rows, cursor }`
   (`RowsSelected::new(rows)` for the old shape).
+- `segmented(..).icons([..])`: icon segments, each option's title its accessible name and
+  tooltip (`NSSegmentedControl` images with segment tooltips on macOS). `SelectProps` gained
+  `icons`.
 
 ## v0.6.1
 

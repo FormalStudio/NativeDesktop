@@ -10,6 +10,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use nd_backend_gpui::GpuiHost;
+use nd_components::Icon;
 use nd_components::forms::*;
 use nd_gpui::gpui::{HeadlessAppContext, WindowAppearance};
 use nd_theme::{OsTheme, Preset, Scheme, ThemeRegistry};
@@ -22,6 +23,8 @@ type Log = Rc<RefCell<Vec<String>>>;
 struct Gallery {
     log: Log,
     animated: bool,
+    /// The segmented control shows icons in place of its titles.
+    icons: bool,
     text: SharedString,
     secure: SharedString,
     search: SharedString,
@@ -46,6 +49,7 @@ impl Gallery {
         Self {
             log,
             animated: false,
+            icons: false,
             text: "".into(),
             secure: "".into(),
             search: "".into(),
@@ -190,13 +194,13 @@ impl Render for Gallery {
                             .w(px(120.))
                             .on_change(on!(cx, SelectChanged, "select", |this, e| e.index, this.select = e.index)),
                     )
-                    .child(segmented("seg", ["Day", "Week", "Month"]).selected(self.seg).label("Range").on_change(on!(
-                        cx,
-                        SelectChanged,
-                        "seg",
-                        |this, e| e.index,
-                        this.seg = e.index
-                    )))
+                    .child(
+                        segmented("seg", ["Day", "Week", "Month"])
+                            .when(self.icons, |s| s.icons([Icon::Calendar, Icon::Clock, Icon::Moon]))
+                            .selected(self.seg)
+                            .label("Range")
+                            .on_change(on!(cx, SelectChanged, "seg", |this, e| e.index, this.seg = e.index)),
+                    )
                     .child(
                         radio_group("radio", ["One", "Two"])
                             .horizontal()
@@ -330,6 +334,21 @@ fn open_in(preset: Preset, appearance: WindowAppearance, animated: bool) -> Rig 
 
 fn open() -> Rig {
     open_with(WindowAppearance::Light, false)
+}
+
+fn open_icons() -> Rig {
+    let mut rig = open();
+    let entity = rig.view.borrow().clone().expect("view");
+    rig.cx.update(|cx| {
+        rig.host.update(cx, |app| {
+            entity.update(app, |g, cx| {
+                g.icons = true;
+                cx.notify();
+            })
+        })
+    });
+    rig.settle();
+    rig
 }
 
 fn find<'a>(node: &'a SemanticNode, f: &impl Fn(&SemanticNode) -> bool) -> Option<&'a SemanticNode> {
@@ -583,6 +602,19 @@ mod forms {
         quiet(&mut rig);
     }
 
+    /// Icon segments: the glyph in place of the title, which still names the option, and a
+    /// click on the third picks it.
+    pub fn segmented_icons_pick_by_click_and_title() {
+        let mut rig = open_icons();
+        rig.click_at("seg", 0.83, 0.5);
+        assert_eq!(rig.take(), ["seg:2"]);
+        rig.perform("seg", SemanticAction::SetValue("Week".into())).expect("set by title");
+        assert_eq!(rig.take(), ["seg:1"]);
+        let width = rig.node("seg").bounds.expect("seg laid out").size.width;
+        let titled = open().node("seg").bounds.expect("seg laid out").size.width;
+        assert!(width < titled, "icons are narrower than the titles: {width} against {titled}");
+    }
+
     pub fn stepper_and_pickers() {
         let mut rig = open();
         rig.click_at("stepper", 0.75, 0.5);
@@ -751,6 +783,7 @@ fn main() {
         ("forms::nd_focus_gives_the_field_gpui_focus", forms::nd_focus_gives_the_field_gpui_focus),
         ("forms::slider_drag_reports_normalised_values", forms::slider_drag_reports_normalised_values),
         ("forms::select_mappings", forms::select_mappings),
+        ("forms::segmented_icons_pick_by_click_and_title", forms::segmented_icons_pick_by_click_and_title),
         ("forms::stepper_and_pickers", forms::stepper_and_pickers),
         ("forms::link_reports_activation", forms::link_reports_activation),
         ("forms::automation_set_value_reaches_the_app", forms::automation_set_value_reaches_the_app),

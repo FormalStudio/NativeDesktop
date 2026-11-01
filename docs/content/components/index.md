@@ -44,6 +44,9 @@ The Gallery shows one page per component. Select a component in its source list,
   undo work as expected.
 - `switch`, `checkbox`, `radio_group`, `segmented`, `select`, `slider`, `stepper`: the AppKit
   control of the same name. `select` can map to a pop-up, a segmented control, or a radio group.
+  `segmented(..).icons([..])` shows an icon per segment, and each option's title becomes that
+  segment's accessible name and tooltip:
+  `segmented("view", ["List", "Grid"]).icons([Icon::Menu, Icon::Image])`.
 - `date_picker` and `color_well`: `NSDatePicker` and `NSColorWell` on macOS.
 - `form`, `form_section`, `form_row`, `settings_group`, and `settings_form`: grouped rows. A form
   scrolls itself. `form().title("Forms")` sets a page title that scrolls away with the rows, and

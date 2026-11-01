@@ -13,6 +13,9 @@ use crate::controls::Mapping;
 #[derive(Clone, Debug, PartialEq)]
 pub struct SelectProps {
     pub options: Vec<SharedString>,
+    /// A segmented control's icons, one per option: a segment with an icon shows it alone, and
+    /// its option's title becomes the segment's accessible name and tooltip.
+    pub icons: Vec<Option<crate::Icon>>,
     pub selected: usize,
     pub mapping: Mapping,
     /// Radio buttons side by side instead of stacked.
@@ -77,6 +80,7 @@ pub struct Select(NativeElement<SelectProps>);
 fn build(id: SharedString, options: Vec<SharedString>, mapping: Mapping) -> Select {
     let props = SelectProps {
         options,
+        icons: Vec::new(),
         selected: 0,
         mapping,
         horizontal: false,
@@ -120,6 +124,13 @@ impl Select {
 
     pub fn label(mut self, label: impl Into<SharedString>) -> Self {
         self.0.props_mut().label = Some(label.into());
+        self
+    }
+
+    /// Icons for a segmented control's segments, in option order: each segment shows its icon
+    /// in place of its title, which stays the segment's accessible name and tooltip.
+    pub fn icons(mut self, icons: impl IntoIterator<Item = crate::Icon>) -> Self {
+        self.0.props_mut().icons = icons.into_iter().map(Some).collect();
         self
     }
 

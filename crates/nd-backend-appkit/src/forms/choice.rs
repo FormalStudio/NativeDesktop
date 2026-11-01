@@ -113,7 +113,17 @@ impl SelectControl {
             let control = NSSegmentedControl::new(mtm);
             control.setSegmentCount(titles.len() as isize);
             for (i, title) in titles.iter().enumerate() {
-                control.setLabel_forSegment(title, i as isize);
+                // An icon segment: the symbol alone, its title the image's description (what
+                // VoiceOver reads) and the segment's tooltip.
+                let image = props.icons.get(i).copied().flatten().and_then(|icon| crate::icons::symbol(icon.lucide()));
+                match image {
+                    Some(image) => {
+                        image.setAccessibilityDescription(Some(title));
+                        control.setImage_forSegment(Some(&image), i as isize);
+                        control.setToolTip_forSegment(Some(title), i as isize);
+                    }
+                    None => control.setLabel_forSegment(title, i as isize),
+                }
             }
             target.wire(&control);
             View::Segmented(control)
@@ -185,7 +195,7 @@ impl FormControl for SelectControl {
 
     fn update(&mut self, old: &Props, new: &Props) -> bool {
         let (old, new): (&SelectProps, &SelectProps) = (props(old), props(new));
-        if style(old.mapping) != style(new.mapping) || old.options != new.options {
+        if style(old.mapping) != style(new.mapping) || old.options != new.options || old.icons != new.icons {
             return false;
         }
         if let View::Radio { stack, .. } = &self.view
