@@ -12,8 +12,8 @@ use std::rc::Rc;
 
 use nd_core::{NodeId, Point, Rect, Size, WindowId};
 use nd_gesture::{
-    ForceClickEvent, GestureEvent, GesturePhase, GestureRouter, GestureSet, HitEntry, MomentumInference, Output,
-    PinchEvent, PointerInput, PointerPhase, ScrollInput, ScrollPhase,
+    ForceClickEvent, GestureEvent, GesturePhase, GestureRouter, GestureSet, HitEntry, KeyModifiers, MomentumInference,
+    Output, PinchEvent, PointerButton, PointerInput, PointerPhase, ScrollInput, ScrollPhase,
 };
 use nd_gpui::gpui::{
     self, AnyElement, App, Bounds, ElementId, GlobalElementId, InspectorElementId, IntoElement, LayoutId, Pixels,
@@ -220,8 +220,15 @@ impl Gestures {
         f(&hit)
     }
 
-    pub fn pointer(&self, window: WindowId, phase: PointerPhase, at: Point, tree: Tree<'_>) -> Vec<Output> {
-        let input = PointerInput::new(phase, at, self.now());
+    pub fn pointer(
+        &self,
+        window: WindowId,
+        phase: PointerPhase,
+        at: Point,
+        modifiers: KeyModifiers,
+        tree: Tree<'_>,
+    ) -> Vec<Output> {
+        let input = PointerInput::new(phase, at, self.now()).with_modifiers(modifiers);
         let mut windows = self.windows.borrow_mut();
         let w = windows.entry(window).or_insert_with(|| self.window_state());
         if phase == PointerPhase::Down {
@@ -237,6 +244,23 @@ impl Gestures {
         } else {
             Vec::new()
         }
+    }
+
+    /// A middle or navigation button, pressed or released.
+    pub fn button(
+        &self,
+        window: WindowId,
+        button: PointerButton,
+        phase: PointerPhase,
+        at: Point,
+        modifiers: KeyModifiers,
+        tree: Tree<'_>,
+    ) -> Vec<Output> {
+        let mut windows = self.windows.borrow_mut();
+        let w = windows.entry(window).or_insert_with(|| self.window_state());
+        self.with_hit(tree.0, tree.1, tree.2, at, false, |hit| {
+            w.router.button(button, phase, at, modifiers, hit).into_iter().collect()
+        })
     }
 
     pub fn scroll(&self, window: WindowId, event: &gpui::ScrollWheelEvent, tree: Tree<'_>) -> Vec<Output> {
@@ -413,6 +437,20 @@ pub(crate) fn deliver(events: &EventQueue, outputs: Vec<Output>) -> (bool, bool)
         }
     }
     (queued, scrolled)
+}
+
+pub(crate) fn key_modifiers(m: &gpui::Modifiers) -> KeyModifiers {
+    KeyModifiers { shift: m.shift, control: m.control, alt: m.alt, platform: m.platform }
+}
+
+/// The nd button of a GPUI press that is neither the primary nor the secondary button.
+pub(crate) fn other_button(button: gpui::MouseButton) -> Option<PointerButton> {
+    match button {
+        gpui::MouseButton::Middle => Some(PointerButton::Middle),
+        gpui::MouseButton::Navigate(gpui::NavigationDirection::Back) => Some(PointerButton::Back),
+        gpui::MouseButton::Navigate(gpui::NavigationDirection::Forward) => Some(PointerButton::Forward),
+        _ => None,
+    }
 }
 
 pub(crate) fn pinch_event(event: &gpui::PinchEvent) -> GestureEvent {

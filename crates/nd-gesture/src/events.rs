@@ -13,11 +13,41 @@ pub enum GesturePhase {
     Cancelled,
 }
 
-/// A press released in place. `count` is 2 for the second press of a double tap.
+/// The keyboard modifiers held when a pointer event happened.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct KeyModifiers {
+    pub shift: bool,
+    pub control: bool,
+    pub alt: bool,
+    /// Command on macOS, the Windows or Super key elsewhere.
+    pub platform: bool,
+}
+
+impl KeyModifiers {
+    /// The platform's "add to the selection, open in a new tab" key: Command on macOS, Control
+    /// elsewhere.
+    pub fn secondary(&self) -> bool {
+        if cfg!(target_os = "macos") { self.platform } else { self.control }
+    }
+
+    pub fn any(&self) -> bool {
+        self.shift || self.control || self.alt || self.platform
+    }
+}
+
+/// A primary-button press released in place. `count` is 2 for the second press of a double tap.
+/// `modifiers` are the ones held at the press.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TapEvent {
     pub position: Point,
     pub count: u32,
+    pub modifiers: KeyModifiers,
+}
+
+impl TapEvent {
+    pub fn new(position: Point, count: u32) -> Self {
+        Self { position, count, modifiers: KeyModifiers::default() }
+    }
 }
 
 /// The second press of a double tap, for `.on_double_tap`. The router reports it as a
@@ -25,6 +55,32 @@ pub struct TapEvent {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DoubleTapEvent {
     pub position: Point,
+    pub modifiers: KeyModifiers,
+}
+
+/// A press of a pointer button other than the primary and secondary ones.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PointerButton {
+    Middle,
+    /// The mouse's back button (button 4 on X11 and Wayland, `buttonNumber` 3 on macOS).
+    Back,
+    Forward,
+}
+
+/// A middle-button press released in place (`.on_middle_click`): open in a new tab, paste a
+/// selection.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MiddleClickEvent {
+    pub position: Point,
+    pub modifiers: KeyModifiers,
+}
+
+/// The user asked to go back or forward (`.on_navigate`): the mouse's back and forward buttons,
+/// or on macOS a three-finger swipe (`swipeWithEvent:`). Delivered to the innermost node under
+/// the pointer that listens, so a handler on a window's root hears every one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NavigateEvent {
+    pub direction: SwipeDirection,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -34,7 +90,7 @@ pub struct LongPressEvent {
 }
 
 /// A pointer drag (`.on_drag`). `translation` is from the press point; `velocity` is in points
-/// per second, set on `Ended` for a fling.
+/// per second, set on `Ended` for a fling. `modifiers` are the ones held at this event.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DragEvent {
     pub phase: GesturePhase,
@@ -42,6 +98,7 @@ pub struct DragEvent {
     pub position: Point,
     pub translation: Point,
     pub velocity: Point,
+    pub modifiers: KeyModifiers,
 }
 
 /// A trackpad pinch. `scale` multiplies: `zoom *= event.scale`.
@@ -116,4 +173,6 @@ pub enum GestureEvent {
     RowSwipe(RowSwipeEvent),
     ForceClick(ForceClickEvent),
     SmartMagnify(SmartMagnifyEvent),
+    MiddleClick(MiddleClickEvent),
+    Navigate(NavigateEvent),
 }

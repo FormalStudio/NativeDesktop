@@ -308,25 +308,25 @@ impl Build<'_> {
                 .occlude()
                 .capture_any_mouse_down(move |e, window, cx| {
                     if e.button == MouseButton::Left {
-                        let p = at(e.position);
+                        let (p, m) = (at(e.position), crate::gestures::key_modifiers(&e.modifiers));
                         backend.gesture_input(window_id, window, cx, &wake, |g, tree| {
-                            g.pointer(window_id, nd_gesture::PointerPhase::Down, p, tree)
+                            g.pointer(window_id, nd_gesture::PointerPhase::Down, p, m, tree)
                         });
                     }
                 })
                 .capture_any_mouse_up(move |e, window, cx| {
                     if e.button == MouseButton::Left {
-                        let p = at(e.position);
+                        let (p, m) = (at(e.position), crate::gestures::key_modifiers(&e.modifiers));
                         b2.gesture_input(window_id, window, cx, &w2, |g, tree| {
-                            g.pointer(window_id, nd_gesture::PointerPhase::Up, p, tree)
+                            g.pointer(window_id, nd_gesture::PointerPhase::Up, p, m, tree)
                         });
                     }
                 })
                 .on_mouse_move(move |e, window, cx| {
                     if e.pressed_button == Some(MouseButton::Left) {
-                        let p = at(e.position);
+                        let (p, m) = (at(e.position), crate::gestures::key_modifiers(&e.modifiers));
                         b3.gesture_input(window_id, window, cx, &w3, |g, tree| {
-                            g.pointer(window_id, nd_gesture::PointerPhase::Move, p, tree)
+                            g.pointer(window_id, nd_gesture::PointerPhase::Move, p, m, tree)
                         });
                     }
                 })

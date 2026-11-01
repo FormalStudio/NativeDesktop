@@ -53,6 +53,9 @@ pub struct GestureSet {
     pub row_swipe: Option<RowSwipeConfig>,
     /// Axes the node scrolls on (its style's `overflow: scroll`).
     pub scroll: Axes,
+    pub middle_click: bool,
+    /// The mouse's back and forward buttons and macOS's three-finger swipe.
+    pub navigate: bool,
 }
 
 impl GestureSet {

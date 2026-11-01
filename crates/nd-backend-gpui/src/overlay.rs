@@ -214,9 +214,7 @@ fn step(rows: &[(bool, bool)], from: Option<usize>, forward: bool) -> Option<usi
         (None, true) => 0,
         (None, false) => n - 1,
     };
-    (0..n)
-        .map(|k| if forward { (start + k) % n } else { (start + n - k) % n })
-        .find(|&i| rows[i].0)
+    (0..n).map(|k| if forward { (start + k) % n } else { (start + n - k) % n }).find(|&i| rows[i].0)
 }
 
 pub(crate) enum MenuContent {
@@ -535,11 +533,14 @@ impl Build<'_> {
     fn feed_gestures(&self, element: gpui::Stateful<gpui::Div>) -> gpui::Stateful<gpui::Div> {
         let feed = |phase: nd_gesture::PointerPhase| {
             let (backend, wake, window_id) = (self.backend.clone(), self.wake.clone(), self.window_id);
-            move |at: gpui::Point<Pixels>, window: &mut gpui::Window, cx: &mut gpui::App| {
+            move |at: gpui::Point<Pixels>,
+                  modifiers: &gpui::Modifiers,
+                  window: &mut gpui::Window,
+                  cx: &mut gpui::App| {
                 backend.gesture_pointer(
                     window_id,
-                    phase,
-                    Point { x: at.x.as_f32(), y: at.y.as_f32() },
+                    (phase, Point { x: at.x.as_f32(), y: at.y.as_f32() }),
+                    crate::gestures::key_modifiers(modifiers),
                     &wake,
                     window,
                     cx,
@@ -554,17 +555,17 @@ impl Build<'_> {
         element
             .capture_any_mouse_down(move |e, window, cx| {
                 if e.button == gpui::MouseButton::Left {
-                    down(e.position, window, cx);
+                    down(e.position, &e.modifiers, window, cx);
                 }
             })
             .capture_any_mouse_up(move |e, window, cx| {
                 if e.button == gpui::MouseButton::Left {
-                    up(e.position, window, cx);
+                    up(e.position, &e.modifiers, window, cx);
                 }
             })
             .on_mouse_move(move |e, window, cx| {
                 if e.pressed_button == Some(gpui::MouseButton::Left) {
-                    moved(e.position, window, cx);
+                    moved(e.position, &e.modifiers, window, cx);
                 }
             })
     }
@@ -1200,8 +1201,8 @@ impl GpuiBackend {
     pub(crate) fn gesture_pointer(
         &self,
         window: WindowId,
-        phase: nd_gesture::PointerPhase,
-        at: Point,
+        (phase, at): (nd_gesture::PointerPhase, Point),
+        modifiers: nd_gesture::KeyModifiers,
         wake: &crate::backend::Wake,
         gpui_window: &mut gpui::Window,
         cx: &mut gpui::App,
@@ -1210,7 +1211,7 @@ impl GpuiBackend {
             let state = self.state.borrow();
             let Some(root) = state.windows.get(&window).and_then(|w| w.root) else { return };
             let bounds = self.bounds.borrow();
-            self.gestures.pointer(window, phase, at, (&state.nodes, &bounds, root))
+            self.gestures.pointer(window, phase, at, modifiers, (&state.nodes, &bounds, root))
         };
         let events = self.state.borrow().events.clone();
         let (queued, scrolled) = crate::gestures::deliver(&events, outputs);

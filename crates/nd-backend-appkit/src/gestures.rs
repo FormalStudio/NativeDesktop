@@ -13,16 +13,18 @@ use std::time::Duration;
 use block2::RcBlock;
 use nd_core::{NodeId, Point, Rect};
 use nd_gesture::{
-    ForceClickEvent, GestureEvent, GesturePhase, GestureRouter, GestureSet, Haptic, HitEntry, Output, PinchEvent,
-    PointerInput, PointerPhase, RotateEvent, SmartMagnifyEvent, SwipeDirection, SwipePageEvent, TapEvent,
+    ForceClickEvent, GestureEvent, GesturePhase, GestureRouter, GestureSet, Haptic, HitEntry, KeyModifiers,
+    MiddleClickEvent, NavigateEvent, Output, PinchEvent, PointerInput, PointerPhase, RotateEvent, SmartMagnifyEvent,
+    SwipeDirection, SwipePageEvent, TapEvent,
 };
 use nd_ui::events::{Emit, emit_gesture};
 use objc2::Message;
 use objc2::rc::Retained;
 use objc2::runtime::Bool;
 use objc2_app_kit::{
-    NSEvent, NSEventPhase, NSEventSwipeTrackingOptions, NSHapticFeedbackManager, NSHapticFeedbackPattern,
-    NSHapticFeedbackPerformanceTime, NSHapticFeedbackPerformer, NSTableView, NSTextField, NSTextView, NSView, NSWindow,
+    NSEvent, NSEventModifierFlags, NSEventPhase, NSEventSwipeTrackingOptions, NSHapticFeedbackManager,
+    NSHapticFeedbackPattern, NSHapticFeedbackPerformanceTime, NSHapticFeedbackPerformer, NSTableView, NSTextField,
+    NSTextView, NSView, NSWindow,
 };
 use objc2_foundation::NSProcessInfo;
 
@@ -101,6 +103,54 @@ fn phase(phase: NSEventPhase) -> GesturePhase {
     } else {
         GesturePhase::Changed
     }
+}
+
+pub(crate) fn key_modifiers(event: &NSEvent) -> KeyModifiers {
+    let flags = event.modifierFlags();
+    KeyModifiers {
+        shift: flags.contains(NSEventModifierFlags::Shift),
+        control: flags.contains(NSEventModifierFlags::Control),
+        alt: flags.contains(NSEventModifierFlags::Option),
+        platform: flags.contains(NSEventModifierFlags::Command),
+    }
+}
+
+/// What a press of `buttonNumber` 2, 3 or 4 means to `host`, when it listens for it.
+fn other_button(host: &GestureHost, view: &NSView, event: &NSEvent) -> Option<GestureEvent> {
+    match event.buttonNumber() {
+        2 if host.set.middle_click => Some(GestureEvent::MiddleClick(MiddleClickEvent {
+            position: window_point(view, event),
+            modifiers: key_modifiers(event),
+        })),
+        3 if host.set.navigate => Some(GestureEvent::Navigate(NavigateEvent { direction: SwipeDirection::Back })),
+        4 if host.set.navigate => Some(GestureEvent::Navigate(NavigateEvent { direction: SwipeDirection::Forward })),
+        _ => None,
+    }
+}
+
+/// `otherMouseDown:`: kept by a view that takes the button's release. False passes it up the
+/// responder chain.
+pub(crate) fn other_mouse_down(view: &NSView, host: Option<&GestureHost>, event: &NSEvent) -> bool {
+    host.is_some_and(|h| other_button(h, view, event).is_some())
+}
+
+/// `otherMouseUp:`: the middle button's click, the back and forward buttons' navigation.
+pub(crate) fn other_mouse_up(view: &NSView, host: Option<&GestureHost>, event: &NSEvent) -> bool {
+    let Some((host, gesture)) = host.and_then(|h| Some((h, other_button(h, view, event)?))) else { return false };
+    host.deliver(gesture);
+    true
+}
+
+/// `swipeWithEvent:`, the three-finger swipe: a positive `deltaX` goes back, as Safari reads it.
+pub(crate) fn swipe(host: Option<&GestureHost>, event: &NSEvent) -> bool {
+    let Some(host) = host.filter(|h| h.set.navigate) else { return false };
+    let direction = match event.deltaX() {
+        d if d > 0. => SwipeDirection::Back,
+        d if d < 0. => SwipeDirection::Forward,
+        _ => return false,
+    };
+    host.deliver(GestureEvent::Navigate(NavigateEvent { direction }));
+    true
 }
 
 /// `magnifyWithEvent:`. False passes the event up the responder chain.
@@ -206,7 +256,8 @@ fn hit_path(view: &NdLayerView) -> Vec<(NodeId, Rect, GestureHost)> {
 /// A primary mouse event on `view`. True when a pointer recognizer is listening, so the view
 /// keeps the event; false lets AppKit carry on (window drags, native controls).
 pub(crate) fn mouse(view: &NdLayerView, event: &NSEvent, pointer_phase: PointerPhase) -> bool {
-    let input = PointerInput::new(pointer_phase, window_point(view, event), event.timestamp());
+    let input = PointerInput::new(pointer_phase, window_point(view, event), event.timestamp())
+        .with_modifiers(key_modifiers(event));
     let outputs = PRESS.with_borrow_mut(|press| {
         if pointer_phase == PointerPhase::Down {
             let path = hit_path(view);
@@ -280,7 +331,7 @@ pub(crate) fn double_click_on_text(window: &NSWindow, event: &NSEvent) -> bool {
         cursor = unsafe { v.superview() };
     }
     let (Some(true), Some((host, view))) = (field, host) else { return false };
-    host.deliver(GestureEvent::Tap(TapEvent { position: window_point(&view, event), count: 2 }));
+    host.deliver(GestureEvent::Tap(TapEvent::new(window_point(&view, event), 2)));
     true
 }
 

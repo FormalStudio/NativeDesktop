@@ -254,6 +254,29 @@ define_class!(
             }
         }
 
+        #[unsafe(method(otherMouseDown:))]
+        fn other_mouse_down(&self, event: &NSEvent) {
+            if !crate::gestures::other_mouse_down(self, self.ivars().gestures.borrow().as_ref(), event) {
+                let _: () = unsafe { msg_send![super(self), otherMouseDown: event] };
+            }
+        }
+
+        #[unsafe(method(otherMouseUp:))]
+        fn other_mouse_up(&self, event: &NSEvent) {
+            let host = self.ivars().gestures.borrow().clone();
+            if !crate::gestures::other_mouse_up(self, host.as_ref(), event) {
+                let _: () = unsafe { msg_send![super(self), otherMouseUp: event] };
+            }
+        }
+
+        #[unsafe(method(swipeWithEvent:))]
+        fn swipe_with_event(&self, event: &NSEvent) {
+            let host = self.ivars().gestures.borrow().clone();
+            if !crate::gestures::swipe(host.as_ref(), event) {
+                let _: () = unsafe { msg_send![super(self), swipeWithEvent: event] };
+            }
+        }
+
         #[unsafe(method(magnifyWithEvent:))]
         fn magnify_with_event(&self, event: &NSEvent) {
             if !crate::gestures::magnify(self, self.ivars().gestures.borrow().as_ref(), event) {

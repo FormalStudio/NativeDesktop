@@ -3,7 +3,9 @@ use std::collections::HashMap;
 use nd_core::{NodeId, Point, Rect, Size};
 
 use crate::arena::{Arena, ArenaMember};
-use crate::events::{GestureEvent, RowSwipeEvent};
+use crate::events::{
+    GestureEvent, KeyModifiers, MiddleClickEvent, NavigateEvent, PointerButton, RowSwipeEvent, SwipeDirection,
+};
 use crate::haptic::Haptic;
 use crate::input::{MomentumPhase, PointerInput, PointerPhase, ScrollInput, ScrollPhase};
 use crate::recognizer::{LongPress, Pan, Tap};
@@ -73,6 +75,8 @@ pub struct GestureRouter {
     scrollers: HashMap<NodeId, Scroller>,
     rows: HashMap<NodeId, RowSwipe>,
     session: Option<ScrollSession>,
+    /// A press of a non-primary button: which, where, and the node that listens for it there.
+    pressed: Option<(PointerButton, Point, NodeId)>,
 }
 
 /// Picks the axis and the winner of a two-finger scroll, as in [`GestureRouter`]: the innermost
@@ -141,6 +145,51 @@ impl GestureRouter {
         members
     }
 
+    /// A press or release of a button other than the primary and secondary ones. The release
+    /// over the node the press was on, within the slop, is a middle click or a navigation for the
+    /// innermost node under the press that listens for it. `hit` is read on both.
+    pub fn button(
+        &mut self,
+        button: PointerButton,
+        phase: PointerPhase,
+        position: Point,
+        modifiers: KeyModifiers,
+        hit: &[HitEntry<'_>],
+    ) -> Option<Output> {
+        let wants = |set: &GestureSet| match button {
+            PointerButton::Middle => set.middle_click,
+            PointerButton::Back | PointerButton::Forward => set.navigate,
+        };
+        let target = hit.iter().find(|e| wants(e.gestures)).map(|e| e.node);
+        match phase {
+            PointerPhase::Down => {
+                self.pressed = target.map(|node| (button, position, node));
+                None
+            }
+            PointerPhase::Up => {
+                let (pressed, at, node) = self.pressed.take()?;
+                let dx = position.x - at.x;
+                let dy = position.y - at.y;
+                if pressed != button || target != Some(node) || (dx * dx + dy * dy).sqrt() > self.config.slop {
+                    return None;
+                }
+                let event = match button {
+                    PointerButton::Middle => GestureEvent::MiddleClick(MiddleClickEvent { position, modifiers }),
+                    PointerButton::Back => GestureEvent::Navigate(NavigateEvent { direction: SwipeDirection::Back }),
+                    PointerButton::Forward => {
+                        GestureEvent::Navigate(NavigateEvent { direction: SwipeDirection::Forward })
+                    }
+                };
+                Some(Output::Event(node, event))
+            }
+            PointerPhase::Move => None,
+            PointerPhase::Cancel => {
+                self.pressed = None;
+                None
+            }
+        }
+    }
+
     /// A press is being arbitrated, or a member still waits on a timer after release.
     pub fn pointer_active(&self) -> bool {
         self.arena.is_active()
@@ -165,6 +214,8 @@ impl GestureRouter {
             GestureEvent::LongPress(_) => set.long_press,
             GestureEvent::Drag(_) => set.drag.is_some(),
             GestureEvent::RowSwipe(_) => set.row_swipe.is_some(),
+            GestureEvent::MiddleClick(_) => set.middle_click,
+            GestureEvent::Navigate(_) => set.navigate,
         };
         hit.iter().find(|e| wants(e.gestures)).map(|e| Output::Event(e.node, event))
     }

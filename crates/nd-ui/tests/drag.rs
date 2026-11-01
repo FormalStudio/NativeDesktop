@@ -88,7 +88,17 @@ fn open() -> (TestApp, Log, WindowId, WindowId) {
 
 fn drag(cx: &mut TestApp, chip: NodeId, phase: GesturePhase, x: f32, y: f32) {
     let p = Point { x, y };
-    cx.emit(chip, DragEvent { phase, start: Point { x: 20., y: 20. }, position: p, translation: p, velocity: p });
+    cx.emit(
+        chip,
+        DragEvent {
+            phase,
+            start: Point { x: 20., y: 20. },
+            position: p,
+            translation: p,
+            velocity: p,
+            modifiers: Default::default(),
+        },
+    );
 }
 
 fn take(log: &Log) -> Vec<String> {

@@ -16,11 +16,17 @@ pub struct PointerInput {
     pub position: Point,
     /// Seconds on the frame clock.
     pub time: f64,
+    pub modifiers: crate::KeyModifiers,
 }
 
 impl PointerInput {
     pub fn new(phase: PointerPhase, position: Point, time: f64) -> Self {
-        Self { phase, position, time }
+        Self { phase, position, time, modifiers: crate::KeyModifiers::default() }
+    }
+
+    pub fn with_modifiers(mut self, modifiers: crate::KeyModifiers) -> Self {
+        self.modifiers = modifiers;
+        self
     }
 }
 

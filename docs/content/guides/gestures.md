@@ -14,13 +14,23 @@ handler gets the same event type, always on the UI thread and never from inside 
 
 | Handler | Event | Notes |
 | --- | --- | --- |
-| `.on_tap` | `TapEvent { position, count }` | A press released in place |
-| `.on_double_tap` | `DoubleTapEvent` | When it's set, a single tap waits out the double-click interval |
+| `.on_tap` | `TapEvent { position, count, modifiers }` | A primary-button press released in place |
+| `.on_double_tap` | `DoubleTapEvent { position, modifiers }` | When it's set, a single tap waits out the double-click interval |
 | `.on_long_press` | `LongPressEvent { position, phase }` | Fires after 0.5 s without movement |
 | `.on_drag` | `DragEvent` | Any direction. For one axis, use `.on_drag_axis(axis, ..)` |
+| `.on_middle_click` | `MiddleClickEvent { position, modifiers }` | The middle button released in place |
+| `.on_navigate` | `NavigateEvent { direction }` | The mouse's back and forward buttons, and the three-finger swipe on macOS |
 
 A press is a tap until it moves more than 4 points. After that, a drag can claim it. Positions
 are in window coordinates.
+
+`modifiers` is a `KeyModifiers { shift, control, alt, platform }` with the keys held at the
+press (a drag's at each event). `modifiers.secondary()` is Command on macOS and Control
+elsewhere: the key that adds to a selection or opens a link in a new tab.
+
+`.on_navigate` goes to the innermost element under the pointer that has one, so a handler on the
+window's root hears every back and forward press in that window. `direction` is
+`SwipeDirection::Back` or `Forward`, the same type as a page swipe's.
 
 Phased events carry a `GesturePhase`: `Began`, `Changed`, `Ended`, or `Cancelled`. Treat
 `Cancelled` as undo. It means that another recognizer won the press, the OS took the pointer, or

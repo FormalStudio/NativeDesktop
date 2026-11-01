@@ -33,8 +33,9 @@ mod velocity;
 
 pub use arena::{Arena, ArenaMember};
 pub use events::{
-    DoubleTapEvent, DragEvent, ForceClickEvent, GestureEvent, GesturePhase, LongPressEvent, PinchEvent, RotateEvent,
-    RowEdge, RowSwipeEvent, SmartMagnifyEvent, SwipeDirection, SwipePageEvent, TapEvent,
+    DoubleTapEvent, DragEvent, ForceClickEvent, GestureEvent, GesturePhase, KeyModifiers, LongPressEvent,
+    MiddleClickEvent, NavigateEvent, PinchEvent, PointerButton, RotateEvent, RowEdge, RowSwipeEvent, SmartMagnifyEvent,
+    SwipeDirection, SwipePageEvent, TapEvent,
 };
 pub use haptic::Haptic;
 pub use input::{MomentumInference, MomentumPhase, PointerInput, PointerPhase, ScrollInput, ScrollPhase};

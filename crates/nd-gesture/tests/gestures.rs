@@ -509,7 +509,7 @@ mod gate_m4 {
         out.extend(pointer(&mut router, PointerPhase::Up, p(51., 51.), 0.05));
         assert_eq!(
             events(&out),
-            [(button, GestureEvent::Tap(TapEvent { position: p(51., 51.), count: 1 }))],
+            [(button, GestureEvent::Tap(TapEvent::new(p(51., 51.), 1)))],
             "a jitter under the slop stays a tap"
         );
 
@@ -538,6 +538,63 @@ mod gate_m4 {
         let mut out = press(&mut router, &hit, p(5., 5.), 0.);
         out.extend(pointer(&mut router, PointerPhase::Up, p(5., 5.), 0.05));
         assert_eq!(events(&out).iter().map(|(n, _)| *n).collect::<Vec<_>>(), [inner]);
+    }
+
+    #[test]
+    fn a_tap_carries_the_modifiers_held_at_the_press() {
+        let node = NodeId(1);
+        let set = GestureSet { tap: true, ..GestureSet::default() };
+        let hit = [HitEntry { node, gestures: &set, bounds: BOUNDS }];
+        let mut router = bouncy();
+        let shift = KeyModifiers { shift: true, ..KeyModifiers::default() };
+        let mut out = router.pointer(&PointerInput::new(PointerPhase::Down, p(5., 5.), 0.).with_modifiers(shift), &hit);
+        out.extend(pointer(&mut router, PointerPhase::Up, p(5., 5.), 0.05));
+        let [(_, GestureEvent::Tap(tap))] = events(&out)[..] else { panic!("one tap, got {:?}", events(&out)) };
+        assert_eq!(tap.modifiers, shift);
+    }
+
+    #[test]
+    fn a_middle_click_and_the_back_button_reach_the_innermost_listener() {
+        let (row, list, root) = (NodeId(1), NodeId(2), NodeId(3));
+        let tap = GestureSet { tap: true, ..GestureSet::default() };
+        let middle = GestureSet { middle_click: true, ..GestureSet::default() };
+        let navigate = GestureSet { navigate: true, ..GestureSet::default() };
+        let hit = [
+            HitEntry { node: row, gestures: &tap, bounds: BOUNDS },
+            HitEntry { node: list, gestures: &middle, bounds: BOUNDS },
+            HitEntry { node: root, gestures: &navigate, bounds: BOUNDS },
+        ];
+        let mut router = bouncy();
+        let ctrl = KeyModifiers { control: true, ..KeyModifiers::default() };
+        assert_eq!(router.button(PointerButton::Middle, PointerPhase::Down, p(5., 5.), ctrl, &hit), None);
+        let out = router.button(PointerButton::Middle, PointerPhase::Up, p(6., 5.), ctrl, &hit);
+        assert_eq!(
+            out,
+            Some(Output::Event(
+                list,
+                GestureEvent::MiddleClick(MiddleClickEvent { position: p(6., 5.), modifiers: ctrl })
+            ))
+        );
+        router.button(PointerButton::Back, PointerPhase::Down, p(5., 5.), KeyModifiers::default(), &hit);
+        let out = router.button(PointerButton::Back, PointerPhase::Up, p(5., 5.), KeyModifiers::default(), &hit);
+        let back = NavigateEvent { direction: SwipeDirection::Back };
+        assert_eq!(out, Some(Output::Event(root, GestureEvent::Navigate(back))));
+
+        // A release away from the press, or of another button, is no click.
+        router.button(PointerButton::Middle, PointerPhase::Down, p(5., 5.), KeyModifiers::default(), &hit);
+        assert_eq!(
+            router.button(PointerButton::Middle, PointerPhase::Up, p(60., 5.), KeyModifiers::default(), &hit),
+            None
+        );
+        router.button(PointerButton::Forward, PointerPhase::Down, p(5., 5.), KeyModifiers::default(), &hit);
+        assert_eq!(
+            router.button(PointerButton::Back, PointerPhase::Up, p(5., 5.), KeyModifiers::default(), &hit),
+            None
+        );
+        // Nothing listening: nothing to report, and the primary arena never saw the press.
+        assert_eq!(router.button(PointerButton::Middle, PointerPhase::Down, p(5., 5.), ctrl, &hit[..1]), None);
+        assert_eq!(router.button(PointerButton::Middle, PointerPhase::Up, p(5., 5.), ctrl, &hit[..1]), None);
+        assert!(!router.pointer_active());
     }
 
     #[test]
@@ -574,7 +631,7 @@ mod gate_m4 {
         out.extend(press(&mut router, &hit, p(6., 5.), 0.25));
         out.extend(pointer(&mut router, PointerPhase::Up, p(6., 5.), 0.3));
         out.extend(router.step(2.));
-        assert_eq!(events(&out), [(node, GestureEvent::Tap(TapEvent { position: p(6., 5.), count: 2 }))]);
+        assert_eq!(events(&out), [(node, GestureEvent::Tap(TapEvent::new(p(6., 5.), 2)))]);
 
         // A single tap fires once the double-tap wait runs out.
         let mut out = press(&mut router, &hit, p(5., 5.), 10.);
@@ -582,7 +639,7 @@ mod gate_m4 {
         out.extend(router.step(10.3));
         assert!(events(&out).is_empty());
         out.extend(router.step(10.6));
-        assert_eq!(events(&out), [(node, GestureEvent::Tap(TapEvent { position: p(5., 5.), count: 1 }))]);
+        assert_eq!(events(&out), [(node, GestureEvent::Tap(TapEvent::new(p(5., 5.), 1)))]);
     }
 
     #[test]

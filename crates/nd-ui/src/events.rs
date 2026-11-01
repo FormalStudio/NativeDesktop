@@ -149,7 +149,9 @@ impl<T: Clone + PartialEq> Synced<T> {
 pub fn emit_gesture(emit: &Emit, event: nd_gesture::GestureEvent) {
     use nd_gesture::GestureEvent as G;
     match event {
-        G::Tap(e) if e.count >= 2 => emit.emit(nd_gesture::DoubleTapEvent { position: e.position }),
+        G::Tap(e) if e.count >= 2 => {
+            emit.emit(nd_gesture::DoubleTapEvent { position: e.position, modifiers: e.modifiers })
+        }
         G::Tap(e) => emit.emit(e),
         G::LongPress(e) => emit.emit(e),
         G::Drag(e) => emit.emit(e),
@@ -159,5 +161,7 @@ pub fn emit_gesture(emit: &Emit, event: nd_gesture::GestureEvent) {
         G::RowSwipe(e) => emit.emit(e),
         G::ForceClick(e) => emit.emit(e),
         G::SmartMagnify(e) => emit.emit(e),
+        G::MiddleClick(e) => emit.emit(e),
+        G::Navigate(e) => emit.emit(e),
     }
 }

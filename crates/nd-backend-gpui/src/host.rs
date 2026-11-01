@@ -1257,29 +1257,45 @@ impl Inner {
                     });
                 }
                 let Some(inner) = down.upgrade() else { return };
+                let at = point_of(event.position);
+                let modifiers = crate::gestures::key_modifiers(&event.modifiers);
+                if let Some(button) = crate::gestures::other_button(event.button) {
+                    inner.gesture_input(id, window, cx, |g, tree| {
+                        g.button(id, button, nd_gesture::PointerPhase::Down, at, modifiers, tree)
+                    });
+                    return;
+                }
                 if event.button != gpui::MouseButton::Left {
                     return;
                 }
                 if let Ok(mut app) = inner.app.try_borrow_mut() {
                     app.pointer_down(id);
                 }
-                let at = point_of(event.position);
-                inner.gesture_input(id, window, cx, |g, tree| g.pointer(id, nd_gesture::PointerPhase::Down, at, tree));
+                inner.gesture_input(id, window, cx, |g, tree| {
+                    g.pointer(id, nd_gesture::PointerPhase::Down, at, modifiers, tree)
+                });
             })
             .capture_any_mouse_up(move |event, window, cx| {
                 let Some(inner) = up.upgrade() else { return };
-                if event.button == gpui::MouseButton::Left {
-                    let at = point_of(event.position);
-                    inner
-                        .gesture_input(id, window, cx, |g, tree| g.pointer(id, nd_gesture::PointerPhase::Up, at, tree));
+                let at = point_of(event.position);
+                let modifiers = crate::gestures::key_modifiers(&event.modifiers);
+                if let Some(button) = crate::gestures::other_button(event.button) {
+                    inner.gesture_input(id, window, cx, |g, tree| {
+                        g.button(id, button, nd_gesture::PointerPhase::Up, at, modifiers, tree)
+                    });
+                } else if event.button == gpui::MouseButton::Left {
+                    inner.gesture_input(id, window, cx, |g, tree| {
+                        g.pointer(id, nd_gesture::PointerPhase::Up, at, modifiers, tree)
+                    });
                 }
             })
             .on_mouse_move(move |event, window, cx| {
                 let Some(inner) = moved.upgrade() else { return };
                 if event.pressed_button == Some(gpui::MouseButton::Left) {
                     let at = point_of(event.position);
+                    let modifiers = crate::gestures::key_modifiers(&event.modifiers);
                     inner.gesture_input(id, window, cx, |g, tree| {
-                        g.pointer(id, nd_gesture::PointerPhase::Move, at, tree)
+                        g.pointer(id, nd_gesture::PointerPhase::Move, at, modifiers, tree)
                     });
                 }
             })

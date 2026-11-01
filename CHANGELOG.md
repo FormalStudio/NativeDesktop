@@ -3,6 +3,13 @@
 Releases are git tags on this repository. `nd upgrade` prints the entries between an app's tag
 and the one it moves to.
 
+## Unreleased
+
+- Taps, double taps and drags carry the keyboard modifiers held (`TapEvent::modifiers`, a
+  `KeyModifiers` with `secondary()`). `.on_middle_click` reports a middle click and
+  `.on_navigate` the mouse's back and forward buttons (and the three-finger swipe on macOS).
+  `TapEvent` and `DragEvent` gained a field: build a `TapEvent` with `TapEvent::new`.
+
 ## v0.6.1
 
 - Video plays in the GPUI backend: Media Foundation on Windows, GStreamer on Linux (loaded at run

@@ -12,8 +12,8 @@ use std::rc::Rc;
 use nd_core::semantic::Role;
 use nd_core::{NodeId, WindowId};
 use nd_gesture::{
-    Axes, Axis, DoubleTapEvent, DragEvent, ForceClickEvent, GestureSet, LongPressEvent, PinchEvent, RotateEvent,
-    RowSwipeConfig, RowSwipeEvent, SmartMagnifyEvent, SwipePageEvent, TapEvent,
+    Axes, Axis, DoubleTapEvent, DragEvent, ForceClickEvent, GestureSet, LongPressEvent, MiddleClickEvent,
+    NavigateEvent, PinchEvent, RotateEvent, RowSwipeConfig, RowSwipeEvent, SmartMagnifyEvent, SwipePageEvent, TapEvent,
 };
 use nd_gpui::gpui::prelude::FluentBuilder;
 use nd_gpui::gpui::{Action, KeyContext, Overflow, SharedString, StyleRefinement, Styled};
@@ -602,6 +602,21 @@ impl Div {
     /// A drag along one axis; movement mostly across it is left to an outer recognizer.
     pub fn on_drag_axis(mut self, axis: Axis, handler: impl Fn(&DragEvent, &mut Window, &mut App) + 'static) -> Self {
         self.gestures.drag = Some(Some(axis));
+        self.on(handler)
+    }
+
+    /// A middle-button press released in place, with the modifiers held: open a link or a row
+    /// in a new tab.
+    pub fn on_middle_click(mut self, handler: impl Fn(&MiddleClickEvent, &mut Window, &mut App) + 'static) -> Self {
+        self.gestures.middle_click = true;
+        self.on(handler)
+    }
+
+    /// Back and forward: the mouse's side buttons anywhere over the element, and macOS's
+    /// three-finger swipe. The innermost element listening gets it; put it on a window's root
+    /// to drive that window's history.
+    pub fn on_navigate(mut self, handler: impl Fn(&NavigateEvent, &mut Window, &mut App) + 'static) -> Self {
+        self.gestures.navigate = true;
         self.on(handler)
     }
 

@@ -194,8 +194,8 @@ mod gate_m4 {
         let pinch =
             GestureEvent::Pinch(PinchEvent { position: Point::default(), scale: 1.5, phase: GesturePhase::Changed });
         events::emit_gesture(&emit, pinch);
-        events::emit_gesture(&emit, GestureEvent::Tap(TapEvent { position: Point::default(), count: 1 }));
-        events::emit_gesture(&emit, GestureEvent::Tap(TapEvent { position: Point::default(), count: 2 }));
+        events::emit_gesture(&emit, GestureEvent::Tap(TapEvent::new(Point::default(), 1)));
+        events::emit_gesture(&emit, GestureEvent::Tap(TapEvent::new(Point::default(), 2)));
         cx.run_until_idle();
         assert_eq!(log.take(), ["pinch 1.5", "tap 1", "double"]);
         assert_eq!(cx.backend().haptics(), [Haptic::Alignment]);

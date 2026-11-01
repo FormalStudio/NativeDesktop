@@ -1,6 +1,6 @@
 use nd_core::Point;
 
-use crate::events::{DragEvent, GestureEvent, GesturePhase, LongPressEvent, TapEvent};
+use crate::events::{DragEvent, GestureEvent, GesturePhase, KeyModifiers, LongPressEvent, TapEvent};
 use crate::input::{PointerInput, PointerPhase};
 use crate::set::{Axis, GestureConfig};
 use crate::velocity::VelocityTracker;
@@ -58,11 +58,13 @@ pub struct Tap {
     /// After the first release, while a second press may still come.
     waiting: Option<(f64, Point)>,
     done: bool,
+    /// Held at the last press.
+    modifiers: KeyModifiers,
 }
 
 impl Tap {
     pub fn new(config: GestureConfig, double: bool) -> Self {
-        Self { config, double, down: None, count: 0, waiting: None, done: false }
+        Self { config, double, down: None, count: 0, waiting: None, done: false, modifiers: KeyModifiers::default() }
     }
 }
 
@@ -81,6 +83,7 @@ impl Recognizer for Tap {
                     self.count = 0;
                 }
                 self.down = Some(input.position);
+                self.modifiers = input.modifiers;
                 Verdict::Possible
             }
             PointerPhase::Move => match self.down {
@@ -99,7 +102,11 @@ impl Recognizer for Tap {
                     self.waiting = Some((input.time + self.config.double_tap, input.position));
                     return Verdict::Possible;
                 }
-                out.push(GestureEvent::Tap(TapEvent { position: input.position, count: self.count }));
+                out.push(GestureEvent::Tap(TapEvent {
+                    position: input.position,
+                    count: self.count,
+                    modifiers: self.modifiers,
+                }));
                 self.done = true;
                 Verdict::Accept
             }
@@ -119,7 +126,7 @@ impl Recognizer for Tap {
             Some((deadline, position)) if now >= deadline => {
                 self.waiting = None;
                 self.done = true;
-                out.push(GestureEvent::Tap(TapEvent { position, count: 1 }));
+                out.push(GestureEvent::Tap(TapEvent { position, count: 1, modifiers: self.modifiers }));
                 Verdict::Accept
             }
             _ => Verdict::Possible,
@@ -222,6 +229,7 @@ pub struct Pan {
     done: bool,
     vx: VelocityTracker,
     vy: VelocityTracker,
+    modifiers: KeyModifiers,
 }
 
 impl Pan {
@@ -234,6 +242,7 @@ impl Pan {
             done: false,
             vx: VelocityTracker::default(),
             vy: VelocityTracker::default(),
+            modifiers: KeyModifiers::default(),
         }
     }
 
@@ -245,7 +254,7 @@ impl Pan {
             Some(Axis::Vertical) => translation.x = 0.,
             None => {}
         }
-        GestureEvent::Drag(DragEvent { phase, start, position, translation, velocity })
+        GestureEvent::Drag(DragEvent { phase, start, position, translation, velocity, modifiers: self.modifiers })
     }
 }
 
@@ -255,6 +264,7 @@ impl Recognizer for Pan {
     }
 
     fn input(&mut self, input: &PointerInput, out: &mut Vec<GestureEvent>) -> Verdict {
+        self.modifiers = input.modifiers;
         match input.phase {
             PointerPhase::Down => {
                 self.start = Some(input.position);

@@ -49,7 +49,14 @@ fn node(cx: &TestApp, test_id: &str) -> NodeId {
 
 fn drag(cx: &mut TestApp, tile: NodeId, phase: GesturePhase, start: Point, to: Point) {
     let translation = Point { x: to.x - start.x, y: to.y - start.y };
-    cx.events().emitter(tile).emit(DragEvent { phase, start, position: to, translation, velocity: Point::default() });
+    cx.events().emitter(tile).emit(DragEvent {
+        phase,
+        start,
+        position: to,
+        translation,
+        velocity: Point::default(),
+        modifiers: Default::default(),
+    });
     settle(cx);
 }
 
