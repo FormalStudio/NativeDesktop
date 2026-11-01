@@ -19,6 +19,8 @@ and the one it moves to.
 - `segmented(..).icons([..])`: icon segments, each option's title its accessible name and
   tooltip (`NSSegmentedControl` images with segment tooltips on macOS). `SelectProps` gained
   `icons`.
+- `source_node(..).meter(f)` and `source_item(..).meter(f)`: a capacity bar under the title on
+  the GPUI backend, none on macOS. `SourceNode` and `SourceItem` gained `meter`.
 
 ## v0.6.1
 

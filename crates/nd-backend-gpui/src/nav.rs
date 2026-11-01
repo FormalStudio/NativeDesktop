@@ -559,7 +559,10 @@ pub fn source_tree_view(
             });
         }
         // Segoe Fluent Icons where Windows ships it, the icon's paths elsewhere.
-        let icon = node.icon.filter(|_| fluent).and_then(|icon| icon_glyph(Some(icon)))
+        let icon = node
+            .icon
+            .filter(|_| fluent)
+            .and_then(|icon| icon_glyph(Some(icon)))
             .map(|g| div().flex_none().child(glyph(g, px(16.), fg, px(1.5))));
         // libadwaita's sidebar rows: 36 px at the button radius.
         let row_height = if fluent {
@@ -607,7 +610,9 @@ pub fn source_tree_view(
             row = row.justify_center().child(match cover {
                 Some(cover) => cover.into_any_element(),
                 None => icon
-                    .unwrap_or_else(|| div().child(glyph(Glyph::of(nd_components::Icon::FileText), px(16.), fg, px(1.5))))
+                    .unwrap_or_else(|| {
+                        div().child(glyph(Glyph::of(nd_components::Icon::FileText), px(16.), fg, px(1.5)))
+                    })
                     .into_any_element(),
             });
         } else {
@@ -649,6 +654,19 @@ pub fn source_tree_view(
                         .child(div().truncate().child(node.title.clone()))
                         .children(node.caption.clone().map(|c| {
                             div().truncate().text_size(theme.type_scale.footnote).text_color(secondary).child(c)
+                        }))
+                        .children(node.meter.map(|f| {
+                            // Nearly full reads as a warning, as in Finder and Files.
+                            let fill = if f >= 0.9 { theme.danger } else { theme.accent };
+                            div()
+                                .id(ElementId::Name(format!("{}-meter", node.id).into()))
+                                .role(gpui::Role::ProgressIndicator)
+                                .mt(px(3.))
+                                .h(px(4.))
+                                .w_full()
+                                .rounded_full()
+                                .bg(with_alpha(secondary, secondary.a * 0.25))
+                                .child(div().h_full().w(gpui::relative(f)).rounded_full().bg(fill))
                         })),
                 )
                 .children(node.badge.clone().map(|b| {

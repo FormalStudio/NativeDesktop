@@ -228,6 +228,29 @@ mod gate_m6 {
         assert!(cover >= 200, "the rail draws the row's cover ({cover} cover pixels)");
     }
 
+    /// A row's capacity meter fills its track in proportion, in the accent.
+    pub fn gpui_source_row_meter_fills_in_proportion() {
+        use gpui::AppContext as _;
+        if nd_gpui::gpui_platform::current_headless_renderer().ok().flatten().is_none() {
+            println!("skipped: GPUI has no headless renderer on this OS");
+            return;
+        }
+        let accent = |fraction: f32| {
+            let mut cx = headless();
+            let handle = cx
+                .open_window(gpui::size(gpui::px(220.), gpui::px(60.)), move |_, cx| cx.new(|_| Meter(fraction)))
+                .expect("window");
+            cx.run_until_parked();
+            let shot = cx.capture_screenshot(handle.into()).expect("screenshot");
+            let a = meter_theme().accent.to_rgb();
+            let near = |c: u8, f: f32| (f32::from(c) - f * 255.).abs() < 24.;
+            shot.pixels().filter(|p| near(p[0], a.r) && near(p[1], a.g) && near(p[2], a.b)).count()
+        };
+        let (low, high) = (accent(0.2), accent(0.8));
+        assert!(low > 0, "a fifth full still shows");
+        assert!(high > low * 3, "four fifths fill about four times the track: {high} against {low}");
+    }
+
     pub fn gpui_nav_goldens() {
         // GPUI renders headless only on macOS (Metal) and Linux (wgpu); Windows captures arrive
         // with the Fluent goldens (M3).
@@ -339,6 +362,40 @@ impl gpui::Render for Golden {
 }
 
 /// A collapsed Fluent sidebar holding one playlist row with a magenta cover.
+fn meter_theme() -> nd_theme::Theme {
+    use nd_theme::{Metrics, Palette, Preset, Theme};
+    let preset = Preset::Adwaita;
+    Theme::derive(preset, Scheme::Light, Palette::baked_for(preset, Scheme::Light), Metrics::preset(preset), 1.)
+}
+
+/// One source row with a meter `.0` full.
+struct Meter(f32);
+
+impl gpui::Render for Meter {
+    fn render(&mut self, _window: &mut gpui::Window, _cx: &mut gpui::Context<Self>) -> impl gpui::IntoElement {
+        use gpui::{IntoElement, ParentElement, Styled};
+        let theme = meter_theme();
+        let props = SourceTreeProps {
+            nodes: vec![source_node("disk", "Macintosh HD").meter(self.0)],
+            selected: None,
+            ..golden_tree()
+        };
+        gpui::div()
+            .size_full()
+            .bg(theme.surface.sidebar)
+            .child(source_tree_view(
+                NodeId(1),
+                &props,
+                None,
+                false,
+                None,
+                &Default::default(),
+                Paint { theme: &theme, marks: &Marks::default() },
+            ))
+            .into_any_element()
+    }
+}
+
 struct Rail;
 
 impl gpui::Render for Rail {
@@ -446,6 +503,7 @@ fn main() {
         ("gate_m6::gpui_palette_types_completes_and_activates", gate_m6::gpui_palette_types_completes_and_activates),
         ("gate_m6::gpui_toasts_time_out_in_order", gate_m6::gpui_toasts_time_out_in_order),
         ("gate_m6::gpui_rail_rows_keep_their_artwork", gate_m6::gpui_rail_rows_keep_their_artwork),
+        ("gate_m6::gpui_source_row_meter_fills_in_proportion", gate_m6::gpui_source_row_meter_fills_in_proportion),
         ("gate_m6::gpui_nav_goldens", gate_m6::gpui_nav_goldens),
     ];
     let has = |flag: &str| args.iter().any(|a| a == flag);

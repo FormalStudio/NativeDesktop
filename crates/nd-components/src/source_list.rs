@@ -43,6 +43,8 @@ pub struct SourceNode {
     /// with rounded corners. The icon stands in while it loads and when it fails.
     pub artwork: Option<ImageSource>,
     pub badge: Option<SharedString>,
+    /// A capacity meter under the title, `0.` empty to `1.` full: a volume's used space.
+    pub meter: Option<f32>,
     /// A group row: a section header, never selectable, no disclosure.
     pub section: bool,
     /// Shows a disclosure before any child is listed (children load on expand).
@@ -65,6 +67,7 @@ pub fn source_node(id: impl Into<SharedString>, title: impl Into<SharedString>) 
         icon: None,
         artwork: None,
         badge: None,
+        meter: None,
         section: false,
         has_children: false,
         expanded: false,
@@ -102,6 +105,13 @@ impl SourceNode {
 
     pub fn badge(mut self, badge: impl Into<SharedString>) -> Self {
         self.badge = Some(badge.into());
+        self
+    }
+
+    /// A capacity meter under the title, clamped to `0..=1`, as Finder and Files show a
+    /// volume's used space. The GPUI backend draws it; on macOS the sidebar shows none.
+    pub fn meter(mut self, fraction: f32) -> Self {
+        self.meter = Some(fraction.clamp(0., 1.));
         self
     }
 
@@ -397,12 +407,13 @@ pub struct SourceItem {
     pub title: SharedString,
     pub icon: Option<Icon>,
     pub badge: Option<SharedString>,
+    pub meter: Option<f32>,
     pub children: Vec<SourceItem>,
 }
 
 /// One row: an id the app selects by, a title, and optionally an icon, a badge and children.
 pub fn source_item(id: impl Into<SharedString>, title: impl Into<SharedString>) -> SourceItem {
-    SourceItem { id: id.into(), title: title.into(), icon: None, badge: None, children: Vec::new() }
+    SourceItem { id: id.into(), title: title.into(), icon: None, badge: None, meter: None, children: Vec::new() }
 }
 
 impl SourceItem {
@@ -416,6 +427,12 @@ impl SourceItem {
         self
     }
 
+    /// See [`SourceNode::meter`].
+    pub fn meter(mut self, fraction: f32) -> Self {
+        self.meter = Some(fraction.clamp(0., 1.));
+        self
+    }
+
     pub fn children(mut self, children: impl IntoIterator<Item = SourceItem>) -> Self {
         self.children = children.into_iter().collect();
         self
@@ -426,6 +443,7 @@ impl SourceItem {
         node.parent = parent.cloned();
         node.icon = self.icon;
         node.badge = self.badge;
+        node.meter = self.meter;
         out.push(node);
         for child in self.children {
             child.flatten(Some(&self.id), out);
