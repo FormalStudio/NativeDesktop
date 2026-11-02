@@ -53,8 +53,8 @@ pub use palette::{
 };
 pub use presentation::{Presentation, PresentationExt, PresentationView, presentation};
 pub use scaffold::{
-    Pane, PaneCollapsed, PaneProps, PaneRole, REVEAL_EDGE, Scaffold, ScaffoldProps, SidebarRevealed, inspector,
-    scaffold, sidebar,
+    PANE_MAX_WIDTH, PANE_MIN_WIDTH, Pane, PaneCollapsed, PaneProps, PaneResized, PaneRole, REVEAL_EDGE, Scaffold,
+    ScaffoldProps, SidebarRevealed, inspector, scaffold, sidebar,
 };
 pub use services::{Chrome, ChromeServices};
 pub use source_list::{

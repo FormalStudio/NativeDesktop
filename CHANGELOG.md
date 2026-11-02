@@ -9,6 +9,10 @@ and the one it moves to.
   a press keeps nd focus on it, Tab stops on it and bindings of the contexts around it match while
   it has focus. The GPUI presenter rings the keyboard's row with the theme's focus ring. On macOS
   nd focus makes the table or collection view first responder.
+- `sidebar().resizable()` and `inspector().resizable()` drag by their inner edge on the GPUI
+  backend, between `min_w` and `max_w` (`PANE_MIN_WIDTH` and `PANE_MAX_WIDTH` where unset).
+  `Pane::on_resize` reports `PaneResized { width }` on every backend (the split view's divider
+  on macOS), and a changed `.width(..)` moves the divider. `PaneProps` gained `resizable`.
 - `tab_strip(..).context_menu(|id, menu, window, cx| ..)` and `tab_view(..).context_menu(..)`:
   a menu per tab on the GPUI backend, the tab left unselected. A middle click on a closable
   document tab reports `TabCloseRequested`. `TabStripProps` gained `tab_menus`, and the drawn

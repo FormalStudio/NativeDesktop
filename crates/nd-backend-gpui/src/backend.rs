@@ -153,6 +153,7 @@ pub struct GpuiBackend {
     pub(crate) reveals: Rc<RefCell<HashMap<NodeId, crate::reveal::Reveal>>>,
     /// Split divider drags in progress, by split node.
     pub(crate) splits: crate::split::SplitDrags,
+    pub(crate) pane_resizes: crate::pane_resize::PaneResizing,
     /// The drawn alerts and about panels showing ([`crate::dialogs`]).
     pub(crate) dialogs: crate::dialogs::Dialogs,
     /// What the host and the seam share about tabs ([`crate::window_tabs`]).
@@ -224,6 +225,7 @@ impl GpuiBackend {
             pane_slides: Rc::default(),
             reveals: Rc::default(),
             splits: Rc::default(),
+            pane_resizes: Rc::default(),
             dialogs: Rc::default(),
             tab_seam: Rc::default(),
         }
@@ -669,6 +671,7 @@ impl Backend for GpuiBackend {
         self.reveals.borrow_mut().remove(&node);
         self.splits.borrow_mut().remove(&node);
         self.pane_slides.borrow_mut().remove(&node);
+        self.pane_resizes.borrow_mut().forget(node);
         self.gestures.forget(node);
         let custom = match self.state.borrow().nodes.get(&node).map(|n| n.kind) {
             Some(NodeKind::Widget(w)) => crate::custom::lookup(w.type_id),

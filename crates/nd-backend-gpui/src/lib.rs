@@ -23,6 +23,7 @@ pub mod nav;
 pub mod occlusion;
 pub mod os;
 mod overlay;
+mod pane_resize;
 pub mod render;
 mod reveal;
 mod rich;

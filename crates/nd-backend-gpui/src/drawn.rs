@@ -99,15 +99,13 @@ impl Build<'_> {
             let split = self.split_headers(id, node, &bars);
             let outer = self.split.replace(split);
             let bars: Vec<AnyElement> = bars.iter().map(|c| self.node(*c, window, cx)).collect();
+            let grabs = self.pane_grabs(id, &panes);
             let panes: Vec<AnyElement> = panes.iter().map(|c| self.node(*c, window, cx)).collect();
             self.split.replace(outer);
-            div()
-                .size_full()
-                .flex()
-                .flex_col()
-                .children(bars)
-                .child(div().flex().flex_row().flex_1().min_h_0().children(panes))
-                .into_any_element()
+            // The grab areas come last, over the panes' content on both sides of each edge.
+            let row = div().flex().flex_row().flex_1().min_h_0().children(panes);
+            let row = if grabs.is_empty() { row } else { row.relative().children(grabs) };
+            div().size_full().flex().flex_col().children(bars).child(row).into_any_element()
         } else if is::<Pane>(kind) {
             let p = props::<PaneProps>(node)?;
             let fluent = theme.preset == nd_theme::Preset::Fluent;
@@ -127,6 +125,10 @@ impl Build<'_> {
             }
             let rail = rail && !gone;
             let pane = styled(&p.style);
+            let pane = match self.dragged_width(id, p) {
+                Some(width) if !rail => pane.w(px(width)),
+                _ => pane,
+            };
             let pane = if rail { pane.w(px(48.)).min_w(px(48.)).flex_none() } else { pane };
             let adwaita = theme.preset == nd_theme::Preset::Adwaita;
             let sidebar = match self.inactive(id, window) {

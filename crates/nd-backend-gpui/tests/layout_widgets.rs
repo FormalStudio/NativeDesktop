@@ -47,6 +47,8 @@ fn find<'a>(node: &'a SemanticNode, f: &impl Fn(&SemanticNode) -> bool) -> Optio
 #[derive(Clone, Copy, PartialEq)]
 enum Kind {
     Split,
+    /// A resizable sidebar and inspector, their widths the app's.
+    Resizable,
     Hidden,
     Status,
     /// Nothing but a label, for the dialogs.
@@ -69,6 +71,7 @@ struct Log {
     ratios: Vec<f32>,
     clicks: Vec<&'static str>,
     answers: Vec<usize>,
+    widths: Vec<(&'static str, f32)>,
 }
 
 struct Scene {
@@ -78,6 +81,7 @@ struct Scene {
     /// The app keeps its ratio whatever the user drags.
     refuse: bool,
     search: Option<Entity<TextFieldState>>,
+    widths: (f32, f32),
 }
 
 impl Render for Scene {
@@ -151,6 +155,30 @@ impl Render for Scene {
                     .content(text("Body"))
                     .into_any_element();
             }
+            Kind::Resizable => {
+                let (sidebar_w, inspector_w) = self.widths;
+                return scaffold()
+                    .sidebar(sidebar().resizable().width(px(sidebar_w)).child(text("Folders")).on_resize(cx.listener(
+                        |this, e: &PaneResized, _, cx| {
+                            this.log.borrow_mut().widths.push(("sidebar", e.width));
+                            if !this.refuse {
+                                this.widths.0 = e.width;
+                            }
+                            cx.notify();
+                        },
+                    )))
+                    .content(text("Body"))
+                    .inspector(
+                        inspector().resizable().width(px(inspector_w)).min_w(px(200.)).child(text("Info")).on_resize(
+                            cx.listener(|this, e: &PaneResized, _, cx| {
+                                this.log.borrow_mut().widths.push(("inspector", e.width));
+                                this.widths.1 = e.width;
+                                cx.notify();
+                            }),
+                        ),
+                    )
+                    .into_any_element();
+            }
             Kind::Chrome => {
                 let folders = source_list("folders")
                     .section(
@@ -222,8 +250,9 @@ fn open_in(kind: Kind, preset: Preset, scheme: Scheme) -> Opened {
             app.set_global(Chrome(GpuiChrome::new(backend)));
             let options = WindowOptions::main("layout").size(size(px(800.), px(560.)));
             let options = if matches!(kind, Kind::Bar { .. }) { options.title("Notes") } else { options };
-            let handle =
-                app.open_window(options, |_, cx| cx.new(|_| Scene { kind, log: l, ratio: 0.5, refuse: false, search: None }));
+            let handle = app.open_window(options, |_, cx| {
+                cx.new(|_| Scene { kind, log: l, ratio: 0.5, refuse: false, search: None, widths: (220., 260.) })
+            });
             opened = Some((handle.id(), handle.root().clone()));
         })
     });
@@ -337,7 +366,14 @@ impl Opened {
             let mut other = None;
             self.host.update(cx, |app| {
                 let handle = app.open_window(WindowOptions::main("other").size(size(px(200.), px(100.))), |_, cx| {
-                    cx.new(|_| Scene { kind: Kind::Plain, log: Rc::default(), ratio: 0.5, refuse: false, search: None })
+                    cx.new(|_| Scene {
+                        kind: Kind::Plain,
+                        log: Rc::default(),
+                        ratio: 0.5,
+                        refuse: false,
+                        search: None,
+                        widths: (220., 260.),
+                    })
                 });
                 other = Some(handle.id());
             });
@@ -535,7 +571,14 @@ mod gate_m6 {
         let second = o.cx.update(|cx| {
             o.host.update(cx, |app| {
                 app.open_window(WindowOptions::main("second").size(size(px(400.), px(300.))), |_, cx| {
-                    cx.new(|_| Scene { kind: Kind::Split, log, ratio: 0.5, refuse: false, search: None })
+                    cx.new(|_| Scene {
+                        kind: Kind::Split,
+                        log,
+                        ratio: 0.5,
+                        refuse: false,
+                        search: None,
+                        widths: (220., 260.),
+                    })
                 })
                 .id()
             })
@@ -612,6 +655,47 @@ mod gate_m6 {
         assert!(find.origin.x > new.origin.x + new.size.width, "after the leading items: {find:?}");
     }
 
+    /// A resizable sidebar's and inspector's inner edges drag, inside their widths' range; the
+    /// app's width wins once it changes, and a width the app ignores still holds.
+    pub fn gpui_side_panes_resize_by_their_edges() {
+        let mut o = open(Kind::Resizable);
+        let width = |o: &Opened, id: &str| o.node(id).bounds.expect("laid out").size.width;
+        let drag = |o: &mut Opened, from: f32, to: f32| {
+            let y = 200.;
+            o.input(vec![SyntheticInput::Drag { from: Point { x: from, y }, to: Point { x: to, y }, steps: 8 }]);
+        };
+        assert_eq!(width(&o, "nd-sidebar"), 220.);
+        drag(&mut o, 220., 300.);
+        assert_eq!(o.log.borrow().widths.last(), Some(&("sidebar", 300.)), "the drag reports as it moves");
+        assert!(o.log.borrow().widths.len() > 1, "more than once: {:?}", o.log.borrow().widths);
+        assert_eq!(width(&o, "nd-sidebar"), 300.);
+        drag(&mut o, 300., 20.);
+        assert_eq!(width(&o, "nd-sidebar"), PANE_MIN_WIDTH, "no narrower than the default minimum");
+        drag(&mut o, PANE_MIN_WIDTH, 790.);
+        assert_eq!(width(&o, "nd-sidebar"), PANE_MAX_WIDTH, "no wider than the default maximum");
+
+        let inspector = o.node("nd-inspector").bounds.expect("inspector");
+        assert_eq!(inspector.size.width, 260.);
+        drag(&mut o, inspector.origin.x, inspector.origin.x + 100.);
+        assert_eq!(width(&o, "nd-inspector"), 200., "the inspector grows leftwards and keeps its min_w");
+        assert_eq!(o.log.borrow().widths.last(), Some(&("inspector", 200.)));
+
+        let view = o.view.clone();
+        o.cx.update(|cx| {
+            o.host.update(cx, |app| {
+                view.update(app, |this, cx| {
+                    this.widths.0 = 240.;
+                    this.refuse = true;
+                    cx.notify();
+                })
+            })
+        });
+        settle(&mut o.cx, &o.host);
+        assert_eq!(width(&o, "nd-sidebar"), 240., "the app's width replaces the dragged one");
+        drag(&mut o, 240., 280.);
+        assert_eq!(width(&o, "nd-sidebar"), 280., "a width the app does not take back still holds");
+    }
+
     /// libadwaita's split view: an open sidebar runs the full height under its own header bar,
     /// and the content's header bar holds the title and the trailing items.
     pub fn gpui_toolbar_splits_into_a_header_bar_per_pane() {
@@ -655,7 +739,8 @@ mod gate_m6 {
             }
             // The Fluent look as `ND_PRESET=fluent` draws it off Windows.
             {
-                for view in ["alert-fluent", "about-fluent", "chrome-fluent", "chrome-backdrop-fluent", "search-fluent"] {
+                for view in ["alert-fluent", "about-fluent", "chrome-fluent", "chrome-backdrop-fluent", "search-fluent"]
+                {
                     if let Err(e) = golden(view, scheme) {
                         failed.push(e);
                     }
@@ -756,6 +841,7 @@ fn main() {
             gate_m6::gpui_split_drag_reports_ratio_within_min_sizes,
         ),
         ("gate_m6::gpui_split_echo_and_refusal", gate_m6::gpui_split_echo_and_refusal),
+        ("gate_m6::gpui_side_panes_resize_by_their_edges", gate_m6::gpui_side_panes_resize_by_their_edges),
         (
             "gate_m6::gpui_split_hidden_subtree_is_not_hit_or_painted",
             gate_m6::gpui_split_hidden_subtree_is_not_hit_or_painted,

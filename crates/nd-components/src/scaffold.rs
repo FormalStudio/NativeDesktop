@@ -55,6 +55,9 @@ pub struct PaneProps {
     /// While the sidebar is collapsed, the pointer at the window's leading edge slides it in
     /// over the content as a floating panel.
     pub edge_reveal: bool,
+    /// The user drags the pane's inner edge to resize it (on macOS the split view's divider
+    /// always drags).
+    pub resizable: bool,
     pub style: StyleRefinement,
 }
 
@@ -74,6 +77,19 @@ pub struct SidebarRevealed {
 pub struct PaneCollapsed {
     pub collapsed: bool,
 }
+
+/// The user dragged a sidebar's or inspector's divider: the pane is now `width` points wide.
+/// Reported as the drag moves.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PaneResized {
+    pub width: f32,
+}
+
+/// A sidebar or inspector a divider drag leaves narrower than this snaps to it, where the app
+/// sets no `min_w`.
+pub const PANE_MIN_WIDTH: f32 = 150.;
+/// Nor wider than this, where the app sets no `max_w`.
+pub const PANE_MAX_WIDTH: f32 = 480.;
 
 pub struct Scaffold {
     root: ContainerElement<ScaffoldProps>,
@@ -260,7 +276,21 @@ impl Pane {
         Pane(self.0.on(handler))
     }
 
-    /// Width the pane opens at.
+    /// The user drags the pane's inner edge to resize it, between its `min_w` and `max_w`
+    /// ([`PANE_MIN_WIDTH`] and [`PANE_MAX_WIDTH`] where unset). macOS's split view lets the
+    /// user drag every pane's divider whether or not this is set.
+    pub fn resizable(mut self) -> Self {
+        self.0.props_mut().resizable = true;
+        self
+    }
+
+    /// A divider drag, as it moves. Pass the width back through [`Pane::width`] to keep it, and
+    /// store it to open the pane at that width next time.
+    pub fn on_resize(self, handler: impl Fn(&PaneResized, &mut Window, &mut App) + 'static) -> Self {
+        Pane(self.0.on(handler))
+    }
+
+    /// The pane's width. The width a drag gives the pane holds until this changes.
     pub fn width(mut self, width: Pixels) -> Self {
         self.0.props_mut().width = Some(width.as_f32());
         self.w(width)

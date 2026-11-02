@@ -491,16 +491,20 @@ impl AppKitBackend {
         NSApplication::sharedApplication(mtm).setAppearance(appearance.as_deref());
     }
 
-    /// Reports collapses the user made since the last check.
+    /// Reports collapses and side pane resizes the user made since the last check.
     fn check_collapses(&self) {
         let Ok(state) = self.0.try_borrow() else { return };
         let mut fired = false;
         for (node, native) in &state.nodes {
-            if let Native::Pane(p) = native
-                && let Some(event) = p.take_collapse()
-            {
-                state.events.emitter(*node).emit(event);
-                fired = true;
+            if let Native::Pane(p) = native {
+                if let Some(event) = p.take_collapse() {
+                    state.events.emitter(*node).emit(event);
+                    fired = true;
+                }
+                if let Some(event) = p.take_resize() {
+                    state.events.emitter(*node).emit(event);
+                    fired = true;
+                }
             }
         }
         if fired {

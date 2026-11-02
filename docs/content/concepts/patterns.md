@@ -57,6 +57,21 @@ Your state controls whether the inspector is collapsed, and its toggle sits in t
 
 <!-- docs:snippet examples/chrome/src/lib.rs#inspector -->
 
+The user resizes a sidebar or inspector by dragging its divider. On macOS the split view's
+divider always drags; on Linux and Windows the pane's inner edge drags once you mark it
+`.resizable()`, between its `min_w` and `max_w` (150 and 480 points where unset). Every move
+reports `PaneResized { width }`. Pass the width back through `.width(..)` and store it to open
+the pane at the same width next time:
+
+```rust
+sidebar().resizable().width(px(self.sidebar_width)).on_resize(cx.listener(|this, e: &PaneResized, _, cx| {
+    this.sidebar_width = e.width;
+    cx.notify();
+}))
+```
+
+A new `.width(..)` moves the divider; a drag the app does not take back still holds.
+
 Key equivalents come from the bindings instead of the menu items. `cx.bind_keys` registers
 `secondary-n`, where `secondary` is Cmd on macOS and Ctrl on other platforms. `set_menus` builds
 the menu bar and shows each item's shortcut from the same binding.

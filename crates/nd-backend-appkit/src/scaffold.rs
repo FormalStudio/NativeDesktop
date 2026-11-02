@@ -10,7 +10,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use nd_components::{PaneCollapsed, PaneProps, PaneRole};
+use nd_components::{PaneCollapsed, PaneProps, PaneResized, PaneRole};
 use nd_core::Size;
 use objc2::rc::Retained;
 use objc2::{DefinedClass, MainThreadOnly, define_class, msg_send};
@@ -138,6 +138,8 @@ pub(crate) struct PaneNative {
     pub props: PaneProps,
     /// The collapse state last applied or reported, so neither echoes (3.13 rule 2).
     pub collapsed: Cell<bool>,
+    /// A side pane's width last seen, so a resize reports once.
+    width: Cell<Option<f32>>,
     /// `ND_DEBUG_EXPOSE`: the content paints the window background so uncovered area shows.
     expose: bool,
     /// A sidebar's `edge_reveal()`.
@@ -182,6 +184,7 @@ impl PaneNative {
             item,
             props: props.clone(),
             collapsed: Cell::new(false),
+            width: Cell::new(None),
             expose,
             reveal,
         };
@@ -262,6 +265,12 @@ impl PaneNative {
             let height = self.host.frame().size.height.max(1.);
             self.host.setFrameSize(objc2_foundation::NSSize::new(f64::from(width), height));
         }
+        if !first
+            && props.width != self.props.width
+            && let Some(width) = props.width
+        {
+            self.place_divider(item, f64::from(width));
+        }
         if (first || props.collapsed != self.props.collapsed) && props.collapsed != self.collapsed.get() {
             self.collapsed.set(props.collapsed);
             // Once on screen, through the animator: the pane slides in and out as AppKit's own
@@ -277,6 +286,39 @@ impl PaneNative {
             }
         }
         self.update_reveal(props);
+    }
+
+    /// Moves the divider on the pane's inner side so the pane is `width` wide.
+    fn place_divider(&self, item: &NSSplitViewItem, width: f64) {
+        let Some(split) =
+            self.controller.parentViewController().and_then(|p| p.downcast::<NSSplitViewController>().ok())
+        else {
+            return;
+        };
+        let Some(index) = split.splitViewItems().iter().position(|i| std::ptr::eq(&*i, item)) else { return };
+        let view = split.splitView();
+        match self.role {
+            PaneRole::Sidebar => view.setPosition_ofDividerAtIndex(width, index as isize),
+            PaneRole::Inspector if index > 0 => {
+                let at = view.frame().size.width - width - view.dividerThickness();
+                view.setPosition_ofDividerAtIndex(at, index as isize - 1);
+            }
+            _ => {}
+        }
+    }
+
+    /// Reports a side pane's new width once the split view settles it. The first width seen
+    /// is the one it opened at, not a resize.
+    pub fn take_resize(&self) -> Option<PaneResized> {
+        if !matches!(self.role, PaneRole::Sidebar | PaneRole::Inspector) || self.collapsed.get() {
+            return None;
+        }
+        let width = self.host.frame().size.width.round() as f32;
+        if width <= 0. {
+            return None;
+        }
+        let last = self.width.replace(Some(width));
+        last.is_some_and(|w| w != width).then_some(PaneResized { width })
     }
 
     fn update_reveal(&self, props: &PaneProps) {
