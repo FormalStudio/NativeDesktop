@@ -88,6 +88,8 @@ impl SourceNode {
         self
     }
 
+    /// A second, smaller line under the title. With a [`meter`](Self::meter) the row grows to
+    /// hold the caption over the bar.
     pub fn caption(mut self, caption: impl Into<SharedString>) -> Self {
         self.caption = Some(caption.into());
         self
@@ -421,6 +423,8 @@ impl IntoElement for SourceTree {
 pub struct SourceItem {
     pub id: SharedString,
     pub title: SharedString,
+    /// A second, smaller line under the title.
+    pub caption: Option<SharedString>,
     pub icon: Option<Icon>,
     pub badge: Option<SharedString>,
     pub meter: Option<f32>,
@@ -429,7 +433,15 @@ pub struct SourceItem {
 
 /// One row: an id the app selects by, a title, and optionally an icon, a badge and children.
 pub fn source_item(id: impl Into<SharedString>, title: impl Into<SharedString>) -> SourceItem {
-    SourceItem { id: id.into(), title: title.into(), icon: None, badge: None, meter: None, children: Vec::new() }
+    SourceItem {
+        id: id.into(),
+        title: title.into(),
+        caption: None,
+        icon: None,
+        badge: None,
+        meter: None,
+        children: Vec::new(),
+    }
 }
 
 impl SourceItem {
@@ -440,6 +452,12 @@ impl SourceItem {
 
     pub fn badge(mut self, badge: impl Into<SharedString>) -> Self {
         self.badge = Some(badge.into());
+        self
+    }
+
+    /// A second, smaller line under the title: a volume's free space over its meter.
+    pub fn caption(mut self, caption: impl Into<SharedString>) -> Self {
+        self.caption = Some(caption.into());
         self
     }
 
@@ -457,6 +475,7 @@ impl SourceItem {
     fn flatten(self, parent: Option<&SharedString>, out: &mut Vec<SourceNode>) {
         let mut node = source_node(self.id.clone(), self.title).expanded(!self.children.is_empty());
         node.parent = parent.cloned();
+        node.caption = self.caption;
         node.icon = self.icon;
         node.badge = self.badge;
         node.meter = self.meter;
@@ -691,5 +710,13 @@ mod tests {
         assert_eq!(index.visible(nodes).len(), 4);
         assert!(nodes[0].section && !nodes[0].selectable);
         assert_eq!(nodes[2].parent.as_deref(), Some("inbox"));
+    }
+
+    #[test]
+    fn an_item_keeps_its_caption_and_meter() {
+        let tree = source_list("s").items([source_item("disk", "Data").caption("120 GB free").meter(0.5)]);
+        let node = &tree.0.props().nodes[0];
+        assert_eq!(node.caption.as_deref(), Some("120 GB free"));
+        assert_eq!(node.meter, Some(0.5));
     }
 }

@@ -724,6 +724,11 @@ pub fn source_tree_view(
         if expandable {
             row = row.aria_expanded(node.expanded);
         }
+        // A caption over a meter stacks three lines past the one-line pitch: the row grows
+        // to them with room above and below, as a two-line libadwaita row keeps.
+        if !compact && node.caption.is_some() && node.meter.is_some() {
+            row = row.py(theme.spacing.xs + px(2.));
+        }
         if selected {
             row = row.bg(selected_fill);
             if adwaita {

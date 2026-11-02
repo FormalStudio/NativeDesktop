@@ -284,6 +284,49 @@ mod gate_m6 {
         assert!(long.1.abs_diff(short.1) <= 1, "both meters are one length: {long:?} and {short:?}");
     }
 
+    /// A caption over a meter grows its row past the one-line pitch, with the meter clear of
+    /// the row's bottom edge, so it never runs into the next row.
+    pub fn gpui_source_row_fits_a_caption_over_a_meter() {
+        use gpui::AppContext as _;
+        if nd_gpui::gpui_platform::current_headless_renderer().ok().flatten().is_none() {
+            println!("skipped: GPUI has no headless renderer on this OS");
+            return;
+        }
+        let mut cx = headless();
+        let handle =
+            cx.open_window(gpui::size(gpui::px(260.), gpui::px(140.)), |_, cx| cx.new(|_| Volumes)).expect("window");
+        cx.run_until_parked();
+        let shot = cx.capture_screenshot(handle.into()).expect("screenshot");
+        let scale = shot.width() as f32 / 260.;
+        let theme = meter_theme();
+        let bg = theme.surface.sidebar.to_rgb();
+        let a = theme.accent.to_rgb();
+        let near = |c: u8, f: f32, by: f32| (f32::from(c) - f * 255.).abs() < by;
+        // The selected row's fill down a column past the text, and the meter's accent rows.
+        let x = shot.width() - (12. * scale) as u32;
+        let band: Vec<u32> = (0..shot.height())
+            .filter(|&y| {
+                let p = shot.get_pixel(x, y);
+                !(near(p[0], bg.r, 3.) && near(p[1], bg.g, 3.) && near(p[2], bg.b, 3.))
+            })
+            .collect();
+        let (top, bottom) = (*band.first().expect("a selected row"), *band.last().expect("a selected row"));
+        let meter: Vec<u32> = (0..shot.height())
+            .filter(|&y| {
+                (0..shot.width()).any(|x| {
+                    let p = shot.get_pixel(x, y);
+                    near(p[0], a.r, 24.) && near(p[1], a.g, 24.) && near(p[2], a.b, 24.)
+                })
+            })
+            .collect();
+        let meter_bottom = *meter.last().expect("a meter");
+        assert!((bottom - top) as f32 / scale > 40., "the row is taller than one line: {top}..{bottom}");
+        assert!(
+            (bottom as f32 - meter_bottom as f32) / scale >= 4.,
+            "the meter sits clear of the row's bottom: meter ends {meter_bottom}, row {bottom}"
+        );
+    }
+
     pub fn gpui_nav_goldens() {
         // GPUI renders headless only on macOS (Metal) and Linux (wgpu); Windows captures arrive
         // with the Fluent goldens (M3).
@@ -415,6 +458,37 @@ impl gpui::Render for Meters {
                 source_node("usb", "USB").meter(0.5),
             ],
             selected: None,
+            ..golden_tree()
+        };
+        gpui::div()
+            .size_full()
+            .bg(theme.surface.sidebar)
+            .child(source_tree_view(
+                NodeId(1),
+                &props,
+                None,
+                false,
+                None,
+                &Default::default(),
+                Paint { theme: &theme, marks: &Marks::default() },
+            ))
+            .into_any_element()
+    }
+}
+
+/// A selected volume with its free space as a caption over its meter, and one more row.
+struct Volumes;
+
+impl gpui::Render for Volumes {
+    fn render(&mut self, _window: &mut gpui::Window, _cx: &mut gpui::Context<Self>) -> impl gpui::IntoElement {
+        use gpui::{IntoElement, ParentElement, Styled};
+        let theme = meter_theme();
+        let props = SourceTreeProps {
+            nodes: vec![
+                source_node("disk", "Data").caption("120 GB free of 500 GB").meter(0.5),
+                source_node("usb", "USB"),
+            ],
+            selected: Some("disk".into()),
             ..golden_tree()
         };
         gpui::div()
@@ -570,6 +644,7 @@ fn main() {
         ("gate_m6::gpui_rail_rows_keep_their_artwork", gate_m6::gpui_rail_rows_keep_their_artwork),
         ("gate_m6::gpui_source_row_meter_fills_in_proportion", gate_m6::gpui_source_row_meter_fills_in_proportion),
         ("gate_m6::gpui_source_row_meters_share_one_width", gate_m6::gpui_source_row_meters_share_one_width),
+        ("gate_m6::gpui_source_row_fits_a_caption_over_a_meter", gate_m6::gpui_source_row_fits_a_caption_over_a_meter),
         ("gate_m6::gpui_nav_goldens", gate_m6::gpui_nav_goldens),
     ];
     let has = |flag: &str| args.iter().any(|a| a == flag);

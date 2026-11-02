@@ -23,7 +23,9 @@ The Gallery shows one page per component. Select a component in its source list,
   `.meter(0.62)` on an item draws a capacity bar under its title, as Files shows a volume's used
   space. The bar spans the row's text column from the title's start, with the badge and actions
   on the title's line, so every meter in a list has the same length. macOS's sidebar has no such
-  bar, so there it shows nothing.
+  bar, so there it shows nothing. `.caption("120 GB free")` puts a second, smaller line under the
+  title; with a meter the row grows to fit the caption over the bar ("120 GB free of 500 GB" over
+  the used space), and on macOS the outline view gives a captioned row its own height.
 - `sidebar`, `inspector`, `toolbar`: window structure, covered in [Patterns](../concepts/patterns.md).
 - `tab_strip` and `tab_view`: in-window tabs over a stack of pages. Windows that are tabs are a
   window option. See [windows and tabs](../guides/windows-and-tabs.md).

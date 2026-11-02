@@ -9,6 +9,8 @@ and the one it moves to.
   a press keeps nd focus on it, Tab stops on it and bindings of the contexts around it match while
   it has focus. The GPUI presenter rings the keyboard's row with the theme's focus ring. On macOS
   nd focus makes the table or collection view first responder.
+- `source_item(..).caption(..)`, and a source row with a caption over a meter grows to hold both
+  on the GPUI backend instead of running into the next row. `SourceItem` gained `caption`.
 - Taps, double taps and drags carry the keyboard modifiers held (`TapEvent::modifiers`, a
   `KeyModifiers` with `secondary()`). `.on_middle_click` reports a middle click and
   `.on_navigate` the mouse's back and forward buttons (and the three-finger swipe on macOS).
