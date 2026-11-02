@@ -169,6 +169,9 @@ pub(crate) struct VirtualList {
     pub gestures: crate::gestures::Gestures,
     pub window_id: nd_core::WindowId,
     pub selection_color: Hsla,
+    /// The selection while the list has the keyboard: the accent's tint, as Finder and Files
+    /// show a focused list's rows.
+    pub focused_selection_color: Hsla,
     /// Under the row the pointer is over, in a list whose rows select or activate.
     pub hover_color: Hsla,
     pub sidebar: SidebarSelection,
@@ -750,6 +753,8 @@ impl gpui::Element for VirtualList {
                         let at = point(inner.origin.x, inner.origin.y + (inner.size.height - h) / 2.);
                         window.paint_quad(fill(Bounds::new(at, size(px(3.), h)), pill).corner_radii(px(1.5)));
                     }
+                } else if self.focus.focus.is_focused(window) {
+                    window.paint_quad(fill(*b, self.focused_selection_color));
                 } else {
                     window.paint_quad(fill(*b, self.selection_color));
                 }
@@ -773,16 +778,18 @@ impl gpui::Element for VirtualList {
                 ring.border_widths = (px(2.)).into();
                 window.paint_quad(ring);
             }
-            if self.focus.ring(window) {
-                // The keyboard's row carries the ring, as a focused GtkListView's row does; with
-                // no row to show, the list's edge does.
-                let cursor = self.presenters.borrow().get(&self.node).and_then(|p| p.cursor);
-                let row = cursor.or_else(|| self.props.selected.last().copied());
-                let placed = row.and_then(|r| prepainted.placed.iter().find(|(i, _)| self.rows[*i].tag.row == r));
-                let b = match placed {
-                    Some((_, b)) if self.props.kind == ListKind::Grid => *b,
-                    Some((_, b)) => Bounds::new(point(view.origin.x, b.origin.y), size(view.size.width, b.size.height)),
-                    None => view,
+            // The keyboard's row carries the ring only where the selection does not already mark
+            // it (a Ctrl+arrow walk), as in Finder: a focused list's selection is its tint, and a
+            // list with no such row draws no ring round its edge.
+            let cursor = self.presenters.borrow().get(&self.node).and_then(|p| p.cursor);
+            let placed = cursor
+                .filter(|r| !selected_rows.contains(r))
+                .and_then(|r| prepainted.placed.iter().find(|(i, _)| self.rows[*i].tag.row == r));
+            if let Some((_, b)) = placed.filter(|_| self.focus.ring(window)) {
+                let b = if self.props.kind == ListKind::Grid {
+                    *b
+                } else {
+                    Bounds::new(point(view.origin.x, b.origin.y), size(view.size.width, b.size.height))
                 };
                 let b = if self.props.inset {
                     let s = self.sidebar;

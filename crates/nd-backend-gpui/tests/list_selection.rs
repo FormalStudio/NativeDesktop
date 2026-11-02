@@ -170,9 +170,10 @@ pub fn keys_move_extend_and_select_all() {
     assert_eq!(list.selected(), (0..20).collect::<Vec<_>>());
 }
 
-/// A list is a focus target: `window.focus` reaches it and keys move its selection, a press keeps
-/// nd focus on it, and keyboard focus rings the cursor row where a pointer press shows none.
-pub fn a_list_takes_focus_by_id_and_rings_its_row_for_the_keyboard() {
+/// A list is a focus target: `window.focus` reaches it and keys move its selection, and a press
+/// keeps nd focus on it. Its selection is the focus mark, as in Finder: a row the keyboard
+/// selected looks the same as one a press selected, with no ring round it or the list.
+pub fn a_list_takes_focus_by_id_and_its_selection_marks_it() {
     let (mut cx, host, window, list, _) = files(10);
     assert!(cx.update(|cx| host.update(cx, |app| app.focus_id(window, "files"))), "the list takes focus by id");
     frames(&mut cx, &host, 3);
@@ -192,17 +193,8 @@ pub fn a_list_takes_focus_by_id_and_rings_its_row_for_the_keyboard() {
     dispatch(&mut cx, &host, window, key("down"));
     assert_eq!(list.selected(), vec![4]);
     let keyboard = shot(&mut cx);
-    let scale = keyboard.width() as f32 / 300.;
-    let (top, bottom) = ((y(4) - 12.) * scale, (y(4) + 12.) * scale);
-    let mut inside = 0;
-    for (x, y, p) in keyboard.enumerate_pixels() {
-        if p != pointer.get_pixel(x, y) {
-            let y = y as f32;
-            assert!(y >= top - 2. && y <= bottom + 2., "only the row's ring differs, not ({x}, {y})");
-            inside += 1;
-        }
-    }
-    assert!(inside > 200, "the keyboard's row carries a ring ({inside} pixels)");
+    let differ = keyboard.enumerate_pixels().filter(|(x, y, p)| *p != pointer.get_pixel(*x, *y)).count();
+    assert_eq!(differ, 0, "the keyboard's row is drawn as the pointer's, with no ring");
 }
 
 pub fn a_marquee_from_empty_space_selects_what_it_sweeps() {
@@ -377,8 +369,8 @@ fn main() {
     let tests: [(&str, fn()); 7] = [
         ("gpui_selection::a_cell_field_renames_inline", a_cell_field_renames_inline),
         (
-            "gpui_selection::a_list_takes_focus_by_id_and_rings_its_row_for_the_keyboard",
-            a_list_takes_focus_by_id_and_rings_its_row_for_the_keyboard,
+            "gpui_selection::a_list_takes_focus_by_id_and_its_selection_marks_it",
+            a_list_takes_focus_by_id_and_its_selection_marks_it,
         ),
         ("gpui_selection::a_marquee_past_the_edge_scrolls", a_marquee_past_the_edge_scrolls),
         (

@@ -722,6 +722,7 @@ impl<'a> Build<'a> {
         };
         // Half the selection's step: libadwaita lists hover at a twenty-fifth of the text
         // colour against the tenth they select at.
+        let focused_selection_color = if props.inset { selection } else { theme.selection };
         let hover_color =
             if props.inset { selection.opacity(0.5) } else { theme.hover(self.top().background).opacity(0.6) };
         crate::virtual_list::VirtualList {
@@ -735,6 +736,7 @@ impl<'a> Build<'a> {
             gestures: self.backend.gestures.clone(),
             window_id: self.window_id,
             selection_color: selection,
+            focused_selection_color,
             hover_color,
             sidebar,
             disclosure_color: self.top().text,
