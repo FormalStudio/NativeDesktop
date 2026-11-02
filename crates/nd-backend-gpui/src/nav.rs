@@ -444,6 +444,7 @@ pub fn source_tree_view(
             list = list.child(
                 div()
                     .flex()
+                    .flex_shrink_0()
                     .items_center()
                     .h(px(FLUENT_ROW))
                     .px(px(12.))
@@ -459,6 +460,7 @@ pub fn source_tree_view(
             marks.text(&node.title, theme.text.primary, &[], body, FontWeight::BOLD);
             list = list.child(
                 div()
+                    .flex_shrink_0()
                     .pt(if first { px(0.) } else { px(12.) })
                     .pb(px(10.))
                     .px(px(12.) - theme.spacing.sm)
@@ -476,6 +478,7 @@ pub fn source_tree_view(
             marks.text(&node.title, theme.text.secondary, &[], footnote, semibold);
             list = list.child(
                 div()
+                    .flex_shrink_0()
                     .pt(theme.spacing.md)
                     .pb(theme.spacing.sm)
                     .px(theme.spacing.sm)
@@ -595,6 +598,7 @@ pub fn source_tree_view(
             .flex()
             .flex_row()
             .items_center()
+            .flex_shrink_0()
             .min_h(row_height)
             .rounded(theme.radius.md)
             .text_color(fg)

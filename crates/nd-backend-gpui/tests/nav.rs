@@ -384,6 +384,37 @@ mod gate_m6 {
         );
     }
 
+    /// A source list taller than its pane scrolls: every row keeps its height, so a caption
+    /// over a meter never lands on the meter of the row above.
+    pub fn gpui_source_list_overflow_scrolls_instead_of_squashing() {
+        use gpui::AppContext as _;
+        if nd_gpui::gpui_platform::current_headless_renderer().ok().flatten().is_none() {
+            println!("skipped: GPUI has no headless renderer on this OS");
+            return;
+        }
+        let mut cx = headless();
+        let handle =
+            cx.open_window(gpui::size(gpui::px(260.), gpui::px(200.)), |_, cx| cx.new(|_| Crowded)).expect("window");
+        cx.run_until_parked();
+        let shot = cx.capture_screenshot(handle.into()).expect("screenshot");
+        let scale = shot.width() as f32 / 260.;
+        let a = meter_theme().accent.to_rgb();
+        let near = |c: u8, f: f32| (f32::from(c) - f * 255.).abs() < 24.;
+        let accent_row = |y: u32| {
+            (0..shot.width()).any(|x| {
+                let p = shot.get_pixel(x, y);
+                near(p[0], a.r) && near(p[1], a.g) && near(p[2], a.b)
+            })
+        };
+        let tops: Vec<u32> = (0..shot.height()).filter(|&y| accent_row(y) && (y == 0 || !accent_row(y - 1))).collect();
+        assert!(tops.len() >= 2, "at least two meters in view: {tops:?}");
+        assert!(tops.len() < 8, "the rows past the pane are scrolled out of view, not squeezed in: {tops:?}");
+        for pair in tops.windows(2) {
+            let pitch = (pair[1] - pair[0]) as f32 / scale;
+            assert!(pitch > 44., "a row with a caption over its meter keeps its height: {pitch} between {pair:?}");
+        }
+    }
+
     pub fn gpui_nav_goldens() {
         // GPUI renders headless only on macOS (Metal) and Linux (wgpu); Windows captures arrive
         // with the Fluent goldens (M3).
@@ -593,6 +624,36 @@ impl gpui::Render for Volumes {
     }
 }
 
+/// Eight volumes with a caption over a meter, more than a short pane holds.
+struct Crowded;
+
+impl gpui::Render for Crowded {
+    fn render(&mut self, _window: &mut gpui::Window, _cx: &mut gpui::Context<Self>) -> impl gpui::IntoElement {
+        use gpui::{IntoElement, ParentElement, Styled};
+        let theme = meter_theme();
+        let props = SourceTreeProps {
+            nodes: (0..8)
+                .map(|i| source_node(format!("disk{i}"), format!("Disk {i}")).caption("120 GB free").meter(0.5))
+                .collect(),
+            selected: None,
+            ..golden_tree()
+        };
+        gpui::div()
+            .size_full()
+            .bg(theme.surface.sidebar)
+            .child(source_tree_view(
+                NodeId(1),
+                &props,
+                None,
+                false,
+                None,
+                &Default::default(),
+                Paint { theme: &theme, marks: &Marks::default() },
+            ))
+            .into_any_element()
+    }
+}
+
 /// One source row with a meter `.0` full.
 struct Meter(f32);
 
@@ -734,6 +795,10 @@ fn main() {
         (
             "gate_m6::gpui_source_rows_take_menus_and_middle_clicks",
             gate_m6::gpui_source_rows_take_menus_and_middle_clicks,
+        ),
+        (
+            "gate_m6::gpui_source_list_overflow_scrolls_instead_of_squashing",
+            gate_m6::gpui_source_list_overflow_scrolls_instead_of_squashing,
         ),
         ("gate_m6::gpui_nav_goldens", gate_m6::gpui_nav_goldens),
     ];

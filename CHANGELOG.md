@@ -5,6 +5,8 @@ and the one it moves to.
 
 ## Unreleased
 
+- A source list taller than its pane scrolls on the GPUI backend: rows and section headers keep
+  their height instead of shrinking into each other.
 - `window.scroll_into_view(cx, id)` and `App::scroll_into_view(window, id)` scroll every scroll
   view around an element, horizontal ones included, until it shows. Automation's
   `scrollIntoView` reaches scroll views on the GPUI backend and works on macOS through
