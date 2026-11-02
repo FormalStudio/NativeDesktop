@@ -12,6 +12,7 @@ use nd_components::*;
 use nd_core::semantic::Role;
 use nd_ui::backend::{NodeKind, WidgetKind};
 use nd_ui::prelude::*;
+use nd_ui::semantics::SemanticAction;
 use nd_ui::test_app::TestApp;
 use nd_ui::test_backend::TestBackend;
 use nd_ui::{NodeId, Size};
@@ -480,4 +481,21 @@ fn banner_reports_its_button_and_hides_from_its_own_handler() {
     let tree = cx.semantic_tree();
     let (_, banner) = tree.nodes().find(|(_, n)| n.test_id.as_deref() == Some("update")).expect("banner");
     assert_eq!((banner.role, banner.name.as_str()), (Role::Status, "An update is ready"));
+}
+
+#[test]
+fn assistive_tech_reaches_the_banner_button() {
+    let mut cx = TestApp::with_backend(TestBackend::new());
+    let handle = cx.open_window(WINDOW, |_, cx| cx.new(|_| Banners { revealed: true, clicks: 0 }));
+    cx.run_until_idle();
+    let tree = cx.semantic_tree();
+    let (_, button) = tree.nodes().find(|(_, n)| n.test_id.as_deref() == Some("update.action")).expect("button part");
+    assert_eq!((button.role, button.name.as_str()), (Role::Button, "Restart"));
+    let id = button.id;
+    cx.perform(id, &SemanticAction::Click).expect("click");
+    cx.run_until_idle();
+    read(&cx, &handle, |b| assert_eq!((b.clicks, b.revealed), (1, false)));
+    // Hidden, it has no button to press.
+    let node = node_of::<BannerKind>(&cx);
+    assert!(cx.perform(node, &SemanticAction::Click).is_err());
 }

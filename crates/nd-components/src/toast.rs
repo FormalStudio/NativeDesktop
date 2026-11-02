@@ -14,6 +14,7 @@ use std::time::Duration;
 use nd_core::semantic::Role;
 use nd_ui::backend::Props;
 use nd_ui::prelude::*;
+use nd_ui::semantics::{ActionError, Response, SemanticAction, SemanticPart, Semantics, WidgetSemantics};
 use nd_ui::{Key, NativeElement, StyleRefinement};
 
 /// Toast geometry, the same on every backend: the toast's design, not system metrics.
@@ -324,16 +325,36 @@ pub struct BannerKind;
 
 pub struct Banner(NativeElement<BannerProps>);
 
-fn describe_banner(props: &Props) -> (Role, String) {
-    let name = props.downcast_ref::<BannerProps>().map(|p| p.title.to_string()).unwrap_or_default();
-    (Role::Status, name)
+impl WidgetSemantics for BannerProps {
+    fn semantics(&self) -> Semantics {
+        let mut s = Semantics::new(Role::Status, self.title.to_string());
+        // The button is part of the one native banner; a click on it reaches `respond`.
+        if let Some(action) = &self.action {
+            s.parts.push(SemanticPart {
+                key: "action",
+                role: Role::Button,
+                name: action.to_string(),
+                value: None,
+                placeholder: None,
+                focused: false,
+            });
+        }
+        s
+    }
+
+    fn respond(&self, action: &SemanticAction) -> Option<Response> {
+        match action {
+            SemanticAction::Click if self.action.is_some() && self.revealed => Some(Ok(Box::new(BannerActionClicked))),
+            SemanticAction::Click => Some(Err(ActionError::NotActionable("the banner has no button showing".into()))),
+            _ => None,
+        }
+    }
 }
 
 /// A message bar across its container: `title` and an optional button. Hidden until revealed.
 pub fn banner(id: impl Into<SharedString>, title: impl Into<SharedString>) -> Banner {
-    nd_ui::semantics::describe_widget::<BannerKind>(describe_banner);
     let props = BannerProps { title: title.into(), action: None, revealed: true, style: StyleRefinement::default() };
-    Banner(NativeElement::new::<BannerKind>(Key::Id(id.into()), props).w_full())
+    Banner(NativeElement::described::<BannerKind>(Key::Id(id.into()), props).w_full())
 }
 
 impl Banner {
