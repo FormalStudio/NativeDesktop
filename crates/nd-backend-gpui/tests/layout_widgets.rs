@@ -68,6 +68,9 @@ enum Kind {
     Search,
     /// The same with the search field kept in the header.
     PersistentSearch,
+    /// A path bar too long for the header between a sidebar and an inspector, as a flexible
+    /// item before two buttons.
+    FlexibleItem,
 }
 
 #[derive(Default)]
@@ -173,6 +176,26 @@ impl Render for Scene {
                     .toolbar(bar)
                     .sidebar(sidebar().min_w(px(220.)).child(text("Folders")))
                     .content(text("Body"))
+                    .into_any_element();
+            }
+            Kind::FlexibleItem => {
+                let path = div()
+                    .id("path")
+                    .min_w(px(80.))
+                    .flex_1()
+                    .overflow_hidden()
+                    .child(text("Home / Projects / NativeDesktop / crates / nd-backend-gpui / tests / fixtures"));
+                let bar = toolbar()
+                    .hide_title()
+                    .navigation(button("back", "Back"))
+                    .flexible_item(path)
+                    .item(button("new", "New"))
+                    .item(button("info", "Info"));
+                return scaffold()
+                    .toolbar(bar)
+                    .sidebar(sidebar().width(px(220.)).child(text("Folders")))
+                    .content(text("Body"))
+                    .inspector(inspector().width(px(260.)).child(text("Info")))
                     .into_any_element();
             }
             Kind::Resizable => {
@@ -678,6 +701,21 @@ mod gate_m6 {
         assert_eq!(after.origin.y, find.origin.y, "still in the header");
     }
 
+    /// A flexible item gives its room back when the header is short: the buttons after it stay
+    /// in the content's header, clear of the inspector, and the item keeps its least width.
+    pub fn gpui_flexible_toolbar_item_gives_way_in_a_short_header() {
+        let o = open(Kind::FlexibleItem);
+        let inspector = o.node("nd-inspector").bounds.expect("inspector laid out");
+        let info = o.node("info").bounds.expect("the last button is in the header");
+        assert!(
+            info.origin.x + info.size.width <= inspector.origin.x + 0.5,
+            "the last button {info:?} runs under the inspector {inspector:?}"
+        );
+        let path = o.node("path").bounds.expect("path laid out");
+        assert!(path.size.width >= 79.5, "the item keeps its least width: {path:?}");
+        assert!(path.size.width < 300., "the item gave its room back: {path:?}");
+    }
+
     /// WinUI's title bar: the search box is the bar's content, centred and stretched to the
     /// Gallery's 580 px where the window has room.
     pub fn gpui_toolbar_search_fills_the_title_bar_on_windows() {
@@ -910,6 +948,10 @@ fn main() {
         (
             "gate_m6::gpui_persistent_toolbar_search_stays_in_the_header",
             gate_m6::gpui_persistent_toolbar_search_stays_in_the_header,
+        ),
+        (
+            "gate_m6::gpui_flexible_toolbar_item_gives_way_in_a_short_header",
+            gate_m6::gpui_flexible_toolbar_item_gives_way_in_a_short_header,
         ),
         (
             "gate_m6::gpui_split_hidden_subtree_is_not_hit_or_painted",

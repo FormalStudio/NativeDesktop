@@ -297,6 +297,7 @@ impl Build<'_> {
             self.search_toggle(id, field, window)
         } else if is::<ToolbarItem>(kind) {
             let fills = self.fill_field.get().is_some_and(|f| node.children.contains(&f));
+            let flexible = props::<ToolbarItemProps>(node).is_some_and(|p| p.flexible);
             // The item occludes the title row under it, so a press on it is never a window drag
             // (on Windows, never the caption). That also hides it from the window root's pointer
             // listeners, which GPUI only calls where the root is hovered: the item hands its own
@@ -308,6 +309,7 @@ impl Build<'_> {
             div()
                 .flex()
                 .when(fills, |d| d.w_full())
+                .when(flexible, |d| d.flex_1().min_w_0())
                 .occlude()
                 .capture_any_mouse_down(move |e, window, cx| {
                     if e.button == MouseButton::Left {

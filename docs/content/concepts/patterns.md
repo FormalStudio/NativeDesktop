@@ -51,7 +51,9 @@ your own buttons, and macOS gives them the system look and sizing.
 A `search_field` added with `.item(..)` follows each platform: in the toolbar on macOS, the
 title bar's content on Windows, and on Linux a toggle in the header that opens libadwaita's
 search bar under it. `.persistent_search(search_field(..))` keeps the field in the Linux header
-instead, for a window whose search is always in use.
+instead, for a window whose search is always in use. `.flexible_item(..)` takes the room the
+row leaves and gives it back first when the window narrows, down to its content's least width:
+a path bar, so the buttons after it never run under the inspector.
 
 The sidebar holds a `source_list`: sections of items, each with an icon and a badge. Your state
 owns the selection. On macOS, the list is an `NSOutlineView` in source-list style.

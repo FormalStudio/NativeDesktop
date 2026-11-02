@@ -59,6 +59,9 @@ pub struct ToolbarItemProps {
     /// A search field that stays in the header on Linux instead of behind libadwaita's search
     /// toggle and bar.
     pub persistent: bool,
+    /// Takes the room the row leaves and gives it back first when the row is short (a path
+    /// bar), down to the item's own least width.
+    pub flexible: bool,
 }
 
 /// An item the OS draws and implements itself.
@@ -145,6 +148,12 @@ impl Toolbar {
     /// Windows and macOS keep it in the toolbar either way.
     pub fn persistent_search(self, field: impl IntoElement) -> Self {
         self.push(field, ToolbarItemProps { persistent: true, ..ToolbarItemProps::default() })
+    }
+
+    /// Takes the room the row leaves, and gives it back before any other item when the window
+    /// narrows: a path bar or a location field. Its content keeps its own least width.
+    pub fn flexible_item(self, item: impl IntoElement) -> Self {
+        self.push(item, ToolbarItemProps { flexible: true, ..ToolbarItemProps::default() })
     }
 
     /// Kept in the middle of the window's toolbar: the conversation in a chat window.

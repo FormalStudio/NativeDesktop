@@ -5,6 +5,12 @@ and the one it moves to.
 
 ## Unreleased
 
+- `toolbar().flexible_item(..)` takes the room the header leaves and gives it back first when the
+  window narrows, so the items after it stay clear of the inspector on the GPUI backend.
+  `ToolbarItemProps` gained `flexible`.
+- A focused list, table or grid on the GPUI backend marks its selection with `theme.selection`
+  and draws no focus ring round a selected row or round the list itself; the ring shows only on
+  a keyboard row the selection does not cover.
 - `text.accent` keeps a 1.6:1 step of lightness from `text.primary`, still 4.5:1 on every surface:
   a pastel matugen accent on a dark scheme no longer reads as body text in links, mentions and
   search matches.
@@ -16,7 +22,7 @@ and the one it moves to.
   `scrollRectToVisible:`.
 - A list, table, grid or tree with a selection is a focus target: `window.focus(id)` reaches it,
   a press keeps nd focus on it, Tab stops on it and bindings of the contexts around it match while
-  it has focus. The GPUI presenter rings the keyboard's row with the theme's focus ring. On macOS
+  it has focus. On macOS
   nd focus makes the table or collection view first responder.
 - `toolbar().persistent_search(search_field(..))` keeps the field in the header on Linux
   instead of behind the search toggle and bar. `ToolbarItemProps` gained `persistent`.
