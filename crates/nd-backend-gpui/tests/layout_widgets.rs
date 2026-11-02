@@ -193,7 +193,7 @@ impl Render for Scene {
                     .item(button("info", "Info"));
                 return scaffold()
                     .toolbar(bar)
-                    .sidebar(sidebar().width(px(220.)).child(text("Folders")))
+                    .sidebar(sidebar().width(px(220.)).child(div().id("folders").child(text("Folders"))))
                     .content(text("Body"))
                     .inspector(inspector().width(px(260.)).child(text("Info")))
                     .into_any_element();
@@ -702,7 +702,8 @@ mod gate_m6 {
     }
 
     /// A flexible item gives its room back when the header is short: the buttons after it stay
-    /// in the content's header, clear of the inspector, and the item keeps its least width.
+    /// in the content's header, clear of the inspector, and the item keeps its least width. With
+    /// nothing over the sidebar, the sidebar has no header of its own.
     pub fn gpui_flexible_toolbar_item_gives_way_in_a_short_header() {
         let o = open(Kind::FlexibleItem);
         let inspector = o.node("nd-inspector").bounds.expect("inspector laid out");
@@ -714,6 +715,9 @@ mod gate_m6 {
         let path = o.node("path").bounds.expect("path laid out");
         assert!(path.size.width >= 79.5, "the item keeps its least width: {path:?}");
         assert!(path.size.width < 300., "the item gave its room back: {path:?}");
+        // No item and no window controls over the sidebar: no empty header band above it.
+        let folders = o.node("folders").bounds.expect("sidebar laid out");
+        assert!(folders.origin.y < 1., "the sidebar runs to the top: {folders:?}");
     }
 
     /// WinUI's title bar: the search box is the bar's content, centred and stretched to the

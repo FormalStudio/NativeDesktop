@@ -5,6 +5,9 @@ and the one it moves to.
 
 ## Unreleased
 
+- A scaffold's sidebar on the libadwaita look gets no header bar of its own when nothing sits
+  over it and the window draws no controls there (a tiling compositor): it runs to the top
+  instead of under an empty band.
 - `toolbar().flexible_item(..)` takes the room the header leaves and gives it back first when the
   window narrows, so the items after it stay clear of the inspector on the GPUI backend.
   `ToolbarItemProps` gained `flexible`.

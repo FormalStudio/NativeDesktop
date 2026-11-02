@@ -254,15 +254,25 @@ impl Build<'_> {
                 let mut split = self.split.borrow_mut();
                 let split = split.as_mut().expect("split headers");
                 let (sidebar, content, inspector) = split.insets(self.insets);
-                split.sidebar = Some(self.title_row(
-                    id,
-                    ElementId::NamedInteger("sidebar".into(), id.0),
-                    node,
-                    items,
-                    None,
-                    sidebar,
-                    window,
-                ));
+                // A sidebar header with no item and no window controls over it would be an
+                // empty band (a tiling compositor draws no controls): the sidebar runs to the top.
+                let holds = node.children[..over_sidebar].iter().filter_map(|c| self.nodes.get(c)).any(|n| {
+                    is_kind::<ToolbarItem>(n)
+                        || props::<SystemItemProps>(n).is_some_and(|p| {
+                            matches!(p.item, SystemItem::ToggleSidebar | SystemItem::ToggleInspector)
+                        })
+                });
+                split.sidebar = (holds || sidebar.leading > 0. || sidebar.trailing > 0.).then(|| {
+                    self.title_row(
+                        id,
+                        ElementId::NamedInteger("sidebar".into(), id.0),
+                        node,
+                        items,
+                        None,
+                        sidebar,
+                        window,
+                    )
+                });
                 let header = self.title_row(id, ElementId::Integer(id.0), node, rest, centered, content, window);
                 // A search over the sidebar opens its bar under the sidebar's header, as a
                 // conversation list's search does in Fractal and Polari.
