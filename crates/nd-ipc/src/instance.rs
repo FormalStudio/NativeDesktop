@@ -24,6 +24,10 @@ use crate::framing::{connect, read_line, write_json};
 const FORWARD_TIMEOUT: Duration = Duration::from_secs(2);
 const ACQUIRE_ATTEMPTS: u32 = 25;
 const ACQUIRE_PAUSE: Duration = Duration::from_millis(100);
+/// `nd_diag::crash::ARG`. nd-diag re-launches the app binary with it to run the minidump server,
+/// and an app that calls [`acquire`] before `Application::run` would otherwise forward that
+/// helper to itself as a second launch.
+const CRASH_HELPER_ARG: &str = "--nd-crash-handler";
 
 /// What a launch carried: command line args, the subset of them that are URLs
 /// (`myapp://open/1`), and the working directory the launcher ran in.
@@ -78,10 +82,10 @@ pub enum Instance {
 
 pub struct Primary {
     launches: mpsc::Receiver<Launch>,
-    task: JoinHandle<()>,
-    socket: PathBuf,
+    /// The accept loop and the socket it owns; `None` for the crash helper, which owns neither.
+    listening: Option<(JoinHandle<()>, PathBuf)>,
     // Held for its lock; closed on drop.
-    _lock: File,
+    _lock: Option<File>,
 }
 
 impl Primary {
@@ -98,15 +102,24 @@ impl Primary {
 
 impl Drop for Primary {
     fn drop(&mut self) {
-        self.task.abort();
+        let Some((task, socket)) = &self.listening else { return };
+        task.abort();
         if !cfg!(windows) {
-            let _ = fs::remove_file(&self.socket);
+            let _ = fs::remove_file(socket);
         }
     }
 }
 
 /// Becomes the primary instance or forwards `launch` to it. Must run inside a tokio runtime.
+///
+/// For nd-diag's crash helper this takes no lock and forwards nothing: it returns a [`Primary`]
+/// that never receives a launch, so the app goes on into `Application::run`, where nd-diag runs
+/// the helper and exits.
 pub async fn acquire(endpoint: &Endpoint, launch: &Launch) -> Result<Instance, Error> {
+    if launch.args.first().is_some_and(|a| a == CRASH_HELPER_ARG) {
+        let (_, launches) = mpsc::channel(1);
+        return Ok(Instance::Primary(Primary { launches, listening: None, _lock: None }));
+    }
     if let Some(dir) = endpoint.lock_path().parent() {
         fs::create_dir_all(dir)?;
     }
@@ -177,7 +190,7 @@ fn listen(endpoint: &Endpoint, lock: File) -> Result<Primary, Error> {
             });
         }
     });
-    Ok(Primary { launches, task, socket: endpoint.socket_path().to_path_buf(), _lock: lock })
+    Ok(Primary { launches, listening: Some((task, endpoint.socket_path().to_path_buf())), _lock: Some(lock) })
 }
 
 async fn serve_one(stream: crate::LocalStream, tx: mpsc::Sender<Launch>) -> io::Result<()> {

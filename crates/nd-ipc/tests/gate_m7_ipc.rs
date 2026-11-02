@@ -117,6 +117,26 @@ mod gate_m7_ipc {
         // docs:end instance
     }
 
+    #[tokio::test]
+    async fn the_crash_helper_is_not_a_second_launch() {
+        let dir = tempfile::tempdir().unwrap();
+        let endpoint = Endpoint::at_path(dir.path().join("i.sock"));
+        let Instance::Primary(mut primary) = acquire(&endpoint, &Launch::default()).await.unwrap() else {
+            panic!("not primary")
+        };
+        let helper = Launch::from_args(["--nd-crash-handler".into(), "/tmp/nd-crash-1.sock".into(), "/tmp/d".into()]);
+        let Instance::Primary(mut detached) = acquire(&endpoint, &helper).await.unwrap() else {
+            panic!("the helper was forwarded")
+        };
+        assert!(detached.next_launch().await.is_none());
+        drop(detached);
+        assert!(primary.try_next_launch().is_none());
+        // The real primary still owns the socket.
+        let second = Launch::from_args(["again".into()]);
+        assert!(matches!(acquire(&endpoint, &second).await.unwrap(), Instance::Forwarded));
+        assert_eq!(primary.next_launch().await.unwrap().args, ["again"]);
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn stale_socket_from_a_crashed_primary_is_replaced() {
