@@ -133,9 +133,12 @@ GTK colours put sidebars and cards), `primary` to `accent`, `error` to
 so those two come from the `green` and `yellow` custom colors.
 
 A change to the file reaches the app within about 70 ms. The watcher listens on the parent
-directory (atomic writers replace the file), reads the first event at once, reads again 50 ms later,
-and polls the modification time once a second as a fallback. The app skips a half-written or invalid
-file and keeps the last palette. On other OSes, you opt in to the file through `ND_THEME_JSON`.
+directory (atomic writers replace the file) and, when the file is a symlink, on the directory of
+the file it points at, following the link when it's retargeted. Only writes count: a closed write,
+a create, a rename into place, or a removal. Opens and reads don't, so the app reading its own
+palette never wakes the watcher, and an idle app spends no CPU on it. The first write of a burst is
+read at once, and writes in the next 50 ms are read once at its end. The app skips a half-written
+or invalid file and keeps the last palette. On other OSes, you opt in to the file through `ND_THEME_JSON`.
 
 ## The appearance audit
 

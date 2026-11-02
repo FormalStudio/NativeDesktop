@@ -32,6 +32,10 @@ and the one it moves to.
   `DragItem::FILES`, with `FileDrop` still getting the drops no target takes. `DragOver`,
   `Dropped` and `DragSource` carry the modifiers held. `DragItem` gained `ids`, `DropSlot` gained
   `on`, and `DragSource`, `DragOver`, `Dropped` and `SourceTreeProps` gained fields.
+- The theme file watcher counts writes only. It read its own reads of FormalShell's
+  `theme.json` as changes, so every app re-read the palette about 20 times a second while idle
+  (9 CPU ticks a minute for an idle `hello`, now 0). It follows a symlinked file to its target
+  and no longer polls.
 
 ## v0.6.1
 

@@ -1,10 +1,14 @@
 //! Watches one theme file (`theme.json`, `theme.toml`) and hands each new, parseable version to
 //! a callback on the watcher's thread. The parent directory is watched, not the file: atomic
-//! rename writers replace the inode and a watch on the file would die with it. The first event
-//! of a burst is read at once (a recolour lands in one frame), and the burst is read again
-//! [`DEBOUNCE`] later, so a writer that was still writing is picked up whole; events in between
-//! cost nothing. An mtime stat every [`POLL`] catches anything the OS dropped. A file that
-//! fails to parse (half written, mid-edit) is skipped, so the last good theme stays.
+//! rename writers replace the inode and a watch on the file would die with it. When the path is
+//! a symlink, the directory of the file it points at is watched too, and the watch follows the
+//! link when it is retargeted. Only writes count (a closed write, a create, a rename in, a
+//! remove): the watcher's own reads raise open and close events on the same directory, and
+//! counting those had every app read its palette again forever. The first write of a burst is
+//! read at once (a recolour lands in one frame); writes in the next [`DEBOUNCE`] are read once
+//! at its end. A file that fails to parse (half written, mid-edit) is skipped, so the last good
+//! theme stays. Nothing runs between writes, except a retry every [`POLL`] while a watched
+//! directory is gone.
 
 // Modification times are std's type, and a browser tab has no theme files to watch.
 #![allow(clippy::disallowed_types)]
@@ -13,8 +17,8 @@ use nd_core::time::{Duration, Instant};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
-use std::time::SystemTime;
 
+use notify::event::{AccessKind, AccessMode, EventKind, ModifyKind};
 use notify::{RecursiveMode, Watcher};
 
 pub const DEBOUNCE: Duration = Duration::from_millis(50);
@@ -27,19 +31,50 @@ pub struct ThemeFileWatcher {
 }
 
 enum Msg {
-    Changed,
+    /// A write under a watched directory, with the paths it names. `rescan` is the OS saying
+    /// it dropped events.
+    Wrote {
+        paths: Vec<PathBuf>,
+        rescan: bool,
+    },
     Stop,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct Stamp {
-    modified: Option<SystemTime>,
-    len: u64,
+/// Whether an event changes a file's contents or which file a name points at. Opens, reads and
+/// metadata changes do not. On Linux every write ends in a close-write, so the modify events
+/// before it are left out and the file is read once it is whole.
+fn is_write(kind: &EventKind) -> bool {
+    match kind {
+        EventKind::Access(AccessKind::Close(AccessMode::Write)) => true,
+        EventKind::Access(_) => false,
+        EventKind::Modify(ModifyKind::Metadata(_)) => false,
+        EventKind::Modify(ModifyKind::Data(_)) => !cfg!(any(target_os = "linux", target_os = "android")),
+        EventKind::Create(_) | EventKind::Remove(_) | EventKind::Modify(_) => true,
+        EventKind::Any | EventKind::Other => true,
+    }
 }
 
-fn stamp(path: &Path) -> Option<Stamp> {
-    let meta = std::fs::metadata(path).ok()?;
-    Some(Stamp { modified: meta.modified().ok(), len: meta.len() })
+/// The directories to watch and the file paths inside them that are the theme: the path's own
+/// directory and, when the path is a symlink, the directory of the file it resolves to.
+#[derive(Clone, PartialEq, Eq)]
+struct Targets {
+    dirs: Vec<PathBuf>,
+    files: Vec<PathBuf>,
+}
+
+fn targets(path: &Path, dir: &Path) -> Targets {
+    let mut t = Targets { dirs: vec![dir.to_path_buf()], files: Vec::new() };
+    if let Some(name) = path.file_name() {
+        t.files.push(dir.join(name));
+    }
+    let is_link = std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink());
+    if let Some(real) = is_link.then(|| std::fs::canonicalize(path).ok()).flatten() {
+        if let Some(real_dir) = real.parent().filter(|d| !t.dirs.iter().any(|w| w == d)) {
+            t.dirs.push(real_dir.to_path_buf());
+        }
+        t.files.push(real);
+    }
+    t
 }
 
 impl ThemeFileWatcher {
@@ -55,24 +90,26 @@ impl ThemeFileWatcher {
         E: std::fmt::Display,
     {
         let path: PathBuf = path.into();
-        let dir = path.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
+        let dir =
+            path.parent().filter(|d| !d.as_os_str().is_empty()).map_or_else(|| PathBuf::from("."), Path::to_path_buf);
         std::fs::create_dir_all(&dir)?;
         let (tx, rx) = mpsc::channel();
-        let file_name = path.file_name().map(|n| n.to_owned());
         let events = tx.clone();
         let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
             let Ok(event) = event else { return };
-            if event.paths.iter().any(|p| p.file_name() == file_name.as_deref()) {
-                let _ = events.send(Msg::Changed);
+            let rescan = event.need_rescan();
+            if rescan || is_write(&event.kind) {
+                let _ = events.send(Msg::Wrote { paths: event.paths, rescan });
             }
         })
         .map_err(std::io::Error::other)?;
-        watcher.watch(&dir, RecursiveMode::NonRecursive).map_err(std::io::Error::other)?;
+        let mut watching = targets(&path, &dir);
+        for d in &watching.dirs {
+            watcher.watch(d, RecursiveMode::NonRecursive).map_err(std::io::Error::other)?;
+        }
 
         let thread = thread::Builder::new().name("nd-theme-watch".into()).spawn(move || {
-            let _watcher = watcher;
             let mut last_text: Option<String> = None;
-            let mut read_now = false;
             let read = |last_text: &mut Option<String>| {
                 let Ok(text) = std::fs::read_to_string(&path) else { return };
                 if last_text.as_deref() == Some(text.as_str()) {
@@ -86,44 +123,67 @@ impl ThemeFileWatcher {
                     Err(e) => eprintln!("nd: {} kept the last theme: {e}", path.display()),
                 }
             };
-            let mut last_stamp = None;
-            let mut deadline: Option<Instant> = Some(Instant::now());
-            let mut next_poll = Instant::now() + POLL;
+            // Points the watch at the directories the path resolves to now. False while one is
+            // missing, which leaves a retry every POLL until it is back.
+            let mut rearm = |watching: &mut Targets, force: bool| -> bool {
+                let next = targets(&path, &dir);
+                if !force && next == *watching {
+                    return true;
+                }
+                for d in &watching.dirs {
+                    let _ = watcher.unwatch(d);
+                }
+                let ok = next.dirs.iter().all(|d| watcher.watch(d, RecursiveMode::NonRecursive).is_ok());
+                *watching = next;
+                ok
+            };
+            read(&mut last_text);
+            // The end of the current burst, and whether a write landed after its first read.
+            let mut burst: Option<Instant> = None;
+            let mut pending = false;
+            let mut broken = false;
             loop {
-                let now = Instant::now();
-                let wake = deadline.map_or(next_poll, |d| d.min(next_poll));
-                match rx.recv_timeout(wake.saturating_duration_since(now)) {
+                let wait = match (burst, broken) {
+                    (Some(end), _) => Some(end.saturating_duration_since(Instant::now())),
+                    (None, true) => Some(POLL),
+                    (None, false) => None,
+                };
+                let msg = match wait {
+                    Some(wait) => rx.recv_timeout(wait),
+                    None => rx.recv().map_err(|_| mpsc::RecvTimeoutError::Disconnected),
+                };
+                match msg {
                     Ok(Msg::Stop) | Err(mpsc::RecvTimeoutError::Disconnected) => return,
-                    Ok(Msg::Changed) => {
-                        if deadline.is_none() {
-                            // Leading edge now, trailing edge after the debounce.
-                            read_now = true;
-                            deadline = Some(Instant::now() + DEBOUNCE);
-                        }
-                        if !read_now {
+                    Ok(Msg::Wrote { paths, rescan }) => {
+                        let on_dir = paths.iter().any(|p| watching.dirs.contains(p));
+                        let on_file = paths.iter().any(|p| watching.files.contains(p));
+                        if !(rescan || on_dir || on_file) {
                             continue;
                         }
+                        if on_dir || on_file {
+                            broken = !rearm(&mut watching, on_dir);
+                        }
+                        if burst.is_some() {
+                            pending = true;
+                        } else {
+                            read(&mut last_text);
+                            burst = Some(Instant::now() + DEBOUNCE);
+                        }
                     }
-                    Err(mpsc::RecvTimeoutError::Timeout) => {}
-                }
-                let now = Instant::now();
-                if std::mem::take(&mut read_now) {
-                    read(&mut last_text);
-                    continue;
-                }
-                if now >= next_poll {
-                    next_poll = now + POLL;
-                    let current = stamp(&path);
-                    if current != last_stamp {
-                        deadline.get_or_insert(now);
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                        if burst.is_some_and(|end| Instant::now() >= end) {
+                            burst = None;
+                            if std::mem::take(&mut pending) {
+                                read(&mut last_text);
+                            }
+                        } else if broken && burst.is_none() {
+                            broken = !rearm(&mut watching, true);
+                            if !broken {
+                                read(&mut last_text);
+                            }
+                        }
                     }
                 }
-                if deadline.is_none_or(|d| now < d) {
-                    continue;
-                }
-                deadline = None;
-                last_stamp = stamp(&path);
-                read(&mut last_text);
             }
         })?;
         Ok(ThemeFileWatcher { stop: Some(tx), thread: Some(thread) })
