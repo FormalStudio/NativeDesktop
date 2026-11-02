@@ -1,7 +1,7 @@
-//! The drawn tab bar, view switcher and tab overview of the GPUI backends, in libadwaita's look:
-//! `AdwTabBar` for document tabs (a group window's tabs, and `tab_strip` with `TabStyle::Strip`),
-//! `AdwInlineViewSwitcher` (a toggle group) for the other strip styles, and `AdwTabOverview` for a
-//! group window's overview. Colours and metrics come from the theme ([`TabLook`]).
+//! The drawn tab bar, view switcher and tab overview of the GPUI backends: `AdwTabBar` for a
+//! group window's tabs, tabs attached to the content below them for `tab_strip` with
+//! `TabStyle::Strip` (as Explorer's and GNOME Text Editor's), `AdwInlineViewSwitcher` (a toggle
+//! group) for the other strip styles, and `AdwTabOverview` for a group window's overview. Colours and metrics come from the theme ([`TabLook`]).
 //!
 //! The builders are pure, as in [`crate::nav`]: a model, a theme and optional input handlers in,
 //! an element out. The host and the strip's arm wire the handlers; goldens render them as they
@@ -40,6 +40,10 @@ pub struct TabLook {
     pub background: Hsla,
     pub hover: Hsla,
     pub selected: Hsla,
+    /// Attached tabs: the strip is the header's surface, the selected tab the content's.
+    pub strip: Hsla,
+    pub strip_hover: Hsla,
+    pub content: Hsla,
     pub text: Hsla,
     pub disabled_text: Hsla,
     pub separator: Hsla,
@@ -68,6 +72,7 @@ impl TabLook {
         // libadwaita fills the selected tab with a tenth of the text colour and the hovered
         // one with a little less.
         let selected = theme.hover(background);
+        let strip = theme.surface.sidebar;
         Self {
             tab_height: theme.control.regular,
             padding: theme.spacing.xs,
@@ -79,6 +84,9 @@ impl TabLook {
             background,
             hover: nd_theme::color::mix(background, selected, 0.6),
             selected,
+            strip,
+            strip_hover: theme.hover(strip),
+            content: theme.surface.base,
             text: theme.text.primary,
             disabled_text: theme.disabled(theme.text.primary),
             separator: theme.separator,
@@ -124,6 +132,9 @@ pub struct Bar {
     /// Empty parts of the bar move the window.
     pub drag_region: bool,
     pub label: Option<SharedString>,
+    /// The selected tab takes the content's surface and opens into the content below it; the
+    /// rest sit on the header's surface. Otherwise the selected tab is a filled pill.
+    pub attached: bool,
 }
 
 /// Input on a drawn bar or switcher.
@@ -238,8 +249,7 @@ fn measured(
     }
 }
 
-fn flat_button(id: ElementId, look: &TabLook, label: &str) -> gpui::Stateful<gpui::Div> {
-    let hover = look.hover;
+fn flat_button(id: ElementId, look: &TabLook, hover: Hsla, label: &str) -> gpui::Stateful<gpui::Div> {
     div()
         .id(id)
         .role(gpui::Role::Button)
@@ -255,7 +265,8 @@ fn flat_button(id: ElementId, look: &TabLook, label: &str) -> gpui::Stateful<gpu
 
 /// The drawn `AdwTabBar`: tabs sharing the bar's width, the selected one filled, a close button
 /// on the selected and the hovered tab, separators between unselected neighbours, and the
-/// `+` and overview buttons at the end.
+/// `+` and overview buttons at the end. [`Bar::attached`] draws the selected tab in the
+/// content's colour, open at the bottom, with the bar's bottom line under the other tabs only.
 pub fn tab_bar_view(
     key: &str,
     bar: &Bar,
@@ -275,22 +286,36 @@ pub fn tab_bar_view(
             ..BarLayout::default()
         };
     }
-    marks.fill("tab bar", look.background, &[]);
-    let under = [look.background];
-    let mut row = div().flex().flex_row().items_center().flex_1().min_w_0().h(look.tab_height).occlude();
+    let attached = bar.attached;
+    let (background, hover, selected_fill) = if attached {
+        (look.strip, look.strip_hover, look.content)
+    } else {
+        (look.background, look.hover, look.selected)
+    };
+    marks.fill("tab bar", background, &[]);
+    let under = [background];
+    // An attached selected tab runs down over the bar's padding and bottom line.
+    let tall = look.tab_height + look.padding + px(1.);
+    let mut row = div()
+        .flex()
+        .flex_row()
+        .flex_1()
+        .min_w_0()
+        .occlude()
+        .map(|r| if attached { r.items_start().h(tall) } else { r.items_center().h(look.tab_height) });
     for (i, tab) in bar.tabs.iter().enumerate() {
         let selected = bar.selected == Some(i);
         let next_selected = bar.selected == Some(i + 1);
         let group: SharedString = format!("{key}-tab-{i}").into();
         let mut tab_under = under.to_vec();
         if selected {
-            marks.fill("selected tab", look.selected, &under);
-            tab_under.push(look.selected);
+            marks.fill("selected tab", selected_fill, &under);
+            tab_under.push(selected_fill);
         }
         marks.text(&tab.title, text, &tab_under, look.text_size, regular);
         let close = tab.closable.then(|| {
             marks.text("\u{00d7}", text, &tab_under, look.text_size, regular);
-            let hover = theme.hover(if selected { look.selected } else { look.hover });
+            let hover = theme.hover(if selected { selected_fill } else { hover });
             let mut button = div()
                 .id(ElementId::Name(format!("{key}-close-{i}").into()))
                 .role(gpui::Role::Button)
@@ -318,7 +343,6 @@ pub fn tab_bar_view(
                 }
             })
         });
-        let hover = look.hover;
         let mut element = div()
             .id(ElementId::Name(group.clone()))
             .group(group.clone())
@@ -328,20 +352,31 @@ pub fn tab_bar_view(
             .relative()
             .flex_1()
             .min_w_0()
-            .h_full()
+            .h(look.tab_height)
             .flex()
             .flex_row()
             .items_center()
             .px(look.padding)
             .gap(look.padding)
-            .rounded(look.radius)
             .text_size(look.text_size)
             .text_color(text)
             // The close button's width on the leading side too, so the title centres in the tab.
             .child(div().flex_none().w(look.button))
             .child(div().flex_1().min_w_0().flex().justify_center().child(div().truncate().child(tab.title.clone())))
             .child(close.unwrap_or_else(|| div().flex_none().w(look.button).into_any_element()));
-        element = if selected { element.bg(look.selected) } else { element.hover(move |s| s.bg(hover)) };
+        element = match (selected, attached) {
+            (true, true) => element
+                .h(tall)
+                .pb(look.padding)
+                .rounded_t(look.radius)
+                .bg(selected_fill)
+                .border_t_1()
+                .border_l_1()
+                .border_r_1()
+                .border_color(look.border),
+            (true, false) => element.rounded(look.radius).bg(selected_fill),
+            (false, _) => element.rounded(look.radius).hover(move |s| s.bg(hover)),
+        };
         if let Some(on_input) = on_input.clone() {
             let press = on_input.clone();
             let closes = sink.clone();
@@ -374,7 +409,12 @@ pub fn tab_bar_view(
                 marks.fill("tab separator", look.separator, &under);
             }
             row = row.child(
-                div().flex_none().w(px(1.)).h(look.tab_height - look.inset).when(shown, |d| d.bg(look.separator)),
+                div()
+                    .flex_none()
+                    .w(px(1.))
+                    .h(look.tab_height - look.inset)
+                    .when(attached, |d| d.mt(look.inset / 2.))
+                    .when(shown, |d| d.bg(look.separator)),
             );
         }
     }
@@ -387,18 +427,24 @@ pub fn tab_bar_view(
         .h(px(look.bar_height()))
         .flex()
         .flex_row()
-        .items_center()
         .gap(look.padding)
         .pl(look.padding + px(bar.insets.0))
         .pr(look.padding + px(bar.insets.1))
-        .bg(look.background)
-        .border_b_1()
-        .border_color(look.border)
+        .bg(background)
         .text_color(text)
+        .map(|b| {
+            if attached {
+                // The line goes first so the selected tab paints over its stretch of it.
+                let line = div().absolute().left_0().right_0().bottom_0().h(px(1.)).bg(look.border);
+                b.relative().items_start().pt(look.padding).child(line)
+            } else {
+                b.items_center().border_b_1().border_color(look.border)
+            }
+        })
         .child(row);
     if bar.add {
         marks.text("+", text, &under, look.text_size, regular);
-        let mut add = flat_button(ElementId::Name(format!("{key}-add").into()), &look, "New Tab")
+        let mut add = flat_button(ElementId::Name(format!("{key}-add").into()), &look, hover, "New Tab")
             .text_size(look.text_size)
             .occlude()
             .child("+");
@@ -411,8 +457,9 @@ pub fn tab_bar_view(
         let count = bar.tabs.len().to_string();
         marks.text(&count, text, &under, look.count_size, FontWeight::BOLD);
         let side = look.button - look.padding * 2.;
-        let mut button =
-            flat_button(ElementId::Name(format!("{key}-overview").into()), &look, "Show All Tabs").occlude().child(
+        let mut button = flat_button(ElementId::Name(format!("{key}-overview").into()), &look, hover, "Show All Tabs")
+            .occlude()
+            .child(
                 div()
                     .size(side)
                     .flex()
@@ -692,6 +739,7 @@ impl Build<'_> {
             insets: (0., 0.),
             drag_region: false,
             label: props.label.clone(),
+            attached: strip,
         };
         let sink = self.backend.tab_seam.borrow_mut().strips.entry(id).or_default().clone();
         let key = format!("nd-strip-{}", id.0);

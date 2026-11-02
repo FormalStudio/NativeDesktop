@@ -156,7 +156,11 @@ pass the id back with `.selected(..)`.
   state survives. `.homogeneous(false)` mounts only the selected page and takes its size.
 - `TabStyle::Automatic` is a segmented control on macOS and a view switcher on GPUI backends.
   `TabStyle::Strip` draws closable document tabs with an optional `+` (`.add_button(true)`) and
-  reports `on_close` and `on_add`. macOS has no in-window document tab bar, so on macOS it's a
+  reports `on_close` and `on_add`. On GPUI backends the strip sits on the header's surface
+  (`surface.sidebar`) with a line along its bottom, and the selected tab takes the content's
+  surface (`surface.base`) and opens into the content below it, as Explorer's and GNOME's tabs
+  do. The other tabs fill on hover, and a close button shows on the selected tab and on the
+  hovered one. macOS has no in-window document tab bar, so on macOS it's a
   segmented control, and closing a tab goes through your own command. For document tabs on
   macOS, use window tabs.
 - `tab_page(id, title)` takes `.icon(..)` and `.closable()`.

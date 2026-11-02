@@ -631,6 +631,7 @@ impl gpui::Render for Golden {
             insets: (0., 0.),
             drag_region: false,
             label: None,
+            attached: false,
         };
         let content = match self.view {
             GoldenView::Bar => tab_bar_view("golden", &bar, &theme, None, None, &marks),
@@ -641,6 +642,7 @@ impl gpui::Render for Golden {
                 .into_any_element(),
             GoldenView::Strip => {
                 bar.overview = false;
+                bar.attached = true;
                 bar.tabs[0].closable = false;
                 tab_bar_view("golden", &bar, &theme, None, None, &marks)
             }

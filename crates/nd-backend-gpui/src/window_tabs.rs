@@ -357,6 +357,7 @@ impl Inner {
                 insets: if under_title { (0., 0.) } else { (insets.leading, insets.trailing) },
                 drag_region: !under_title,
                 label: None,
+                attached: false,
             };
             tab_bar_view(
                 "nd-tabbar",

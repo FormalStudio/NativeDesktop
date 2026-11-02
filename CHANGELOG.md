@@ -40,6 +40,9 @@ and the one it moves to.
   the same rows 0.8 ms instead of 15 ms and 1% of versions bumped 0.8 ms instead of 34 ms
   (release, g815's efficiency cores). The diff, the scroll anchor and per-row re-renders are
   unchanged.
+- `tab_strip` with `TabStyle::Strip` on GPUI backends: the strip is the header's surface and the
+  selected tab takes the content's surface and joins the content below it, with the bottom line
+  under the other tabs only. A group window's own tab bar keeps libadwaita's look.
 
 ## v0.6.1
 
