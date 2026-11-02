@@ -5182,6 +5182,7 @@ version = "0.6.1"
 dependencies = [
  "nd-core",
  "nd-gesture",
+ "nd-gpui",
  "nd-ui",
  "nd-virtual",
  "rustc-hash 2.1.3",

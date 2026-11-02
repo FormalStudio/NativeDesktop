@@ -1298,6 +1298,11 @@ impl<K: RowKey> IntoElement for List<K> {
             }
         }
         let mut el = ContainerElement::new::<ListWidget>(Key::Id(self.id), props);
+        // A list that selects takes keyboard focus as NSTableView does: `window.focus(id)` and a
+        // press reach it, and the bindings of the contexts around it match while it holds it.
+        if self.selection != Selection::None {
+            el = el.focusable();
+        }
         if !self.accepts.is_empty() {
             el = el.accepts_drops(self.accepts);
         }

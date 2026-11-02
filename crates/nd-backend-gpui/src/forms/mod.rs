@@ -53,6 +53,11 @@ fn is<W: 'static>(kind: WidgetKind) -> bool {
 /// Whether `kind` is a forms control that takes keyboard focus in its current props.
 pub(crate) fn takes_focus(kind: NodeKind, props: &Props) -> bool {
     let NodeKind::Widget(w) = kind else { return false };
+    if is::<nd_virtual::ListWidget>(w) {
+        return props
+            .downcast_ref::<nd_virtual::ListProps>()
+            .is_some_and(|p| p.selection != nd_virtual::Selection::None);
+    }
     macro_rules! enabled {
         ($($kind:ty => $props:ty),* $(,)?) => {
             $(if is::<$kind>(w) {
@@ -115,6 +120,16 @@ impl Sink {
     /// A key reached the control: its focus ring shows from now on.
     pub fn keyboard(&self) {
         self.pointer.set(false);
+    }
+
+    /// A press landed on the control: its focus ring hides until a key reaches it.
+    pub fn pressed(&self) {
+        self.pointer.set(true);
+    }
+
+    /// Whether the focus ring shows: focused, and not by the pointer.
+    pub fn ring(&self, window: &gpui::Window) -> bool {
+        self.focus.is_focused(window) && !self.pointer.get()
     }
 }
 

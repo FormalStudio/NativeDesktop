@@ -179,6 +179,9 @@ pub(crate) struct VirtualList {
     pub focus: crate::forms::Sink,
     /// The marquee's band.
     pub accent: Hsla,
+    /// The keyboard focus ring, 2 px wide.
+    pub ring_color: Hsla,
+    pub ring_radius: Pixels,
 }
 
 /// How an inset list (a sidebar's) draws its selection.
@@ -579,6 +582,7 @@ impl gpui::Element for VirtualList {
             let at = event.position;
             let in_view = at.y.as_f32() >= view_rect.origin.y;
             if event.button == MouseButton::Left && in_view {
+                focus.pressed();
                 focus.take_focus(window, cx);
             }
             if tree
@@ -766,6 +770,31 @@ impl gpui::Element for VirtualList {
                     Bounds::new(point(view.origin.x, b.origin.y), size(view.size.width, b.size.height))
                 };
                 let mut ring = gpui::outline(b, self.accent, gpui::BorderStyle::Solid).corner_radii(px(6.));
+                ring.border_widths = (px(2.)).into();
+                window.paint_quad(ring);
+            }
+            if self.focus.ring(window) {
+                // The keyboard's row carries the ring, as a focused GtkListView's row does; with
+                // no row to show, the list's edge does.
+                let cursor = self.presenters.borrow().get(&self.node).and_then(|p| p.cursor);
+                let row = cursor.or_else(|| self.props.selected.last().copied());
+                let placed = row.and_then(|r| prepainted.placed.iter().find(|(i, _)| self.rows[*i].tag.row == r));
+                let b = match placed {
+                    Some((_, b)) if self.props.kind == ListKind::Grid => *b,
+                    Some((_, b)) => Bounds::new(point(view.origin.x, b.origin.y), size(view.size.width, b.size.height)),
+                    None => view,
+                };
+                let b = if self.props.inset {
+                    let s = self.sidebar;
+                    Bounds::new(
+                        point(b.origin.x + px(s.inset), b.origin.y),
+                        size(b.size.width - px(s.inset * 2.), b.size.height),
+                    )
+                } else {
+                    b
+                };
+                let mut ring =
+                    gpui::outline(b, self.ring_color, gpui::BorderStyle::Solid).corner_radii(self.ring_radius);
                 ring.border_widths = (px(2.)).into();
                 window.paint_quad(ring);
             }

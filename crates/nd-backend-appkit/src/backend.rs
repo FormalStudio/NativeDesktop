@@ -159,6 +159,8 @@ impl Native {
         match self {
             Native::Control(c) => Some(c.control.focus_view().retain()),
             Native::Custom(c) => c.focus_view().or_else(|| Some(c.view().retain())),
+            // The table or collection view inside the scroll view takes first responder.
+            Native::List(l) => Some(l.document().retain()),
             _ => self.view().map(|v| v.retain()),
         }
     }

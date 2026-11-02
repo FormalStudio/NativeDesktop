@@ -170,6 +170,41 @@ pub fn keys_move_extend_and_select_all() {
     assert_eq!(list.selected(), (0..20).collect::<Vec<_>>());
 }
 
+/// A list is a focus target: `window.focus` reaches it and keys move its selection, a press keeps
+/// nd focus on it, and keyboard focus rings the cursor row where a pointer press shows none.
+pub fn a_list_takes_focus_by_id_and_rings_its_row_for_the_keyboard() {
+    let (mut cx, host, window, list, _) = files(10);
+    assert!(cx.update(|cx| host.update(cx, |app| app.focus_id(window, "files"))), "the list takes focus by id");
+    frames(&mut cx, &host, 3);
+    let node = *host.backend().lists().first().expect("list");
+    assert_eq!(host.read(|app| app.focused(window)), Some(node));
+    dispatch(&mut cx, &host, window, key("down"));
+    assert_eq!(list.selected(), vec![0], "keys reach the list focused from code");
+
+    let shot = |cx: &mut HeadlessAppContext| {
+        let handle = host.window_handle(window).expect("gpui window");
+        cx.capture_screenshot(handle).expect("screenshot")
+    };
+    dispatch(&mut cx, &host, window, press(MouseButton::Left, 100., y(4), Modifiers::none()));
+    assert_eq!(host.read(|app| app.focused(window)), Some(node), "a press keeps nd focus on the list");
+    let pointer = shot(&mut cx);
+    dispatch(&mut cx, &host, window, press(MouseButton::Left, 100., y(3), Modifiers::none()));
+    dispatch(&mut cx, &host, window, key("down"));
+    assert_eq!(list.selected(), vec![4]);
+    let keyboard = shot(&mut cx);
+    let scale = keyboard.width() as f32 / 300.;
+    let (top, bottom) = ((y(4) - 12.) * scale, (y(4) + 12.) * scale);
+    let mut inside = 0;
+    for (x, y, p) in keyboard.enumerate_pixels() {
+        if p != pointer.get_pixel(x, y) {
+            let y = y as f32;
+            assert!(y >= top - 2. && y <= bottom + 2., "only the row's ring differs, not ({x}, {y})");
+            inside += 1;
+        }
+    }
+    assert!(inside > 200, "the keyboard's row carries a ring ({inside} pixels)");
+}
+
 pub fn a_marquee_from_empty_space_selects_what_it_sweeps() {
     let (mut cx, host, window, view) = open(|cx| {
         let mut list = ListState::new(cx);
@@ -339,8 +374,12 @@ pub fn a_cell_field_renames_inline() {
 }
 
 fn main() {
-    let tests: [(&str, fn()); 6] = [
+    let tests: [(&str, fn()); 7] = [
         ("gpui_selection::a_cell_field_renames_inline", a_cell_field_renames_inline),
+        (
+            "gpui_selection::a_list_takes_focus_by_id_and_rings_its_row_for_the_keyboard",
+            a_list_takes_focus_by_id_and_rings_its_row_for_the_keyboard,
+        ),
         ("gpui_selection::a_marquee_past_the_edge_scrolls", a_marquee_past_the_edge_scrolls),
         (
             "gpui_selection::shift_and_the_secondary_key_select_like_appkit",

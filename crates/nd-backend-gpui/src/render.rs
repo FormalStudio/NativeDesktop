@@ -724,6 +724,8 @@ impl<'a> Build<'a> {
             edges: crate::scrollbar::adwaita_edge_colors(&theme),
             focus: self.ctl(id, true, window, cx, || ()).0.sink,
             accent: theme.accent,
+            ring_color: crate::forms::FormLook::of(&theme).focus_ring,
+            ring_radius: theme.radius.sm,
         }
         .into_any_element()
     }

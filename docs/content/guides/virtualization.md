@@ -114,6 +114,13 @@ with Shift, or toggles what it sweeps with the secondary key, and scrolls when h
 On macOS this is `NSTableView` and `NSCollectionView` behaviour; the GPUI presenter implements the
 same rules in `nd_virtual::selection`. A middle click goes to the row's own `.on_middle_click`.
 
+A list with a selection is a focus target, as `NSTableView` is first responder. A press on it or
+`window.focus("files")` gives it focus, Tab reaches it, and bindings of the key contexts around it
+match while it holds it, so an app binds its own keys (Delete, Space for a preview) on the
+container and leaves the arrows to the list. On GPUI backends the row the keys move carries the
+theme's focus ring while the keyboard moved focus last; a press hides it. A list without a
+selection takes no focus.
+
 `.drag_rows(kind, |key| id)` lets rows drag out. A drag from a selected row carries the whole
 selection in list order, and one from an unselected row selects it and drags it alone. The GPUI
 presenter draws the row under the pointer with a count badge when there are several.
