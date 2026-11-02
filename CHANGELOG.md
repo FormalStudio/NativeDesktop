@@ -9,6 +9,9 @@ and the one it moves to.
   a press keeps nd focus on it, Tab stops on it and bindings of the contexts around it match while
   it has focus. The GPUI presenter rings the keyboard's row with the theme's focus ring. On macOS
   nd focus makes the table or collection view first responder.
+- `source_tree(..).context_menu(|id, menu, window, cx| ..)` builds a menu per row, the row
+  selected first, and `.on_middle_click` reports `SourceMiddleClicked { id }`, on the GPUI
+  backend. `SourceTreeProps` gained `row_menus`.
 - `source_item(..).caption(..)`, and a source row with a caption over a meter grows to hold both
   on the GPUI backend instead of running into the next row. `SourceItem` gained `caption`.
 - Taps, double taps and drags carry the keyboard modifiers held (`TapEvent::modifiers`, a

@@ -59,8 +59,9 @@ pub use scaffold::{
 pub use services::{Chrome, ChromeServices};
 pub use source_list::{
     ActionVisibility, EmptyState, SOURCE_ART, SourceAction, SourceActionClicked, SourceActivated, SourceCollapsed,
-    SourceExpanded, SourceIndex, SourceItem, SourceNode, SourceSelected, SourceTree, SourceTreeKind, SourceTreeProps,
-    source_action, source_item, source_list, source_node, source_section, source_tree,
+    SourceExpanded, SourceIndex, SourceItem, SourceMenuRequested, SourceMiddleClicked, SourceNode, SourceSelected,
+    SourceTree, SourceTreeKind, SourceTreeProps, source_action, source_item, source_list, source_node, source_section,
+    source_tree,
 };
 pub use split::{
     Split, SplitKind, SplitPane, SplitPaneKind, SplitPaneProps, SplitProps, SplitResized, split, split_pane,

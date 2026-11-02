@@ -344,6 +344,9 @@ pub enum TreeInput {
     Press(nd_ui::DragItem, SharedString, gpui::Point<Pixels>),
     /// A row's bounds in the window, as just laid out, by its id.
     Row(SharedString, gpui::Bounds<Pixels>),
+    /// A right click on a row, with whether to select it first and where in the window it landed.
+    Menu(SharedString, bool, gpui::Point<Pixels>),
+    Middle(SharedString),
 }
 
 /// What a drawn nav view paints with: the theme, and where it records its marks.
@@ -767,6 +770,18 @@ pub fn source_tree_view(
                     on_press(TreeInput::Press(item.clone(), title.clone(), event.position), window, cx);
                 });
             }
+            if props.row_menus {
+                let (on_menu, menu_key) = (on_input.clone(), key.clone());
+                let select = selectable && !selected;
+                row = row.on_mouse_down(MouseButton::Right, move |event, window, cx| {
+                    on_menu(TreeInput::Menu(menu_key.clone(), select, event.position), window, cx);
+                    cx.stop_propagation();
+                });
+            }
+            let (on_middle, middle_key) = (on_input.clone(), key.clone());
+            row = row.on_mouse_up(MouseButton::Middle, move |_, window, cx| {
+                on_middle(TreeInput::Middle(middle_key.clone()), window, cx);
+            });
             if hover_only {
                 row = row.on_hover(move |inside, window, cx| {
                     on_input(TreeInput::Hover(inside.then(|| key.clone())), window, cx);
@@ -1377,7 +1392,8 @@ pub(crate) type DrawnMap = Rc<RefCell<HashMap<NodeId, Rc<RefCell<Drawn>>>>>;
 
 use nd_components::{
     BannerActionClicked, BannerKind, CommandPaletteKind, SourceActionClicked, SourceActivated, SourceCollapsed,
-    SourceExpanded, SourceSelected, SourceTreeKind, ToastChange, ToastOverlayKind, emit_palette_event,
+    SourceExpanded, SourceMenuRequested, SourceMiddleClicked, SourceSelected, SourceTreeKind, ToastChange,
+    ToastOverlayKind, emit_palette_event,
 };
 use nd_ui::backend::{NodeKind, WidgetKind};
 use nd_ui::events::Emit;
@@ -1725,6 +1741,7 @@ impl Build<'_> {
             let listener = props.drag_kind.is_some().then(|| row_drag_listener(&drawn, &emit, &wake));
             let art = self.source_art(&drawn, props, window, cx);
             let tree = drawn.clone();
+            let bounds = self.backend.bounds.clone();
             let on_input: OnInput<TreeInput> = Rc::new(move |input, window, cx| {
                 match input {
                     TreeInput::Press(item, title, at) => {
@@ -1754,6 +1771,15 @@ impl Build<'_> {
                     TreeInput::Toggle(id, true) => emit.emit(SourceExpanded { id }),
                     TreeInput::Toggle(id, false) => emit.emit(SourceCollapsed { id }),
                     TreeInput::Action(id, action) => emit.emit(SourceActionClicked { id, action }),
+                    TreeInput::Menu(row, select, at) => {
+                        if select {
+                            emit.emit(SourceSelected { id: row.clone() });
+                        }
+                        let origin = bounds.borrow().get(&id).map_or(nd_core::Point::default(), |b| b.origin);
+                        let (x, y) = (at.x.as_f32() - origin.x, at.y.as_f32() - origin.y);
+                        emit.emit(SourceMenuRequested { node: id, id: row, x, y });
+                    }
+                    TreeInput::Middle(id) => emit.emit(SourceMiddleClicked { id }),
                     TreeInput::Hover(row) => {
                         if let Drawn::Tree(t) = &mut *drawn.borrow_mut() {
                             t.hovered = row;

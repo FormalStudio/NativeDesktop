@@ -26,6 +26,7 @@ use nd_ui::{DragEnded, DragItem, DragOver, DropSlot, Dropped, Key, NativeElement
 
 use crate::icon::Icon;
 use crate::media::ImageSource;
+use crate::menu::ContextMenu;
 
 /// The side of a row's artwork, in points: the sidebar's medium icon size, as Music's playlist
 /// covers.
@@ -211,6 +212,8 @@ pub struct SourceTreeProps {
     pub accepts: Vec<SharedString>,
     /// A drop over the middle of a row lands on that row, not between rows.
     pub drop_onto: bool,
+    /// A right click on a row asks for that row's menu ([`SourceMenuRequested`]).
+    pub row_menus: bool,
     pub style: StyleRefinement,
 }
 
@@ -262,6 +265,22 @@ pub struct SourceActionClicked {
     pub action: SharedString,
 }
 
+/// A right click on row `id`, which the backend selected first when it selects. `x`/`y` are in
+/// the coordinates of the tree's `node`, as [`ContextMenuRequested`](crate::ContextMenuRequested)'s.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SourceMenuRequested {
+    pub node: nd_core::NodeId,
+    pub id: SharedString,
+    pub x: f32,
+    pub y: f32,
+}
+
+/// A middle click on row `id`. It does not select the row.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SourceMiddleClicked {
+    pub id: SharedString,
+}
+
 /// Widget kind of `source_tree` and `source_list`.
 pub struct SourceTreeKind;
 
@@ -283,6 +302,7 @@ pub fn source_tree(id: impl Into<SharedString>) -> SourceTree {
         drag_kind: None,
         accepts: Vec::new(),
         drop_onto: false,
+        row_menus: false,
         style: StyleRefinement::default(),
     };
     SourceTree(NativeElement::new::<SourceTreeKind>(Key::Id(id.into()), props).size_full())
@@ -363,6 +383,23 @@ impl SourceTree {
     }
 
     pub fn on_action(self, f: impl Fn(&SourceActionClicked, &mut Window, &mut App) + 'static) -> Self {
+        SourceTree(self.0.on(f))
+    }
+
+    /// Each row answers a right click with the menu `build` fills for its id. A row that
+    /// selects is selected first, as GTK and Windows lists do.
+    pub fn context_menu(
+        mut self,
+        build: impl Fn(&SharedString, ContextMenu, &mut Window, &mut App) -> ContextMenu + 'static,
+    ) -> Self {
+        self.0.props_mut().row_menus = true;
+        SourceTree(self.0.on(move |e: &SourceMenuRequested, window, cx| {
+            let menu = build(&e.id, ContextMenu::default(), window, cx);
+            crate::services::show_context_menu(cx, window.id(), e.node, e.x, e.y, menu);
+        }))
+    }
+
+    pub fn on_middle_click(self, f: impl Fn(&SourceMiddleClicked, &mut Window, &mut App) + 'static) -> Self {
         SourceTree(self.0.on(f))
     }
 

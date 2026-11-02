@@ -286,6 +286,63 @@ mod gate_m6 {
 
     /// A caption over a meter grows its row past the one-line pitch, with the meter clear of
     /// the row's bottom edge, so it never runs into the next row.
+    /// A right click on a row selects it and opens the menu built for its id; a middle click
+    /// reports the row and leaves the selection where it was.
+    pub fn gpui_source_rows_take_menus_and_middle_clicks() {
+        use gpui::{Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, PlatformInput};
+        use nd_ui::backend::Backend as _;
+        let mut cx = headless();
+        let log: Rc<RefCell<Log>> = Rc::default();
+        let l = log.clone();
+        let opened: Rc<RefCell<Option<WindowId>>> = Rc::default();
+        let o = opened.clone();
+        let host = cx.update(|cx| {
+            GpuiHost::builder().quit_when_empty(false).start(cx, move |app| {
+                let backend = app.backend_as::<nd_backend_gpui::GpuiBackend>().expect("GPUI backend").clone();
+                app.set_global(Chrome(nd_backend_gpui::GpuiChrome::new(backend)));
+                let handle = app.open_window(WindowOptions::main("sources").size(size(px(300.), px(300.))), |_, cx| {
+                    cx.new(|_| Sources { log: l, selected: "a".into() })
+                });
+                *o.borrow_mut() = Some(handle.id());
+            })
+        });
+        settle(&mut cx, &host);
+        let window = opened.borrow_mut().take().expect("window");
+        let tree = by_test_id(&host, window, "sources").bounds.expect("tree bounds");
+        // libadwaita's 36 pt rows, 2 pt apart, under the list's 8 pt padding.
+        let row = |k: f32| gpui::point(px(tree.origin.x + 60.), px(tree.origin.y + 8. + 38. * k + 18.));
+        let click = |cx: &mut HeadlessAppContext, button: MouseButton, position: gpui::Point<Pixels>| {
+            let modifiers = Modifiers::default();
+            let handle = host.window_handle(window).expect("gpui window");
+            for input in [
+                PlatformInput::MouseDown(MouseDownEvent {
+                    button,
+                    position,
+                    modifiers,
+                    click_count: 1,
+                    first_mouse: false,
+                }),
+                PlatformInput::MouseUp(MouseUpEvent { button, position, modifiers, click_count: 1 }),
+            ] {
+                cx.update(|cx| handle.update(cx, |_, window, cx| window.dispatch_event(input, cx))).expect("window");
+            }
+            settle(cx, &host);
+        };
+        click(&mut cx, MouseButton::Right, row(1.));
+        assert_eq!(log.borrow().activated, ["select b", "menu b"], "the row is selected before its menu asks");
+        assert!(host.backend().menu_open(window), "the right click opens the row's menu");
+        let paints = host.backend().paints(window).expect("paints");
+        assert!(paints.iter().any(|p| p.label == "Open b"), "the menu is the one built for b");
+        let escape = Keystroke::parse("escape").expect("escape");
+        cx.update(|cx| host.update(cx, |app| app.synthesize(window, &SyntheticInput::Key(escape)))).expect("posted");
+        settle(&mut cx, &host);
+
+        log.borrow_mut().activated.clear();
+        click(&mut cx, MouseButton::Middle, row(2.));
+        assert_eq!(log.borrow().activated, ["middle c"], "a middle click reports its row and selects nothing");
+        assert!(!host.backend().menu_open(window));
+    }
+
     pub fn gpui_source_row_fits_a_caption_over_a_meter() {
         use gpui::AppContext as _;
         if nd_gpui::gpui_platform::current_headless_renderer().ok().flatten().is_none() {
@@ -377,6 +434,7 @@ fn golden_tree() -> SourceTreeProps {
         drag_kind: None,
         accepts: Vec::new(),
         drop_onto: false,
+        row_menus: false,
         style: Default::default(),
     }
 }
@@ -473,6 +531,34 @@ impl gpui::Render for Meters {
                 Paint { theme: &theme, marks: &Marks::default() },
             ))
             .into_any_element()
+    }
+}
+
+gpui::actions!(test, [OpenRow]);
+
+struct Sources {
+    log: Rc<RefCell<Log>>,
+    selected: SharedString,
+}
+
+impl Render for Sources {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let (menu_log, middle_log) = (self.log.clone(), self.log.clone());
+        source_tree("sources")
+            .items([source_item("a", "Alpha"), source_item("b", "Beta"), source_item("c", "Gamma")])
+            .selected(self.selected.clone())
+            .on_select(cx.listener(|this, e: &SourceSelected, _, cx| {
+                this.log.borrow_mut().activated.push(format!("select {}", e.id));
+                this.selected = e.id.clone();
+                cx.notify();
+            }))
+            .context_menu(move |id, menu, _, _| {
+                menu_log.borrow_mut().activated.push(format!("menu {id}"));
+                menu.item(format!("Open {id}"), OpenRow)
+            })
+            .on_middle_click(move |e: &SourceMiddleClicked, _, _| {
+                middle_log.borrow_mut().activated.push(format!("middle {}", e.id));
+            })
     }
 }
 
@@ -645,6 +731,10 @@ fn main() {
         ("gate_m6::gpui_source_row_meter_fills_in_proportion", gate_m6::gpui_source_row_meter_fills_in_proportion),
         ("gate_m6::gpui_source_row_meters_share_one_width", gate_m6::gpui_source_row_meters_share_one_width),
         ("gate_m6::gpui_source_row_fits_a_caption_over_a_meter", gate_m6::gpui_source_row_fits_a_caption_over_a_meter),
+        (
+            "gate_m6::gpui_source_rows_take_menus_and_middle_clicks",
+            gate_m6::gpui_source_rows_take_menus_and_middle_clicks,
+        ),
         ("gate_m6::gpui_nav_goldens", gate_m6::gpui_nav_goldens),
     ];
     let has = |flag: &str| args.iter().any(|a| a == flag);
