@@ -9,6 +9,8 @@ and the one it moves to.
   a press keeps nd focus on it, Tab stops on it and bindings of the contexts around it match while
   it has focus. The GPUI presenter rings the keyboard's row with the theme's focus ring. On macOS
   nd focus makes the table or collection view first responder.
+- Rich text on the GPUI backend takes the text size of the box around it, or the body size, as
+  `text` does, instead of 16 px.
 - `sidebar().resizable()` and `inspector().resizable()` drag by their inner edge on the GPUI
   backend, between `min_w` and `max_w` (`PANE_MIN_WIDTH` and `PANE_MAX_WIDTH` where unset).
   `Pane::on_resize` reports `PaneResized { width }` on every backend (the split view's divider

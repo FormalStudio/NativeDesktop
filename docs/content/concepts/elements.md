@@ -12,7 +12,9 @@ whole vocabulary into scope.
 ## The building blocks
 
 - `div()` is a box. `v_flex()` and `h_flex()` are each a `div` with a column or row flex direction.
-- `text("..")` is a run of text.
+- `text("..")` is a run of text. `rich_text([span("a "), span("match").semibold()])` mixes
+  weights, colours and links in one run. Both take the text size of the box around them, and
+  `.truncate()` ends either with an ellipsis in a row too narrow for it.
 - `button(id, label)`, `text_field(id)`, `list(..)`, and the other
   [components](../components/index.md) are elements that become native controls where the platform has one.
 - `scaffold()`, `toolbar()`, and `sidebar()` describe window structure rather than boxes. The OS

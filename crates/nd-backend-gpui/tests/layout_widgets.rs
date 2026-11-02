@@ -49,6 +49,8 @@ enum Kind {
     Split,
     /// A resizable sidebar and inspector, their widths the app's.
     Resizable,
+    /// Rich text in rows too narrow for it, and under a parent that sizes its text.
+    RichRows,
     Hidden,
     Status,
     /// Nothing but a label, for the dialogs.
@@ -126,6 +128,25 @@ impl Render for Scene {
                     .child(button("new", "New Note")),
             ),
             Kind::Plain => root.child(text("Inbox")),
+            Kind::RichRows => {
+                let name = || {
+                    rich_text([
+                        span("quarterly report "),
+                        span("draft").semibold(),
+                        span(" with every appendix and the notes"),
+                    ])
+                };
+                root.child(
+                    h_flex()
+                        .id("row")
+                        .w(px(200.))
+                        .gap(px(4.))
+                        .child(div().w(px(16.)).h(px(16.)))
+                        .child(name().id("rich").truncate())
+                        .child(text("tail").id("tail")),
+                )
+                .child(div().text_size(px(20.)).child(rich_text([span("big "), span("type").bold()]).id("big")))
+            }
             Kind::Centered => {
                 let log = self.log.clone();
                 let bar = toolbar()
@@ -655,6 +676,35 @@ mod gate_m6 {
         assert!(find.origin.x > new.origin.x + new.size.width, "after the leading items: {find:?}");
     }
 
+    /// Rich text takes the text size around it as `text` does, and in a row too narrow for it
+    /// shrinks to the room left, as truncated plain text does.
+    pub fn gpui_rich_text_inherits_size_and_shrinks() {
+        let o = open(Kind::RichRows);
+        let paints = o.host.backend().paints(o.window).expect("paints");
+        let size_of = |label: &str| {
+            paints
+                .iter()
+                .find_map(|p| match p.kind {
+                    PaintKind::Text { size, .. } if p.label.trim() == label => Some(size),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("no run {label}"))
+        };
+        let body = o.theme().text_styles[nd_theme::TextStyle::Body].size.as_f32();
+        assert_eq!(size_of("draft"), body, "a row's rich text is the body size, as its plain text is");
+        assert_eq!(size_of("type"), 20., "rich text takes its parent's size");
+        let row = o.node("row").bounds.expect("row");
+        let rich = o.node("rich").bounds.expect("rich");
+        let tail = o.node("tail").bounds.expect("tail");
+        assert!(rich.origin.x + rich.size.width <= tail.origin.x, "the runs shrink to the room left: {rich:?}");
+        assert!(
+            tail.origin.x + tail.size.width <= row.origin.x + row.size.width + 0.5,
+            "the text after it stays in the row: {tail:?} in {row:?}"
+        );
+        let line = o.node("big").bounds.expect("big").size.height;
+        assert!((20. ..32.).contains(&line), "one line at its own size: {line}");
+    }
+
     /// A resizable sidebar's and inspector's inner edges drag, inside their widths' range; the
     /// app's width wins once it changes, and a width the app ignores still holds.
     pub fn gpui_side_panes_resize_by_their_edges() {
@@ -842,6 +892,7 @@ fn main() {
         ),
         ("gate_m6::gpui_split_echo_and_refusal", gate_m6::gpui_split_echo_and_refusal),
         ("gate_m6::gpui_side_panes_resize_by_their_edges", gate_m6::gpui_side_panes_resize_by_their_edges),
+        ("gate_m6::gpui_rich_text_inherits_size_and_shrinks", gate_m6::gpui_rich_text_inherits_size_and_shrinks),
         (
             "gate_m6::gpui_split_hidden_subtree_is_not_hit_or_painted",
             gate_m6::gpui_split_hidden_subtree_is_not_hit_or_painted,

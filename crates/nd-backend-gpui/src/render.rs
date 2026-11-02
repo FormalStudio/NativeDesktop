@@ -560,7 +560,7 @@ impl<'a> Build<'a> {
             NodeKind::Text => {
                 let props = node.props.downcast_ref::<TextProps>().expect("Text node needs TextProps");
                 if let Some(rich) = &props.rich {
-                    return self.rich_text(id, props, rich);
+                    return self.rich_text(id, node, props, rich);
                 }
                 let mut d = div();
                 d.style().refine(&props.style);
@@ -635,9 +635,26 @@ impl<'a> Build<'a> {
         }
     }
 
-    fn rich_text(&self, id: NodeId, props: &TextProps, rich: &nd_ui::RichText) -> AnyElement {
+    /// The text size `node` inherits: the nearest container's that sets one, else the body
+    /// size the window's root gives text nothing sized.
+    fn inherited_text_size(&self, node: &Node) -> f32 {
+        let mut at = node.parent;
+        while let Some(parent) = at.and_then(|p| self.nodes.get(&p)) {
+            if let Some(size) = parent.props.downcast_ref::<DivProps>().and_then(|d| d.style.text.font_size) {
+                return size.to_pixels(px(REM)).as_f32();
+            }
+            at = parent.parent;
+        }
         let theme = self.theme();
-        let run = run_of(&props.style);
+        if theme.preset == Preset::MacOs { REM } else { theme.text_styles[nd_theme::TextStyle::Body].size.as_f32() }
+    }
+
+    fn rich_text(&self, id: NodeId, node: &Node, props: &TextProps, rich: &nd_ui::RichText) -> AnyElement {
+        let theme = self.theme();
+        let mut run = run_of(&props.style);
+        if props.style.text.font_size.is_none() {
+            run.size = self.inherited_text_size(node);
+        }
         let opacity = props.style.opacity.unwrap_or(1.);
         let color = props.style.text.color.unwrap_or(self.top().text);
         let base = crate::rich::Base {
