@@ -21,7 +21,9 @@ The Gallery shows one page per component. Select a component in its source list,
 - `source_list` and `source_tree`: sections of items with icons, badges, and per-row actions. On
   macOS, they're an `NSOutlineView` in source-list style, so open branches survive updates.
   `.meter(0.62)` on an item draws a capacity bar under its title, as Files shows a volume's used
-  space; macOS's sidebar has no such bar, so there it shows nothing.
+  space. The bar spans the row's text column from the title's start, with the badge and actions
+  on the title's line, so every meter in a list has the same length. macOS's sidebar has no such
+  bar, so there it shows nothing.
 - `sidebar`, `inspector`, `toolbar`: window structure, covered in [Patterns](../concepts/patterns.md).
 - `tab_strip` and `tab_view`: in-window tabs over a stack of pages. Windows that are tabs are a
   window option. See [windows and tabs](../guides/windows-and-tabs.md).

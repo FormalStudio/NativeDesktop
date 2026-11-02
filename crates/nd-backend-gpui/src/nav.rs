@@ -629,6 +629,77 @@ pub fn source_tree_view(
                 true => (None, expandable.then_some(disclosure)),
                 false => (Some(disclosure), None),
             };
+            let buttons: Vec<AnyElement> = node
+                .actions
+                .iter()
+                .filter_map(|action_id| {
+                    let action = actions.get(action_id)?;
+                    let label = action.label.clone().unwrap_or_else(|| action.accessible_label());
+                    let color = if action.destructive { theme.danger } else { secondary };
+                    let mut button = div()
+                        .id(ElementId::Name(format!("{}-{}", node.id, action.id).into()))
+                        .role(gpui::Role::Button)
+                        .aria_label(action.accessible_label())
+                        .flex_shrink_0()
+                        .ml(theme.spacing.xs)
+                        .px(theme.spacing.xs)
+                        .rounded(theme.radius.sm)
+                        .text_size(theme.type_scale.footnote)
+                        .text_color(color)
+                        .opacity(if show_actions { 1. } else { 0. })
+                        .child(label);
+                    if show_actions && let Some(on_input) = on_input.clone() {
+                        let (key, action) = (key.clone(), action.id.clone());
+                        button = button.on_click(move |_, window, cx| {
+                            cx.stop_propagation();
+                            on_input(TreeInput::Action(key.clone(), action.clone()), window, cx);
+                        });
+                    }
+                    Some(button.into_any_element())
+                })
+                .collect();
+            let badge = node.badge.clone().map(|b| {
+                div()
+                    .flex_shrink_0()
+                    .pl(theme.spacing.sm)
+                    .text_size(theme.type_scale.footnote)
+                    .text_color(secondary)
+                    .child(b)
+                    .into_any_element()
+            });
+            let title = div().truncate().child(node.title.clone());
+            let caption = node
+                .caption
+                .clone()
+                .map(|c| div().truncate().text_size(theme.type_scale.footnote).text_color(secondary).child(c));
+            let text = div().flex().flex_col().flex_1().min_w_0();
+            // A meter spans the whole text column, so every meter in the list is one length
+            // whatever its title, badge and actions: those share the title's line instead.
+            let (text, badge, buttons) = match node.meter {
+                Some(f) => {
+                    // Nearly full reads as a warning, as in Finder and Files.
+                    let fill = if f >= 0.9 { theme.danger } else { theme.accent };
+                    let meter = div()
+                        .id(ElementId::Name(format!("{}-meter", node.id).into()))
+                        .role(gpui::Role::ProgressIndicator)
+                        .mt(px(3.))
+                        .h(px(4.))
+                        .w_full()
+                        .rounded_full()
+                        .bg(with_alpha(secondary, secondary.a * 0.25))
+                        .child(div().h_full().w(gpui::relative(f)).rounded_full().bg(fill));
+                    let line = div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .min_w_0()
+                        .child(title.flex_1().min_w_0())
+                        .children(badge)
+                        .children(buttons);
+                    (text.child(line).children(caption).child(meter), None, Vec::new())
+                }
+                None => (text.child(title).children(caption), badge, buttons),
+            };
             row = row
                 .pl(lead + indent * depth as f32)
                 .pr(trail)
@@ -645,67 +716,13 @@ pub fn source_tree_view(
                         div().flex_shrink_0().pr(gap).child(glyph(g, px(16.), ink, px(1.5))).into_any_element()
                     }),
                 })
-                .child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .flex_1()
-                        .min_w_0()
-                        .child(div().truncate().child(node.title.clone()))
-                        .children(node.caption.clone().map(|c| {
-                            div().truncate().text_size(theme.type_scale.footnote).text_color(secondary).child(c)
-                        }))
-                        .children(node.meter.map(|f| {
-                            // Nearly full reads as a warning, as in Finder and Files.
-                            let fill = if f >= 0.9 { theme.danger } else { theme.accent };
-                            div()
-                                .id(ElementId::Name(format!("{}-meter", node.id).into()))
-                                .role(gpui::Role::ProgressIndicator)
-                                .mt(px(3.))
-                                .h(px(4.))
-                                .w_full()
-                                .rounded_full()
-                                .bg(with_alpha(secondary, secondary.a * 0.25))
-                                .child(div().h_full().w(gpui::relative(f)).rounded_full().bg(fill))
-                        })),
-                )
-                .children(node.badge.clone().map(|b| {
-                    div()
-                        .flex_shrink_0()
-                        .pl(theme.spacing.sm)
-                        .text_size(theme.type_scale.footnote)
-                        .text_color(secondary)
-                        .child(b)
-                }))
-                .children(trailing);
+                .child(text)
+                .children(badge)
+                .children(trailing)
+                .children(buttons);
         }
         if expandable {
             row = row.aria_expanded(node.expanded);
-        }
-        for action_id in node.actions.iter().filter(|_| !compact) {
-            let Some(action) = actions.get(action_id) else { continue };
-            let label = action.label.clone().unwrap_or_else(|| action.accessible_label());
-            let color = if action.destructive { theme.danger } else { secondary };
-            let mut button = div()
-                .id(ElementId::Name(format!("{}-{}", node.id, action.id).into()))
-                .role(gpui::Role::Button)
-                .aria_label(action.accessible_label())
-                .flex_shrink_0()
-                .ml(theme.spacing.xs)
-                .px(theme.spacing.xs)
-                .rounded(theme.radius.sm)
-                .text_size(theme.type_scale.footnote)
-                .text_color(color)
-                .opacity(if show_actions { 1. } else { 0. })
-                .child(label);
-            if show_actions && let Some(on_input) = on_input.clone() {
-                let (key, action) = (key.clone(), action.id.clone());
-                button = button.on_click(move |_, window, cx| {
-                    cx.stop_propagation();
-                    on_input(TreeInput::Action(key.clone(), action.clone()), window, cx);
-                });
-            }
-            row = row.child(button);
         }
         if selected {
             row = row.bg(selected_fill);

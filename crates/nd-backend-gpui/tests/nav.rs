@@ -251,6 +251,39 @@ mod gate_m6 {
         assert!(high > low * 3, "four fifths fill about four times the track: {high} against {low}");
     }
 
+    /// Every meter in a source list is as long as the others and starts under its title,
+    /// whatever the title's and the badge's widths.
+    pub fn gpui_source_row_meters_share_one_width() {
+        use gpui::AppContext as _;
+        if nd_gpui::gpui_platform::current_headless_renderer().ok().flatten().is_none() {
+            println!("skipped: GPUI has no headless renderer on this OS");
+            return;
+        }
+        let mut cx = headless();
+        let handle =
+            cx.open_window(gpui::size(gpui::px(260.), gpui::px(120.)), |_, cx| cx.new(|_| Meters)).expect("window");
+        cx.run_until_parked();
+        let shot = cx.capture_screenshot(handle.into()).expect("screenshot");
+        let a = meter_theme().accent.to_rgb();
+        let near = |c: u8, f: f32| (f32::from(c) - f * 255.).abs() < 24.;
+        // Each row's accent span: the leftmost and rightmost accent pixel in its half.
+        let half = shot.height() / 2;
+        let span = |rows: std::ops::Range<u32>| {
+            let xs: Vec<u32> = rows
+                .flat_map(|y| (0..shot.width()).map(move |x| (x, y)))
+                .filter(|&(x, y)| {
+                    let p = shot.get_pixel(x, y);
+                    near(p[0], a.r) && near(p[1], a.g) && near(p[2], a.b)
+                })
+                .map(|(x, _)| x)
+                .collect();
+            (*xs.iter().min().expect("a meter"), *xs.iter().max().expect("a meter"))
+        };
+        let (long, short) = (span(0..half), span(half..shot.height()));
+        assert!(long.0.abs_diff(short.0) <= 1, "both meters start under the title: {long:?} and {short:?}");
+        assert!(long.1.abs_diff(short.1) <= 1, "both meters are one length: {long:?} and {short:?}");
+    }
+
     pub fn gpui_nav_goldens() {
         // GPUI renders headless only on macOS (Metal) and Linux (wgpu); Windows captures arrive
         // with the Fluent goldens (M3).
@@ -367,6 +400,37 @@ fn meter_theme() -> nd_theme::Theme {
     use nd_theme::{Metrics, Palette, Preset, Theme};
     let preset = Preset::Adwaita;
     Theme::derive(preset, Scheme::Light, Palette::baked_for(preset, Scheme::Light), Metrics::preset(preset), 1.)
+}
+
+/// Two volumes at the same fill: a long title with a badge, and a short one without.
+struct Meters;
+
+impl gpui::Render for Meters {
+    fn render(&mut self, _window: &mut gpui::Window, _cx: &mut gpui::Context<Self>) -> impl gpui::IntoElement {
+        use gpui::{IntoElement, ParentElement, Styled};
+        let theme = meter_theme();
+        let props = SourceTreeProps {
+            nodes: vec![
+                source_node("disk", "Macintosh HD").badge("12 GB free").meter(0.5),
+                source_node("usb", "USB").meter(0.5),
+            ],
+            selected: None,
+            ..golden_tree()
+        };
+        gpui::div()
+            .size_full()
+            .bg(theme.surface.sidebar)
+            .child(source_tree_view(
+                NodeId(1),
+                &props,
+                None,
+                false,
+                None,
+                &Default::default(),
+                Paint { theme: &theme, marks: &Marks::default() },
+            ))
+            .into_any_element()
+    }
 }
 
 /// One source row with a meter `.0` full.
@@ -505,6 +569,7 @@ fn main() {
         ("gate_m6::gpui_toasts_time_out_in_order", gate_m6::gpui_toasts_time_out_in_order),
         ("gate_m6::gpui_rail_rows_keep_their_artwork", gate_m6::gpui_rail_rows_keep_their_artwork),
         ("gate_m6::gpui_source_row_meter_fills_in_proportion", gate_m6::gpui_source_row_meter_fills_in_proportion),
+        ("gate_m6::gpui_source_row_meters_share_one_width", gate_m6::gpui_source_row_meters_share_one_width),
         ("gate_m6::gpui_nav_goldens", gate_m6::gpui_nav_goldens),
     ];
     let has = |flag: &str| args.iter().any(|a| a == flag);
