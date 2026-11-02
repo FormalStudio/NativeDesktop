@@ -258,9 +258,8 @@ impl Build<'_> {
                 // empty band (a tiling compositor draws no controls): the sidebar runs to the top.
                 let holds = node.children[..over_sidebar].iter().filter_map(|c| self.nodes.get(c)).any(|n| {
                     is_kind::<ToolbarItem>(n)
-                        || props::<SystemItemProps>(n).is_some_and(|p| {
-                            matches!(p.item, SystemItem::ToggleSidebar | SystemItem::ToggleInspector)
-                        })
+                        || props::<SystemItemProps>(n)
+                            .is_some_and(|p| matches!(p.item, SystemItem::ToggleSidebar | SystemItem::ToggleInspector))
                 });
                 split.sidebar = (holds || sidebar.leading > 0. || sidebar.trailing > 0.).then(|| {
                     self.title_row(
