@@ -5184,6 +5184,7 @@ dependencies = [
  "nd-gesture",
  "nd-ui",
  "nd-virtual",
+ "rustc-hash 2.1.3",
 ]
 
 [[package]]

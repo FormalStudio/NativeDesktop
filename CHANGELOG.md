@@ -36,6 +36,10 @@ and the one it moves to.
   `theme.json` as changes, so every app re-read the palette about 20 times a second while idle
   (9 CPU ticks a minute for an idle `hello`, now 0). It follows a symlinked file to its target
   and no longer polls.
+- `set_items_versioned` and `set_items` on 100k rows: a reorder takes 3.6 ms instead of 31 ms,
+  the same rows 0.8 ms instead of 15 ms and 1% of versions bumped 0.8 ms instead of 34 ms
+  (release, g815's efficiency cores). The diff, the scroll anchor and per-row re-renders are
+  unchanged.
 
 ## v0.6.1
 

@@ -8,8 +8,9 @@
 //! anchor and the height tree, and clamped only against rows that are measured, so an estimate
 //! that is too small can never pull the end of the list out of reach.
 
-use std::collections::HashMap;
 use std::ops::Range;
+
+use rustc_hash::FxHashMap;
 
 use crate::heights::Heights;
 
@@ -139,7 +140,9 @@ const TARGET_TRIES: u8 = 8;
 #[derive(Clone, Debug)]
 pub struct Core {
     ids: Vec<RowId>,
-    index: HashMap<RowId, usize>,
+    index: FxHashMap<RowId, usize>,
+    /// The index before the last `set_rows`, kept for its allocation.
+    spare_index: FxHashMap<RowId, usize>,
     /// One entry per line: per row in a list, per lane row in a grid.
     heights: Heights,
     /// Per line: measured at the current width.
@@ -172,7 +175,8 @@ impl Core {
     pub fn new() -> Self {
         Self {
             ids: Vec::new(),
-            index: HashMap::new(),
+            index: FxHashMap::default(),
+            spare_index: FxHashMap::default(),
             heights: Heights::default(),
             fresh: Vec::new(),
             estimate: 32.,
@@ -330,16 +334,30 @@ impl Core {
     /// row, so nothing on screen moves unless a visible row came or went. Returns the native
     /// diff, also queued for [`Self::take_diffs`].
     pub fn set_rows(&mut self, rows: Vec<RowId>) -> Diff {
-        let old_ids = std::mem::take(&mut self.ids);
+        // The same rows in the same order: versions changed, places did not.
+        if rows == self.ids {
+            if self.grid.is_some() {
+                self.reflow();
+            }
+            self.normalize_anchor(false);
+            self.generation += 1;
+            return Diff::default();
+        }
+        let old_ids = std::mem::replace(&mut self.ids, rows);
         let old_index = std::mem::take(&mut self.index);
         let old_heights = std::mem::take(&mut self.heights);
         let old_fresh = std::mem::take(&mut self.fresh);
         let old_lanes = self.lanes;
         let old_top = |ix: usize| old_heights.top(ix / old_lanes);
 
-        self.index = rows.iter().enumerate().map(|(i, r)| (*r, i)).collect();
-        debug_assert_eq!(self.index.len(), rows.len(), "row ids are unique");
-        self.ids = rows;
+        let mut index = std::mem::take(&mut self.spare_index);
+        index.clear();
+        index.reserve(self.ids.len());
+        index.extend(self.ids.iter().enumerate().map(|(i, r)| (*r, i)));
+        self.index = index;
+        debug_assert_eq!(self.index.len(), self.ids.len(), "row ids are unique");
+        // Each row's index before, `usize::MAX` for a new one.
+        let prev: Vec<usize> = self.ids.iter().map(|r| old_index.get(r).copied().unwrap_or(usize::MAX)).collect();
 
         // The anchor row left: the nearest survivor takes over at the same screen position.
         if let Some(anchor) = self.anchor
@@ -367,16 +385,13 @@ impl Core {
         } else {
             let mut heights = Vec::with_capacity(self.ids.len());
             let mut fresh = Vec::with_capacity(self.ids.len());
-            for id in &self.ids {
-                match old_index.get(id) {
-                    Some(&old) => {
-                        heights.push(old_heights.get(old));
-                        fresh.push(old_fresh[old]);
-                    }
-                    None => {
-                        heights.push(self.estimate);
-                        fresh.push(false);
-                    }
+            for &old in &prev {
+                if old == usize::MAX {
+                    heights.push(self.estimate);
+                    fresh.push(false);
+                } else {
+                    heights.push(old_heights.get(old));
+                    fresh.push(old_fresh[old]);
                 }
             }
             self.heights = Heights::from_vec(heights);
@@ -384,7 +399,8 @@ impl Core {
         }
         self.normalize_anchor(false);
 
-        let diff = diff(&old_ids, &old_index, &self.ids, &self.index);
+        let diff = diff(old_ids.len(), &prev);
+        self.spare_index = old_index;
         self.generation += 1;
         if !diff.is_empty() {
             self.diffs.push(diff.clone());
@@ -739,36 +755,26 @@ impl Core {
 
 /// The native diff between two row orders: removed rows by old index, inserted by new index.
 pub fn diff_rows(old: &[RowId], new: &[RowId]) -> Diff {
-    let old_index: HashMap<RowId, usize> = old.iter().enumerate().map(|(i, r)| (*r, i)).collect();
-    let new_index: HashMap<RowId, usize> = new.iter().enumerate().map(|(i, r)| (*r, i)).collect();
-    diff(old, &old_index, new, &new_index)
+    let old_index: FxHashMap<RowId, usize> = old.iter().enumerate().map(|(i, r)| (*r, i)).collect();
+    let prev: Vec<usize> = new.iter().map(|r| old_index.get(r).copied().unwrap_or(usize::MAX)).collect();
+    diff(old.len(), &prev)
 }
 
-/// Removed rows by old index and inserted rows by new index, ascending. Survivors that changed
-/// relative order are moves, reported as removed and inserted: the longest run of survivors in
-/// old order stays put.
-fn diff(old: &[RowId], old_index: &HashMap<RowId, usize>, new: &[RowId], new_index: &HashMap<RowId, usize>) -> Diff {
-    let survivors: Vec<usize> = new.iter().filter_map(|r| old_index.get(r).copied()).collect();
-    let keep = longest_increasing(&survivors);
-    let mut removed: Vec<usize> =
-        old.iter().enumerate().filter(|(_, r)| !new_index.contains_key(r)).map(|(i, _)| i).collect();
-    let mut inserted: Vec<usize> = Vec::new();
-    for (i, r) in new.iter().enumerate() {
-        match old_index.get(r) {
-            None => inserted.push(i),
-            Some(o) if !keep.contains(o) => {
-                inserted.push(i);
-                removed.push(*o);
-            }
-            Some(_) => {}
-        }
-    }
-    removed.sort_unstable();
+/// Removed rows by old index and inserted rows by new index, ascending, from each new row's old
+/// index (`usize::MAX` for a new row). Survivors that changed relative order are moves, reported
+/// as removed and inserted: the longest run of survivors in old order stays put.
+fn diff(old_len: usize, prev: &[usize]) -> Diff {
+    let survivors: Vec<usize> = prev.iter().copied().filter(|&o| o != usize::MAX).collect();
+    let keep = longest_increasing(&survivors, old_len);
+    let removed: Vec<usize> = (0..old_len).filter(|&o| !keep[o]).collect();
+    let inserted: Vec<usize> =
+        prev.iter().enumerate().filter(|&(_, &o)| o == usize::MAX || !keep[o]).map(|(i, _)| i).collect();
     Diff { removed, inserted }
 }
 
-/// The values of one longest strictly increasing subsequence.
-fn longest_increasing(xs: &[usize]) -> std::collections::HashSet<usize> {
+/// One longest strictly increasing subsequence of `xs`, values below `len`, as a set over
+/// `0..len`.
+fn longest_increasing(xs: &[usize], len: usize) -> Vec<bool> {
     let mut tails: Vec<usize> = Vec::new();
     let mut tail_ix: Vec<usize> = Vec::new();
     let mut prev = vec![usize::MAX; xs.len()];
@@ -785,10 +791,10 @@ fn longest_increasing(xs: &[usize]) -> std::collections::HashSet<usize> {
             tail_ix[pos] = i;
         }
     }
-    let mut out = std::collections::HashSet::new();
+    let mut out = vec![false; len];
     let mut at = tail_ix.last().copied();
     while let Some(i) = at {
-        out.insert(xs[i]);
+        out[xs[i]] = true;
         at = (prev[i] != usize::MAX).then_some(prev[i]);
     }
     out

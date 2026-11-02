@@ -29,6 +29,10 @@ list does this with `cx.processor`.
 Rows that stay keep their measured height, and the scroll position stays on its row. Inserts and
 removals animate on macOS.
 
+Handing over the same keys again, in the same or a new order (a sort change), or with a few
+versions bumped costs one hash lookup per row: about 4 ms for a reorder of 100k rows and under
+1 ms for unchanged rows on g815's efficiency cores (`crates/nd-virtual/tests/set_items_cost.rs`).
+
 A row is its own view, so when your view renders again, the row doesn't. A row renders again when
 its version changes or when you call `invalidate(&key)`. Pass versions, such as a modification
 counter or a hash of what the row shows, and unchanged rows cost nothing. With plain `set_items`,

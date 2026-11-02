@@ -21,6 +21,7 @@ use crate::core::{Align, Alignment, Core, Follow, GridSpec, RowId};
 pub use nd_gesture::RowEdge;
 use nd_gesture::{RowSwipeEvent, TapEvent};
 use nd_ui::Action;
+use rustc_hash::FxHashMap;
 
 /// What a list can be keyed by.
 pub trait RowKey: Clone + Eq + Hash + fmt::Debug + 'static {}
@@ -427,14 +428,22 @@ struct Meta {
     expandable: bool,
 }
 
+/// What a key was last set with.
+struct Row {
+    id: RowId,
+    version: Option<u64>,
+    meta: Meta,
+    /// The `apply` that last listed the key.
+    pass: u64,
+}
+
 struct Inner<K: RowKey> {
     core: Rc<RefCell<Core>>,
     owner: EntityId,
+    /// The keys in order, index for index with the core's rows.
     keys: Vec<K>,
-    ids: HashMap<K, RowId>,
-    by_id: HashMap<RowId, K>,
-    versions: HashMap<RowId, u64>,
-    meta: HashMap<RowId, Meta>,
+    rows: FxHashMap<K, Row>,
+    pass: u64,
     next_id: u64,
     /// The rendered rows: the model's render range, in order.
     window: Vec<RowId>,
@@ -449,6 +458,16 @@ struct Inner<K: RowKey> {
     tree: Option<Vec<TreeNode<K>>>,
     expanded: HashSet<K>,
     near: (bool, bool),
+}
+
+impl<K: RowKey> Inner<K> {
+    fn id(&self, key: &K) -> Option<RowId> {
+        self.rows.get(key).map(|r| r.id)
+    }
+
+    fn key(&self, row: RowId) -> Option<&K> {
+        self.core.borrow().index_of(row).and_then(|i| self.keys.get(i))
+    }
 }
 
 /// An app's list: its keys, scroll position, selection and rendered rows. Cheap to clone; every
@@ -473,10 +492,8 @@ impl<K: RowKey> ListState<K> {
                 core: Rc::new(RefCell::new(Core::new())),
                 owner,
                 keys: Vec::new(),
-                ids: HashMap::new(),
-                by_id: HashMap::new(),
-                versions: HashMap::new(),
-                meta: HashMap::new(),
+                rows: FxHashMap::default(),
+                pass: 0,
                 next_id: 1,
                 window: Vec::new(),
                 views: HashMap::new(),
@@ -541,24 +558,24 @@ impl<K: RowKey> ListState<K> {
     }
 
     pub fn key_of(&self, row: RowId) -> Option<K> {
-        self.inner.borrow().by_id.get(&row).cloned()
+        self.inner.borrow().key(row).cloned()
     }
 
     pub fn row_of(&self, key: &K) -> Option<RowId> {
-        self.inner.borrow().ids.get(key).copied()
+        self.inner.borrow().id(key)
     }
 
     /// Replaces the rows by key. Rows that stay keep their height and the scroll position stays
     /// on its row; there is no reset. Without versions every rendered row renders again; use
     /// [`Self::set_items_versioned`] so only changed rows do.
     pub fn set_items(&mut self, keys: impl IntoIterator<Item = K>, cx: &mut App) {
-        self.apply(keys.into_iter().map(|k| (k, None, Meta::default())).collect(), cx);
+        self.apply(keys.into_iter().map(|k| (k, None, Meta::default())), cx);
     }
 
     /// As [`Self::set_items`], with a version per key: a rendered row renders again only when
     /// its version changed.
     pub fn set_items_versioned(&mut self, rows: impl IntoIterator<Item = (K, u64)>, cx: &mut App) {
-        self.apply(rows.into_iter().map(|(k, v)| (k, Some(v), Meta::default())).collect(), cx);
+        self.apply(rows.into_iter().map(|(k, v)| (k, Some(v), Meta::default())), cx);
     }
 
     /// A tree: nodes in display order among siblings, parents before children. Only rows under
@@ -607,65 +624,66 @@ impl<K: RowKey> ListState<K> {
         self.apply(rows, cx);
     }
 
-    fn apply(&mut self, rows: Vec<(K, Option<u64>, Meta)>, cx: &mut App) {
+    fn apply(&mut self, rows: impl IntoIterator<Item = (K, Option<u64>, Meta)>, cx: &mut App) {
         let mut stale = Vec::new();
         let mut meta_moved = false;
         {
             let mut guard = self.inner.borrow_mut();
             let inner = &mut *guard;
-            let mut ids = Vec::with_capacity(rows.len());
-            let mut next_ids = HashMap::with_capacity(rows.len());
-            let mut keys = Vec::with_capacity(rows.len());
-            for (key, version, meta) in rows {
-                let id = match inner.ids.get(&key) {
-                    Some(id) => *id,
+            inner.pass += 1;
+            let pass = inner.pass;
+            let tree = inner.tree.is_some();
+            let rows = rows.into_iter();
+            let mut ids = Vec::with_capacity(rows.size_hint().0);
+            let mut keys = std::mem::take(&mut inner.keys);
+            keys.clear();
+            keys.reserve(ids.capacity());
+            let mut meta = Vec::new();
+            for (key, version, row_meta) in rows {
+                let (id, changed, meta_changed) = match inner.rows.get_mut(&key) {
+                    Some(row) => {
+                        debug_assert!(row.pass != pass, "{key:?} is listed twice");
+                        if row.pass == pass {
+                            continue;
+                        }
+                        row.pass = pass;
+                        let changed = match version {
+                            Some(v) => row.version.replace(v).is_some_and(|old| old != v),
+                            None => true,
+                        };
+                        let meta_changed =
+                            row.meta.depth != row_meta.depth || row.meta.expandable != row_meta.expandable;
+                        row.meta = row_meta;
+                        (row.id, changed, meta_changed)
+                    }
                     None => {
                         let id = RowId(inner.next_id);
                         inner.next_id += 1;
-                        id
+                        inner.rows.insert(key.clone(), Row { id, version, meta: row_meta, pass });
+                        (id, version.is_none(), false)
                     }
                 };
-                let changed = match version {
-                    Some(v) => inner.versions.insert(id, v).is_some_and(|old| old != v),
-                    None => true,
-                };
-                let meta_changed = inner
-                    .meta
-                    .insert(id, meta)
-                    .is_some_and(|old| old.depth != meta.depth || old.expandable != meta.expandable);
                 meta_moved |= meta_changed;
                 if (changed || meta_changed) && inner.views.contains_key(&id) {
                     stale.push(id);
                 }
+                if tree {
+                    meta.push(crate::core::RowMeta {
+                        depth: row_meta.depth,
+                        expandable: row_meta.expandable,
+                        expanded: inner.expanded.contains(&key),
+                    });
+                }
                 ids.push(id);
-                next_ids.insert(key.clone(), id);
                 keys.push(key);
             }
-            inner.by_id = next_ids.iter().map(|(k, id)| (*id, k.clone())).collect();
-            inner.versions.retain(|id, _| inner.by_id.contains_key(id));
-            inner.meta.retain(|id, _| inner.by_id.contains_key(id));
-            inner.ids = next_ids;
             inner.keys = keys;
-            let ids_now = &inner.ids;
-            inner.selected.retain(|k| ids_now.contains_key(k));
-            let tree = inner.tree.is_some();
-            let meta: Vec<crate::core::RowMeta> = if tree {
-                inner
-                    .keys
-                    .iter()
-                    .zip(&ids)
-                    .map(|(k, id)| {
-                        let m = inner.meta.get(id).copied().unwrap_or_default();
-                        crate::core::RowMeta {
-                            depth: m.depth,
-                            expandable: m.expandable,
-                            expanded: inner.expanded.contains(k),
-                        }
-                    })
-                    .collect()
-            } else {
-                Vec::new()
-            };
+            // Every row listed is in `rows` once, so a longer map holds keys that left.
+            if inner.rows.len() != inner.keys.len() {
+                inner.rows.retain(|_, row| row.pass == pass);
+                let rows = &inner.rows;
+                inner.selected.retain(|k| rows.contains_key(k));
+            }
             // The same rows at the same versions change nothing: an owner that hands its keys
             // over on every render must not get a new generation, and a re-render, back.
             if !meta_moved && stale.is_empty() && inner.core.borrow().ids() == ids.as_slice() {
@@ -691,7 +709,7 @@ impl<K: RowKey> ListState<K> {
     /// Renders `key`'s row again and remeasures it, as after its content changed.
     pub fn invalidate(&mut self, key: &K, cx: &mut App) {
         let inner = self.inner.borrow();
-        let Some(&id) = inner.ids.get(key) else { return };
+        let Some(id) = inner.id(key) else { return };
         inner.core.borrow_mut().invalidate(id);
         if let Some(view) = inner.views.get(&id) {
             let view = view.entity_id();
@@ -767,7 +785,7 @@ impl<K: RowKey> ListState<K> {
 
     pub fn set_selected(&mut self, keys: Vec<K>, cx: &mut App) {
         let mut inner = self.inner.borrow_mut();
-        let keys: Vec<K> = keys.into_iter().filter(|k| inner.ids.contains_key(k)).collect();
+        let keys: Vec<K> = keys.into_iter().filter(|k| inner.rows.contains_key(k)).collect();
         if inner.selected != keys {
             inner.selected = keys;
             let owner = inner.owner;
@@ -783,13 +801,13 @@ impl<K: RowKey> ListState<K> {
     /// The rows rendered now, in order.
     pub fn rendered(&self) -> Vec<K> {
         let inner = self.inner.borrow();
-        inner.window.iter().filter_map(|id| inner.by_id.get(id).cloned()).collect()
+        inner.window.iter().filter_map(|id| inner.key(*id).cloned()).collect()
     }
 
     /// The row's view while it is rendered: its render count and node are the row's.
     pub fn row_view(&self, key: &K) -> Option<EntityId> {
         let inner = self.inner.borrow();
-        inner.views.get(inner.ids.get(key)?).map(|v| v.entity_id())
+        inner.views.get(&inner.id(key)?).map(|v| v.entity_id())
     }
 
     /// Brings the rendered rows in line with the model's render range: creates views for rows
@@ -811,7 +829,7 @@ impl<K: RowKey> ListState<K> {
         let missing: Vec<(RowId, K)> = wanted
             .iter()
             .filter(|id| !inner.views.contains_key(id))
-            .filter_map(|id| inner.by_id.get(id).map(|k| (*id, k.clone())))
+            .filter_map(|id| inner.key(*id).map(|k| (*id, k.clone())))
             .collect();
         inner.window = wanted;
         let owner = inner.owner;
@@ -845,7 +863,7 @@ impl<K: RowKey> ListState<K> {
     fn props(&self, kind: ListKind, selection: Selection, style: StyleRefinement, inset: bool) -> ListProps {
         let inner = self.inner.borrow();
         let generation = inner.core.borrow().generation();
-        let selected = inner.selected.iter().filter_map(|k| inner.ids.get(k).copied()).collect();
+        let selected = inner.selected.iter().filter_map(|k| inner.id(k)).collect();
         let gestures = nd_gesture::GestureSet {
             scroll: nd_gesture::Axes { horizontal: false, vertical: true },
             ..Default::default()
@@ -868,8 +886,8 @@ impl<K: RowKey> ListState<K> {
     /// The rows a presenter can start a drag from or drop on: those rendered, and the selection.
     fn live_rows(&self) -> Vec<(RowId, K)> {
         let inner = self.inner.borrow();
-        let selected = inner.selected.iter().filter_map(|k| Some((*inner.ids.get(k)?, k.clone())));
-        let rendered = inner.window.iter().filter_map(|id| Some((*id, inner.by_id.get(id)?.clone())));
+        let selected = inner.selected.iter().filter_map(|k| Some((inner.id(k)?, k.clone())));
+        let rendered = inner.window.iter().filter_map(|id| Some((*id, inner.key(*id)?.clone())));
         rendered.chain(selected).collect()
     }
 
@@ -894,7 +912,7 @@ impl<K: RowKey> Render for RowView<K> {
         let Some(list) = self.list.upgrade() else { return div().into_any_element() };
         let (renderer, meta, expanded, actions_fn, selectable_fn) = {
             let inner = list.borrow();
-            let meta = inner.meta.get(&self.row).copied().unwrap_or_default();
+            let meta = inner.rows.get(&self.key).filter(|r| r.id == self.row).map(|r| r.meta).unwrap_or_default();
             (
                 inner.renderer.clone(),
                 meta,
