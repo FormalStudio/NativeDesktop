@@ -180,7 +180,10 @@ impl Theme {
                 on_accent: p.on_accent,
                 on_osd: if preset == Preset::Adwaita { nd_gpui::gpui::white() } else { text_primary },
                 danger: role_text(p.danger),
-                accent: role_text(p.accent),
+                // Links, mentions and search matches sit inside body text, so the accent keeps a
+                // step of lightness from it: a pastel accent lifted for legibility otherwise
+                // reads as the text itself.
+                accent: crate::color::apart_from(role_text(p.accent), text_primary, &surfaces, 1.6),
                 success: role_text(p.success),
                 warning: role_text(p.warning),
             },

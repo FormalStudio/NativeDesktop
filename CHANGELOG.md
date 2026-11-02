@@ -5,6 +5,9 @@ and the one it moves to.
 
 ## Unreleased
 
+- `text.accent` keeps a 1.6:1 step of lightness from `text.primary`, still 4.5:1 on every surface:
+  a pastel matugen accent on a dark scheme no longer reads as body text in links, mentions and
+  search matches.
 - A source list taller than its pane scrolls on the GPUI backend: rows and section headers keep
   their height instead of shrinking into each other.
 - `window.scroll_into_view(cx, id)` and `App::scroll_into_view(window, id)` scroll every scroll

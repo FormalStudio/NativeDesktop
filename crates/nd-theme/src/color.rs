@@ -86,6 +86,11 @@ pub fn legible(color: Hsla, under: &[Hsla], ratio: f32) -> Hsla {
 /// `--accent-bg-color`): its OKLab lightness capped at 0.5 on a light window, raised to at
 /// least 0.85 on a dark one, hue and chroma kept.
 pub fn standalone(color: Hsla, dark: bool) -> Hsla {
+    with_lightness(color, |l| if dark { l.max(0.85) } else { l.min(0.5) })
+}
+
+/// `color` with its OKLab lightness passed through `f`, hue and chroma kept.
+pub fn with_lightness(color: Hsla, f: impl Fn(f32) -> f32) -> Hsla {
     let c = color.to_rgb();
     let lin = |v: f32| if v <= 0.040_45 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) };
     let (r, g, b) = (lin(c.r), lin(c.g), lin(c.b));
@@ -95,7 +100,7 @@ pub fn standalone(color: Hsla, dark: bool) -> Hsla {
     let lightness = 0.210_454_26 * l + 0.793_617_8 * m - 0.004_072_047 * s;
     let a = 1.977_998_5 * l - 2.428_592_2 * m + 0.450_593_7 * s;
     let bb = 0.025_904_037 * l + 0.782_771_77 * m - 0.808_675_77 * s;
-    let lightness = if dark { lightness.max(0.85) } else { lightness.min(0.5) };
+    let lightness = f(lightness);
     let l = (lightness + 0.396_337_78 * a + 0.215_803_76 * bb).powi(3);
     let m = (lightness - 0.105_561_346 * a - 0.063_854_17 * bb).powi(3);
     let s = (lightness - 0.089_484_18 * a - 1.291_485_5 * bb).powi(3);
@@ -110,6 +115,30 @@ pub fn standalone(color: Hsla, dark: bool) -> Hsla {
         a: c.a,
     }
     .into()
+}
+
+/// `color` moved away from `text` in OKLab lightness, hue and chroma kept, until the two are
+/// `ratio` apart, as far as it stays 4.5:1 on every colour in `under`. Colours already that far
+/// apart come back unchanged.
+pub fn apart_from(color: Hsla, text: Hsla, under: &[Hsla], ratio: f32) -> Hsla {
+    if contrast(color, text) >= ratio {
+        return color;
+    }
+    let darker = luminance(text) > luminance(color);
+    let legible = |c: Hsla| under.iter().all(|b| contrast(over(c, *b), *b) >= 4.5);
+    let mut best = color;
+    for step in 1..=100 {
+        let by = step as f32 / 200.;
+        let candidate = with_lightness(color, |l| if darker { l - by } else { l + by });
+        if !legible(candidate) {
+            break;
+        }
+        best = candidate;
+        if contrast(candidate, text) >= ratio {
+            break;
+        }
+    }
+    best
 }
 
 /// True for colours that read as dark (text on them should be light).
@@ -137,6 +166,18 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn a_pastel_accent_moves_apart_from_the_text_and_stays_legible() {
+        let (text, base) = (parse_hex("#e5e1e9").unwrap(), parse_hex("#141318").unwrap());
+        let pastel = standalone(parse_hex("#c8bfff").unwrap(), true);
+        assert!(contrast(pastel, text) < 1.5, "the pastel starts too close to the text");
+        let apart = apart_from(pastel, text, &[base], 1.6);
+        assert!(contrast(apart, text) >= 1.6, "{}", to_hex(apart));
+        assert!(contrast(apart, base) >= 4.5, "{}", to_hex(apart));
+        let blue = parse_hex("#81d0ff").unwrap();
+        assert!(close(apart_from(blue, parse_hex("#ffffff").unwrap(), &[base], 1.6), blue), "far enough already");
+    }
 
     #[test]
     fn hex_round_trips() {
