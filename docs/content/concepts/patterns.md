@@ -48,6 +48,11 @@ your own buttons, and macOS gives them the system look and sizing.
 
 <!-- docs:snippet examples/chrome/src/lib.rs#toolbar -->
 
+A `search_field` added with `.item(..)` follows each platform: in the toolbar on macOS, the
+title bar's content on Windows, and on Linux a toggle in the header that opens libadwaita's
+search bar under it. `.persistent_search(search_field(..))` keeps the field in the Linux header
+instead, for a window whose search is always in use.
+
 The sidebar holds a `source_list`: sections of items, each with an icon and a badge. Your state
 owns the selection. On macOS, the list is an `NSOutlineView` in source-list style.
 

@@ -9,6 +9,8 @@ and the one it moves to.
   a press keeps nd focus on it, Tab stops on it and bindings of the contexts around it match while
   it has focus. The GPUI presenter rings the keyboard's row with the theme's focus ring. On macOS
   nd focus makes the table or collection view first responder.
+- `toolbar().persistent_search(search_field(..))` keeps the field in the header on Linux
+  instead of behind the search toggle and bar. `ToolbarItemProps` gained `persistent`.
 - `VirtualInput::middle_click`, and `VirtualInput::hold(&[Modifier])` with `release()` for a
   Shift-click or a Control drag in tier 3. `ND_DIAG_WINDOW=1` prints each press as
   `nd: press <button> <modifiers>`.

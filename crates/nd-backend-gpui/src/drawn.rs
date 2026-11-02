@@ -291,6 +291,7 @@ impl Build<'_> {
             with_bar(header, bar)
         } else if is::<ToolbarItem>(kind)
             && theme.preset == nd_theme::Preset::Adwaita
+            && !props::<ToolbarItemProps>(node).is_some_and(|p| p.persistent)
             && let Some((field, _)) = self.search_field_in(node)
         {
             self.search_toggle(id, field, window)
@@ -791,9 +792,13 @@ impl Build<'_> {
     }
 
     /// A toolbar's first search field: the item's index, the field and the width the app gave it.
+    /// A persistent one is an item like any other.
     fn toolbar_search(&self, node: &Node) -> Option<(usize, NodeId, f32)> {
         node.children.iter().enumerate().find_map(|(at, c)| {
             let item = self.nodes.get(c).filter(|n| is_kind::<ToolbarItem>(n))?;
+            if props::<ToolbarItemProps>(item).is_some_and(|p| p.persistent) {
+                return None;
+            }
             let (field, props) = self.search_field_in(item)?;
             let width = match props.style.size.width {
                 Some(gpui::Length::Definite(gpui::DefiniteLength::Absolute(gpui::AbsoluteLength::Pixels(w)))) => {

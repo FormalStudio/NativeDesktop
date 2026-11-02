@@ -66,6 +66,8 @@ enum Kind {
     Chrome,
     /// Notes' toolbar: the sidebar toggle, a button, a flexible space and a search field.
     Search,
+    /// The same with the search field kept in the header.
+    PersistentSearch,
 }
 
 #[derive(Default)]
@@ -161,17 +163,14 @@ impl Render for Scene {
                     .item(button("call", "Call"));
                 return scaffold().toolbar(bar).content(text("Body")).into_any_element();
             }
-            Kind::Search => {
+            Kind::Search | Kind::PersistentSearch => {
                 let search = self.search.get_or_insert_with(|| cx.new(|_| TextFieldState::default())).clone();
+                let field = search_field("find", &search).w(px(220.));
+                let bar = toolbar().title("Notes").sidebar_toggle().item(button("new", "New")).flexible_space();
+                let bar =
+                    if matches!(self.kind, Kind::Search) { bar.item(field) } else { bar.persistent_search(field) };
                 return scaffold()
-                    .toolbar(
-                        toolbar()
-                            .title("Notes")
-                            .sidebar_toggle()
-                            .item(button("new", "New"))
-                            .flexible_space()
-                            .item(search_field("find", &search).w(px(220.))),
-                    )
+                    .toolbar(bar)
                     .sidebar(sidebar().min_w(px(220.)).child(text("Folders")))
                     .content(text("Body"))
                     .into_any_element();
@@ -664,6 +663,21 @@ mod gate_m6 {
         assert!(o.node("find").bounds.is_none(), "Esc closes the search bar");
     }
 
+    /// A persistent search field sits in the header at its own width, with no toggle and no
+    /// search bar, and takes focus and typing there.
+    pub fn gpui_persistent_toolbar_search_stays_in_the_header() {
+        let mut o = open(Kind::PersistentSearch);
+        let find = o.node("find").bounds.expect("the field is in the header");
+        let content = o.node("nd-content").bounds.expect("content laid out");
+        assert!(find.origin.y < 47. && find.origin.x >= content.origin.x, "in the content's header: {find:?}");
+        assert!((find.size.width - 220.).abs() < 1., "at the app's width: {find:?}");
+        o.click(Point { x: find.origin.x + 40., y: find.origin.y + find.size.height / 2. });
+        assert!(o.node("find").focused, "a click focuses it");
+        o.keys(&["a", "escape"]);
+        let after = o.node("find").bounds.expect("Esc closes nothing");
+        assert_eq!(after.origin.y, find.origin.y, "still in the header");
+    }
+
     /// WinUI's title bar: the search box is the bar's content, centred and stretched to the
     /// Gallery's 580 px where the window has room.
     pub fn gpui_toolbar_search_fills_the_title_bar_on_windows() {
@@ -893,6 +907,10 @@ fn main() {
         ("gate_m6::gpui_split_echo_and_refusal", gate_m6::gpui_split_echo_and_refusal),
         ("gate_m6::gpui_side_panes_resize_by_their_edges", gate_m6::gpui_side_panes_resize_by_their_edges),
         ("gate_m6::gpui_rich_text_inherits_size_and_shrinks", gate_m6::gpui_rich_text_inherits_size_and_shrinks),
+        (
+            "gate_m6::gpui_persistent_toolbar_search_stays_in_the_header",
+            gate_m6::gpui_persistent_toolbar_search_stays_in_the_header,
+        ),
         (
             "gate_m6::gpui_split_hidden_subtree_is_not_hit_or_painted",
             gate_m6::gpui_split_hidden_subtree_is_not_hit_or_painted,

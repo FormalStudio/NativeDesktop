@@ -56,6 +56,9 @@ pub struct ToolbarItemProps {
     pub centered: bool,
     /// Starts the content's part of the toolbar, ahead of the title (`isNavigational`).
     pub navigation: bool,
+    /// A search field that stays in the header on Linux instead of behind libadwaita's search
+    /// toggle and bar.
+    pub persistent: bool,
 }
 
 /// An item the OS draws and implements itself.
@@ -135,6 +138,13 @@ impl Toolbar {
     /// Starts the content's part of the toolbar, ahead of the title: a compose or back button.
     pub fn navigation(self, item: impl IntoElement) -> Self {
         self.push(item, ToolbarItemProps { navigation: true, ..ToolbarItemProps::default() })
+    }
+
+    /// A `search_field` that always shows in the header. On Linux a toolbar's search field
+    /// otherwise sits behind a toggle that opens libadwaita's search bar under the header;
+    /// Windows and macOS keep it in the toolbar either way.
+    pub fn persistent_search(self, field: impl IntoElement) -> Self {
+        self.push(field, ToolbarItemProps { persistent: true, ..ToolbarItemProps::default() })
     }
 
     /// Kept in the middle of the window's toolbar: the conversation in a chat window.
