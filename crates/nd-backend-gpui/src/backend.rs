@@ -84,6 +84,19 @@ pub(crate) struct State {
     pub quit: bool,
 }
 
+/// Files dragged in from outside the app while the pointer is over its windows.
+#[derive(Default)]
+pub(crate) struct ExternalDrag {
+    /// The nd session for it has begun.
+    pub active: bool,
+    /// The latest move not yet handed to the app. Every window's root sees each move; the last
+    /// to write it is the topmost.
+    pub moved: Option<(WindowId, nd_core::Point, nd_ui::KeyModifiers)>,
+    /// The window the pointer was last over, where a release drops.
+    pub over: Option<WindowId>,
+    pub paths: Vec<std::path::PathBuf>,
+}
+
 /// The GPUI backend. A cheap handle: `nd-ui`'s `App` owns one clone as its `Box<dyn Backend>`, the
 /// host and every window view keep others.
 #[derive(Clone)]
@@ -113,6 +126,8 @@ pub struct GpuiBackend {
     pub(crate) menu_bar: Rc<RefCell<crate::canvas::MenuBar>>,
     /// Work [`GpuiBackend::defer`] queued for the next pump.
     deferred: Rc<RefCell<Vec<Deferred>>>,
+    /// An outside file drag, carried as an nd drag session.
+    pub(crate) external_drag: Rc<RefCell<ExternalDrag>>,
     /// Presenter state of each `nd-virtual` list, by its node.
     pub(crate) lists: crate::virtual_list::Presenters,
     /// Gesture recognition and scroll physics per window.
@@ -195,6 +210,7 @@ impl GpuiBackend {
             key_tips: Rc::default(),
             surface_counts: Rc::default(),
             deferred: Rc::default(),
+            external_drag: Rc::default(),
             menu_bar: Rc::default(),
             lists: Rc::default(),
             gestures: crate::gestures::Gestures::default(),
@@ -683,6 +699,7 @@ impl Backend for GpuiBackend {
         self.drawn.borrow_mut().remove(&node);
         let mut tabs = self.tab_seam.borrow_mut();
         tabs.strips.remove(&node);
+        tabs.drop_on.remove(&node);
         tabs.detached.remove(&node);
     }
 
@@ -712,6 +729,12 @@ impl Backend for GpuiBackend {
         at: Option<nd_core::Point>,
         _item: &nd_ui::DragItem,
     ) -> Option<nd_ui::DropSlot> {
+        if let Some(slot) = self.list_drop_slot(node, at) {
+            return slot;
+        }
+        if let Some(slot) = self.tab_drop_slot(node, at) {
+            return slot;
+        }
         let drawn = self.drawn_of(node)?;
         let mut state = self.state.borrow_mut();
         let windows: Vec<WindowId> = state.windows.keys().copied().collect();
@@ -723,6 +746,7 @@ impl Backend for GpuiBackend {
             Some(at) => Some(tree.drop_slot(props, at)),
             None => {
                 tree.slot = None;
+                tree.onto = None;
                 None
             }
         }
@@ -912,6 +936,68 @@ impl Backend for GpuiBackend {
 }
 
 impl GpuiBackend {
+    /// Where a drag over an `nd-virtual` list would drop: on the painted row under `at` that
+    /// takes drops, with the row outlined, else on no row. `None` when `node` is no list.
+    fn list_drop_slot(&mut self, node: NodeId, at: Option<nd_core::Point>) -> Option<Option<nd_ui::DropSlot>> {
+        let mut state = self.state.borrow_mut();
+        let props = state.nodes.get(&node)?.props.downcast_ref::<nd_virtual::ListProps>()?.clone();
+        let windows: Vec<WindowId> = state.windows.keys().copied().collect();
+        state.dirty.extend(windows);
+        drop(state);
+        let mut lists = self.lists.borrow_mut();
+        let p = lists.entry(node).or_default();
+        let Some(at) = at else {
+            p.drop_row = None;
+            return Some(None);
+        };
+        let grid = props.kind == nd_virtual::ListKind::Grid;
+        let row = p
+            .painted
+            .iter()
+            .find(|(_, _, r)| {
+                let (x, y) = (at.x - r.origin.x, at.y - r.origin.y);
+                y >= 0. && y < r.size.height && (!grid || (x >= 0. && x < r.size.width))
+            })
+            .map(|(row, _, _)| *row)
+            .filter(|row| props.drop_on.as_ref().is_none_or(|on| on.contains(row)));
+        p.drop_row = row;
+        let core = props.handle.0.borrow();
+        let index = row.and_then(|r| core.index_of(r)).unwrap_or(core.len());
+        Some(Some(nd_ui::DropSlot { parent: None, index, on: row.map(|r| r.0.to_string().into()) }))
+    }
+
+    /// Where a drag over a drawn tab strip would drop: on the tab under `at`, outlined. `None`
+    /// when `node` is no tab strip.
+    fn tab_drop_slot(&mut self, node: NodeId, at: Option<nd_core::Point>) -> Option<Option<nd_ui::DropSlot>> {
+        let mut state = self.state.borrow_mut();
+        let ids: Vec<nd_gpui::gpui::SharedString> = state
+            .nodes
+            .get(&node)?
+            .props
+            .downcast_ref::<nd_components::TabStripProps>()?
+            .tabs
+            .iter()
+            .map(|t| t.id.clone())
+            .collect();
+        let windows: Vec<WindowId> = state.windows.keys().copied().collect();
+        state.dirty.extend(windows);
+        drop(state);
+        let mut seam = self.tab_seam.borrow_mut();
+        let hit = at.and_then(|at| {
+            let layout = seam.strips.get(&node)?.borrow();
+            layout.tabs.iter().position(|r| crate::tab_bar::contains(r, at.x, at.y))
+        });
+        match hit {
+            Some(i) => seam.drop_on.insert(node, i),
+            None => seam.drop_on.remove(&node),
+        };
+        Some(at.map(|_| nd_ui::DropSlot {
+            parent: None,
+            index: hit.unwrap_or(ids.len()),
+            on: hit.map(|i| ids[i].clone()),
+        }))
+    }
+
     /// Runs one input through the window's gesture router with the current tree and the bounds
     /// of the last paint, then queues the events it produced and redraws for moved scroll views.
     pub(crate) fn gesture_input(

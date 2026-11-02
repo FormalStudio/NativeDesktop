@@ -8,30 +8,51 @@
 //! session draws the image across windows); it then reports where the pointer is per window.
 
 use nd_core::{NodeId, Point, Rect, WindowId};
-use nd_gesture::GesturePhase;
+use nd_gesture::{GesturePhase, KeyModifiers};
 use nd_gpui::gpui::SharedString;
 
 use crate::App;
 
-/// What is dragged: an app-defined kind targets filter on, and the dragged thing's id.
+/// What is dragged: an app-defined kind targets filter on, and the dragged things' ids. `id` is
+/// the first of `ids`, the one a single drag carries.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct DragItem {
     pub kind: SharedString,
     pub id: SharedString,
+    pub ids: Vec<SharedString>,
 }
 
 impl DragItem {
+    /// The kind of files dragged in from outside the app (a file manager's), each id a path.
+    pub const FILES: &str = "files";
+
     pub fn new(kind: impl Into<SharedString>, id: impl Into<SharedString>) -> Self {
-        Self { kind: kind.into(), id: id.into() }
+        let id = id.into();
+        Self { kind: kind.into(), id: id.clone(), ids: vec![id] }
+    }
+
+    /// Several things dragged together, such as the selected rows of a list.
+    pub fn many(kind: impl Into<SharedString>, ids: impl IntoIterator<Item = impl Into<SharedString>>) -> Self {
+        let ids: Vec<SharedString> = ids.into_iter().map(Into::into).collect();
+        Self { kind: kind.into(), id: ids.first().cloned().unwrap_or_default(), ids }
     }
 }
 
-/// Where a widget that places drops itself (a source list) would put one: the index among the
-/// children of `parent`, or among the roots without one.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Where a widget that places drops itself (a source list, a list, a tab strip) would put one:
+/// the index among the children of `parent`, or among the roots without one. `on` is the item
+/// the drop lands on rather than between (a folder row, a tab), by its id in the widget.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct DropSlot {
     pub parent: Option<SharedString>,
     pub index: usize,
+    pub on: Option<SharedString>,
+}
+
+impl DropSlot {
+    /// Between items: at `index` among `parent`'s children.
+    pub fn at(parent: Option<SharedString>, index: usize) -> Self {
+        Self { parent, index, on: None }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -52,6 +73,9 @@ pub struct DragOver {
     pub local: Point,
     pub source_window: WindowId,
     pub slot: Option<DropSlot>,
+    /// Held now: the platform's copy key (Control, Option on macOS) asks for a copy, Shift for a
+    /// move.
+    pub modifiers: KeyModifiers,
 }
 
 /// The pointer was released over the target.
@@ -62,6 +86,8 @@ pub struct Dropped {
     pub local: Point,
     pub source_window: WindowId,
     pub slot: Option<DropSlot>,
+    /// Held at the release.
+    pub modifiers: KeyModifiers,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -100,6 +126,7 @@ pub struct DragSource {
     pub phase: GesturePhase,
     pub at: DragPoint,
     pub native: bool,
+    pub modifiers: KeyModifiers,
 }
 
 /// What a node does in drags: the item it drags as, and the kinds it takes.
@@ -121,6 +148,7 @@ pub(crate) struct Session {
     screen: Option<Point>,
     /// The source is shown as a picture following the pointer outside its window.
     previewing: bool,
+    modifiers: KeyModifiers,
 }
 
 fn contains(r: &Rect, p: Point) -> bool {
@@ -142,7 +170,24 @@ impl App {
             slot: None,
             screen: None,
             previewing: false,
+            modifiers: KeyModifiers::default(),
         });
+    }
+
+    /// The keys held during the running drag, for a backend that owns its pointer.
+    pub fn set_drag_modifiers(&mut self, modifiers: KeyModifiers) {
+        if let Some(session) = self.drag.as_mut() {
+            session.modifiers = modifiers;
+        }
+    }
+
+    /// A drag from outside the app (files from a file manager) entered `window`. Targets that
+    /// accept `item.kind` see it as any drag; [`DragEnded`] goes to the window's root.
+    pub fn begin_external_drag(&mut self, window: WindowId, item: DragItem) {
+        let Some(root) = self.windows.get(&window).and_then(|w| w.tree.as_ref()).map(|t| t.root_node()) else {
+            return;
+        };
+        self.begin_drag(window, root, item, false);
     }
 
     pub fn is_dragging(&self) -> bool {
@@ -196,6 +241,7 @@ impl App {
                 local,
                 source_window: session.source_window,
                 slot: session.slot.clone(),
+                modifiers: session.modifiers,
             };
             self.events().push(node, Box::new(dropped));
             self.end(session, DragOutcome::Dropped { window: w });
@@ -241,6 +287,7 @@ impl App {
         let Some(session) = self.drag.as_mut() else { return };
         let item = session.item.clone();
         let source_window = session.source_window;
+        let modifiers = session.modifiers;
         let old = session.over;
         session.over = hit.map(|(w, n, _, _)| (w, n));
         session.slot = None;
@@ -257,6 +304,7 @@ impl App {
                     local: Point::default(),
                     source_window,
                     slot: None,
+                    modifiers,
                 }),
             );
         }
@@ -266,7 +314,8 @@ impl App {
             if let Some(session) = self.drag.as_mut() {
                 session.slot = slot.clone();
             }
-            self.events().push(node, Box::new(DragOver { item, phase, position, local, source_window, slot }));
+            self.events()
+                .push(node, Box::new(DragOver { item, phase, position, local, source_window, slot, modifiers }));
         }
     }
 
@@ -337,6 +386,9 @@ impl App {
             self.windows.iter().find(|(_, s)| s.tree.as_ref().is_some_and(|t| t.contains(node))).map(|(w, _)| *w);
         let Some(window) = window else { return false };
         if let Some(source) = event.downcast_ref::<DragSource>() {
+            if source.phase != GesturePhase::Began {
+                self.set_drag_modifiers(source.modifiers);
+            }
             let at = |app: &App| match source.at {
                 DragPoint::Window(p) => Some(p),
                 DragPoint::Screen(s) => {
@@ -344,7 +396,10 @@ impl App {
                 }
             };
             match source.phase {
-                GesturePhase::Began => self.begin_drag(window, node, source.item.clone(), source.native),
+                GesturePhase::Began => {
+                    self.begin_drag(window, node, source.item.clone(), source.native);
+                    self.set_drag_modifiers(source.modifiers);
+                }
                 GesturePhase::Changed if !source.native => {
                     if let Some(p) = at(self) {
                         self.drag_moved(window, p);
@@ -373,9 +428,13 @@ impl App {
         }
         let Some(drag) = event.downcast_ref::<nd_gesture::DragEvent>() else { return false };
         let Some(item) = self.windows[&window].tree.as_ref().and_then(|t| t.drag_item(node)) else { return false };
+        if drag.phase != GesturePhase::Began && self.drag.as_ref().is_some_and(|s| s.source == node) {
+            self.set_drag_modifiers(drag.modifiers);
+        }
         match drag.phase {
             GesturePhase::Began => {
                 self.begin_drag(window, node, item, false);
+                self.set_drag_modifiers(drag.modifiers);
                 self.drag_moved(window, drag.position);
             }
             GesturePhase::Changed => {

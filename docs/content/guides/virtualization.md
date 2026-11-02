@@ -110,6 +110,22 @@ with Shift, or toggles what it sweeps with the secondary key, and scrolls when h
 On macOS this is `NSTableView` and `NSCollectionView` behaviour; the GPUI presenter implements the
 same rules in `nd_virtual::selection`. A middle click goes to the row's own `.on_middle_click`.
 
+`.drag_rows(kind, |key| id)` lets rows drag out. A drag from a selected row carries the whole
+selection in list order, and one from an unselected row selects it and drags it alone. The GPUI
+presenter draws the row under the pointer with a count badge when there are several.
+`.accepts_drops([kind])` makes the list a target, with the row under the pointer outlined, and
+`.drop_on(|key| ..)` limits which rows take a drop on themselves, as a file manager's folders do.
+`.on_drop` reports `RowDropped { key, item, modifiers, local }`, where `key` is the row it landed
+on or `None` for empty space. Pass `DragItem::FILES` to take files from outside the app.
+
+```rust
+table("files", &self.files, columns, render_cell)
+    .drag_rows("file", |id: &FileId| id.to_string().into())
+    .accepts_drops(["file", DragItem::FILES])
+    .drop_on(|id| id.is_folder())
+    .on_drop(cx.listener(|this, e: &RowDropped<FileId>, _, cx| this.drop_into(e.key, &e.item.ids, cx)))
+```
+
 Row actions are a method of the list, which asks for them per row. The closure runs for the row
 that the user swipes:
 
@@ -159,7 +175,8 @@ AppKit callbacks. The data source answers from rows that are already rendered. T
 doesn't use GPUI's own `ListState`. That type requires that rows outside the viewport never change
 height without a `splice`, and that rule is what makes the last rows vanish.
 
-The GPUI presenter doesn't have sticky headers, drag reorder, or column resize yet. Neither presenter ships type-ahead. On macOS, trees and grids apply changes with a full
+The GPUI presenter doesn't have sticky headers, an insertion line for drag reorder, or column
+resize yet, and on macOS rows don't drag or take drops yet. Neither presenter ships type-ahead. On macOS, trees and grids apply changes with a full
 reload, so they don't animate inserts. For the open list, see [TODO.md](../../plan/TODO.md).
 
 ## The last-row bug class

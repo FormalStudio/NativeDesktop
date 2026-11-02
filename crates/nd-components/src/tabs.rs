@@ -171,6 +171,23 @@ impl TabStrip {
     pub fn on_add(self, f: impl Fn(&TabAddRequested, &mut Window, &mut App) + 'static) -> Self {
         TabStrip(self.0.on(f))
     }
+
+    /// The strip takes drags of these kinds. Over a tab, the drag's [`DropSlot::on`] names it
+    /// and its `index` is the tab's; past the last tab `on` is `None`.
+    ///
+    /// [`DropSlot::on`]: nd_ui::DropSlot::on
+    pub fn accepts_drops(self, kinds: impl IntoIterator<Item = impl Into<SharedString>>) -> Self {
+        TabStrip(self.0.accepts_drops(kinds))
+    }
+
+    pub fn on_drag_over(self, f: impl Fn(&nd_ui::DragOver, &mut Window, &mut App) + 'static) -> Self {
+        TabStrip(self.0.on(f))
+    }
+
+    /// A drag was dropped on the strip; its `slot` names the tab under it.
+    pub fn on_drop(self, f: impl Fn(&nd_ui::Dropped, &mut Window, &mut App) + 'static) -> Self {
+        TabStrip(self.0.on(f))
+    }
 }
 
 crate::forms::leaf!(TabStrip, TabStripProps);

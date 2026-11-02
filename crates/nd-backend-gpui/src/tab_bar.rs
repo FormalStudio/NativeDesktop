@@ -701,8 +701,23 @@ impl Build<'_> {
             switcher_view(&key, &bar, &theme, Some(on_input), Some(sink), &marks)
         };
         self.record_marks(id, marks.take());
+        let onto = {
+            let seam = self.backend.tab_seam.borrow();
+            let i = seam.drop_on.get(&id).copied();
+            i.and_then(|i| seam.strips.get(&id)?.borrow().tabs.get(i).copied())
+        };
+        let ring = onto.map(|r| {
+            let ring = div()
+                .w(px(r.size.width))
+                .h(px(r.size.height))
+                .rounded(theme.radius.md)
+                .border_2()
+                .border_color(theme.accent);
+            gpui::deferred(gpui::anchored().position(gpui::point(px(r.origin.x), px(r.origin.y))).child(ring))
+                .with_priority(crate::overlay::PANEL_PRIORITY)
+        });
         let mut wrapper = div();
         wrapper.style().refine(&props.style);
-        wrapper.flex().child(element).into_any_element()
+        wrapper.flex().child(element).children(ring).into_any_element()
     }
 }

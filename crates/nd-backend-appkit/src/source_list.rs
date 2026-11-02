@@ -182,7 +182,7 @@ define_class!(
             };
             if let Some(item) = item {
                 let at = DragPoint::Screen(screen_point(MainThreadMarker::from(outline), point));
-                shared.report(DragSource { item, phase: GesturePhase::Began, at, native: true });
+                shared.report(DragSource { item, phase: GesturePhase::Began, at, native: true, modifiers: Default::default() });
             }
         }
 
@@ -191,7 +191,7 @@ define_class!(
             let shared = &self.ivars().shared;
             let item = DragItem::new(shared.data.borrow().drag_kind.clone().unwrap_or_default(), "");
             let at = DragPoint::Screen(screen_point(MainThreadMarker::from(outline), point));
-            shared.report(DragSource { item, phase: GesturePhase::Ended, at, native: true });
+            shared.report(DragSource { item, phase: GesturePhase::Ended, at, native: true, modifiers: Default::default() });
         }
 
         // A section is expandable too, or the outline would never show its rows; it just
@@ -612,8 +612,9 @@ impl NdSourceCell {
         // Counts recede behind the title, as in Notes' and Mail's sidebars, at the secondary text
         // token. On the unemphasized selection grey that token is under 4.5:1, so a selected
         // row's count takes the title's colour.
-        let selected =
-            unsafe { self.superview() }.and_then(|v| v.downcast::<NSTableRowView>().ok()).is_some_and(|r| r.isSelected());
+        let selected = unsafe { self.superview() }
+            .and_then(|v| v.downcast::<NSTableRowView>().ok())
+            .is_some_and(|r| r.isSelected());
         let badge = match style {
             NSBackgroundStyle::Emphasized => secondary,
             _ if selected => NSColor::labelColor(),
@@ -884,6 +885,31 @@ impl SourceTreeNative {
         let row = if p.y < 0. { 0 } else { self.outline.rowAtPoint(p) };
         let data = self.shared().data.borrow();
         let visible = data.index.visible(&data.nodes);
+        let onto = (row >= 0 && row < rows)
+            .then(|| {
+                let rect = self.outline.rectOfRow(row);
+                let i = data.node_index(self.outline.itemAtRow(row).as_deref())?;
+                let fraction = ((p.y - rect.origin.y) / rect.size.height.max(1.)) as f32;
+                self.props.lands_on(i, fraction).then_some((i, rect))
+            })
+            .flatten();
+        if let Some(layer) = self.slot_line.layer() {
+            let accent = NSColor::controlAccentColor().CGColor();
+            layer.setBackgroundColor(if onto.is_some() { None } else { Some(&accent) });
+            layer.setBorderWidth(if onto.is_some() { 2. } else { 0. });
+            layer.setBorderColor(Some(&accent));
+        }
+        if let Some((i, rect)) = onto {
+            let at = visible.iter().position(|(v, _)| *v == i);
+            let between = data.index.drop_slot(&data.nodes, &visible, at, true);
+            self.slot_line.setFrame(rect);
+            if let Some(layer) = self.slot_line.layer() {
+                layer.setCornerRadius(4.); // nd-lint: allow, NSOutlineView's drop-on ring
+            }
+            self.outline.addSubview(&self.slot_line);
+            self.slot_line.setHidden(false);
+            return Some(DropSlot { on: Some(data.nodes[i].id.clone()), ..between });
+        }
         let (slot, line_y, line_x) = if row < 0 || row >= rows {
             let last = rows - 1;
             let y = if last >= 0 {

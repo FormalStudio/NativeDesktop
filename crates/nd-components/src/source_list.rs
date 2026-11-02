@@ -207,6 +207,8 @@ pub struct SourceTreeProps {
     pub drag_kind: Option<SharedString>,
     /// Kinds the list takes; it then shows where a drop would land.
     pub accepts: Vec<SharedString>,
+    /// A drop over the middle of a row lands on that row, not between rows.
+    pub drop_onto: bool,
     pub style: StyleRefinement,
 }
 
@@ -219,6 +221,12 @@ impl SourceTreeProps {
     /// The item row `i` drags as.
     pub fn drag_item(&self, i: usize) -> Option<DragItem> {
         self.drag_kind.clone().filter(|_| self.drags(i)).map(|kind| DragItem::new(kind, self.nodes[i].id.clone()))
+    }
+
+    /// Whether a drag `fraction` of the way down row `i` lands on the row: its middle half, as
+    /// `NSOutlineView` drops on an item, and never on a section heading.
+    pub fn lands_on(&self, i: usize, fraction: f32) -> bool {
+        self.drop_onto && !self.nodes[i].section && (0.25..0.75).contains(&fraction)
     }
 }
 
@@ -272,6 +280,7 @@ pub fn source_tree(id: impl Into<SharedString>) -> SourceTree {
         empty: None,
         drag_kind: None,
         accepts: Vec::new(),
+        drop_onto: false,
         style: StyleRefinement::default(),
     };
     SourceTree(NativeElement::new::<SourceTreeKind>(Key::Id(id.into()), props).size_full())
@@ -367,6 +376,13 @@ impl SourceTree {
         let kinds: Vec<SharedString> = kinds.into_iter().map(Into::into).collect();
         self.0.props_mut().accepts = kinds.clone();
         SourceTree(self.0.accepts_drops(kinds))
+    }
+
+    /// A drag over the middle of a row lands on it: the row is outlined and the drop's
+    /// [`DropSlot::on`] names it. Above and below the middle it still lands between rows.
+    pub fn drops_onto_rows(mut self) -> Self {
+        self.0.props_mut().drop_onto = true;
+        self
     }
 
     pub fn on_drag_over(self, f: impl Fn(&DragOver, &mut Window, &mut App) + 'static) -> Self {
@@ -544,18 +560,18 @@ impl SourceIndex {
         };
         let Some(&(i, _)) = row.and_then(|r| visible.get(r)) else {
             // Past the last row: after the last row of the last section, or the last root.
-            let Some(&(last, _)) = visible.last() else { return DropSlot { parent: None, index: 0 } };
+            let Some(&(last, _)) = visible.last() else { return DropSlot { parent: None, index: 0, on: None } };
             let parent = if nodes[last].section { Some(nodes[last].id.clone()) } else { parent_of(last) };
             let index = siblings(&parent).len();
-            return DropSlot { parent, index };
+            return DropSlot { parent, index, on: None };
         };
         let opens = nodes[i].expanded && !self.children[i].is_empty();
         if nodes[i].section || (!upper && opens) {
-            return DropSlot { parent: Some(nodes[i].id.clone()), index: 0 };
+            return DropSlot { parent: Some(nodes[i].id.clone()), index: 0, on: None };
         }
         let parent = parent_of(i);
         let at = siblings(&parent).iter().position(|&s| s == i).unwrap_or(0);
-        DropSlot { parent, index: if upper { at } else { at + 1 } }
+        DropSlot { parent, index: if upper { at } else { at + 1 }, on: None }
     }
 
     fn walk(&self, nodes: &[SourceNode], i: usize, depth: usize, out: &mut Vec<(usize, usize)>) {
@@ -632,7 +648,7 @@ mod tests {
         let index = SourceIndex::new(&nodes);
         let rows = index.visible(&nodes);
         let slot = |row, upper| index.drop_slot(&nodes, &rows, row, upper);
-        let at = |p: &str, i| DropSlot { parent: Some(p.into()), index: i };
+        let at = |p: &str, i| DropSlot { parent: Some(p.into()), index: i, on: None };
         assert_eq!(slot(Some(0), true), at("pinned", 0), "a section header takes it first");
         assert_eq!(slot(Some(1), false), at("pinned", 1));
         assert_eq!(slot(Some(3), true), at("tabs", 0));
@@ -643,8 +659,20 @@ mod tests {
         let flat = vec![source_node("a", "A"), source_node("b", "B")];
         let index = SourceIndex::new(&flat);
         let rows = index.visible(&flat);
-        assert_eq!(index.drop_slot(&flat, &rows, Some(1), true), DropSlot { parent: None, index: 1 });
-        assert_eq!(index.drop_slot(&flat, &rows, None, false), DropSlot { parent: None, index: 2 });
+        assert_eq!(index.drop_slot(&flat, &rows, Some(1), true), DropSlot { parent: None, index: 1, on: None });
+        assert_eq!(index.drop_slot(&flat, &rows, None, false), DropSlot { parent: None, index: 2, on: None });
+    }
+
+    #[test]
+    fn a_drop_lands_on_a_row_in_its_middle_half_only_when_asked() {
+        let tree = source_list("s").section("Places", [source_item("disk", "Disk")]);
+        let props = tree.0.props();
+        assert!(!props.lands_on(1, 0.5), "off by default");
+        let tree = tree.drops_onto_rows();
+        let props = tree.0.props();
+        assert!(props.lands_on(1, 0.5));
+        assert!(!props.lands_on(1, 0.1) && !props.lands_on(1, 0.9), "the edges stay between rows");
+        assert!(!props.lands_on(0, 0.5), "never on a section heading");
     }
 
     #[test]

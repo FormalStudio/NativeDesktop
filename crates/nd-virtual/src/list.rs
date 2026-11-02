@@ -151,6 +151,12 @@ pub struct ListProps {
     /// A sidebar's list: rows inset from the edges, the selection a rounded inset highlight
     /// (the source list style on macOS).
     pub inset: bool,
+    /// Rows drag as this kind ([`List::drag_rows`]).
+    pub drag_kind: Option<SharedString>,
+    /// The drag id of each rendered or selected row.
+    pub drag_ids: HashMap<RowId, SharedString>,
+    /// The rendered rows a drop may land on; every row when `None` ([`List::drop_on`]).
+    pub drop_on: Option<HashSet<RowId>>,
 }
 
 /// Widget kind of the list container.
@@ -354,6 +360,19 @@ pub struct SortChanged {
 }
 
 // Events the app handles.
+
+/// A drag the list accepts was dropped on it: on the row `key`, or on no row (empty space, or a
+/// row [`List::drop_on`] turns down).
+#[derive(Clone, Debug, PartialEq)]
+pub struct RowDropped<K> {
+    pub key: Option<K>,
+    pub item: nd_ui::DragItem,
+    /// Held at the release: Control (Option on macOS) asks for a copy, Shift (Command on macOS)
+    /// for a move.
+    pub modifiers: nd_gesture::KeyModifiers,
+    /// From the list's top-left.
+    pub local: nd_core::Point,
+}
 
 /// The user selected `key` (the row the click or key landed on); `keys` is the whole selection
 /// in list order.
@@ -840,7 +859,18 @@ impl<K: RowKey> ListState<K> {
             style,
             gestures,
             inset,
+            drag_kind: None,
+            drag_ids: HashMap::new(),
+            drop_on: None,
         }
+    }
+
+    /// The rows a presenter can start a drag from or drop on: those rendered, and the selection.
+    fn live_rows(&self) -> Vec<(RowId, K)> {
+        let inner = self.inner.borrow();
+        let selected = inner.selected.iter().filter_map(|k| Some((*inner.ids.get(k)?, k.clone())));
+        let rendered = inner.window.iter().filter_map(|id| Some((*id, inner.by_id.get(id)?.clone())));
+        rendered.chain(selected).collect()
     }
 
     fn children(&self) -> Vec<AnyElement> {
@@ -1004,7 +1034,14 @@ pub struct List<K: RowKey> {
     on_near_end: Option<Handler<()>>,
     on_column_resize: Option<Handler<ColumnResized>>,
     on_sort: Option<Handler<SortChanged>>,
+    drag: Option<(SharedString, DragIdFn<K>)>,
+    accepts: Vec<SharedString>,
+    drop_on: Option<DropOnFn<K>>,
+    on_drop: Option<Handler<RowDropped<K>>>,
 }
+
+type DragIdFn<K> = Rc<dyn Fn(&K) -> SharedString>;
+type DropOnFn<K> = Rc<dyn Fn(&K) -> bool>;
 
 fn build<K: RowKey>(id: SharedString, state: &ListState<K>, kind: ListKind, renderer: Renderer<K>) -> List<K> {
     List {
@@ -1024,6 +1061,10 @@ fn build<K: RowKey>(id: SharedString, state: &ListState<K>, kind: ListKind, rend
         on_near_end: None,
         on_column_resize: None,
         on_sort: None,
+        drag: None,
+        accepts: Vec::new(),
+        drop_on: None,
+        on_drop: None,
     }
 }
 
@@ -1177,6 +1218,35 @@ impl<K: RowKey> List<K> {
         self.on_sort = Some(Rc::new(f));
         self
     }
+
+    /// Rows drag as `kind`, each carrying `id(key)`. Dragging a selected row drags the whole
+    /// selection in list order; an unselected row is selected and drags alone. Targets anywhere
+    /// in the app's windows take it with `accepts_drops([kind])`; the GPUI presenter draws the
+    /// row under the pointer with a count badge for several.
+    pub fn drag_rows(mut self, kind: impl Into<SharedString>, id: impl Fn(&K) -> SharedString + 'static) -> Self {
+        self.drag = Some((kind.into(), Rc::new(id)));
+        self
+    }
+
+    /// The list takes drops of these kinds: on the row under the pointer, highlighted while the
+    /// drag is over it, or on empty space. [`DragItem::FILES`](nd_ui::DragItem::FILES) takes
+    /// files dragged in from outside the app.
+    pub fn accepts_drops(mut self, kinds: impl IntoIterator<Item = impl Into<SharedString>>) -> Self {
+        self.accepts = kinds.into_iter().map(Into::into).collect();
+        self
+    }
+
+    /// Only these rows take a drop on themselves (a file manager's folders); a drop over any other
+    /// lands on no row.
+    pub fn drop_on(mut self, f: impl Fn(&K) -> bool + 'static) -> Self {
+        self.drop_on = Some(Rc::new(f));
+        self
+    }
+
+    pub fn on_drop(mut self, f: impl Fn(&RowDropped<K>, &mut Window, &mut App) + 'static) -> Self {
+        self.on_drop = Some(Rc::new(f));
+        self
+    }
 }
 
 impl<K: RowKey> Styled for List<K> {
@@ -1198,8 +1268,21 @@ impl<K: RowKey> IntoElement for List<K> {
             return d.flex().flex_col().items_center().justify_center().child(empty).into_any_element();
         }
         state.inner.borrow_mut().renderer = Some(self.renderer);
-        let props = state.props(self.kind, self.selection, self.style.clone(), self.inset);
+        let mut props = state.props(self.kind, self.selection, self.style.clone(), self.inset);
+        if self.drag.is_some() || self.drop_on.is_some() {
+            let live = state.live_rows();
+            if let Some((kind, id)) = &self.drag {
+                props.drag_kind = Some(kind.clone());
+                props.drag_ids = live.iter().map(|(r, k)| (*r, id(k))).collect();
+            }
+            if let Some(f) = &self.drop_on {
+                props.drop_on = Some(live.iter().filter(|(_, k)| f(k)).map(|(r, _)| *r).collect());
+            }
+        }
         let mut el = ContainerElement::new::<ListWidget>(Key::Id(self.id), props);
+        if !self.accepts.is_empty() {
+            el = el.accepts_drops(self.accepts);
+        }
         *el.style() = self.style;
         let s = state.clone();
         let (near_start, near_end) = (self.on_near_start, self.on_near_end);
@@ -1254,6 +1337,16 @@ impl<K: RowKey> IntoElement for List<K> {
             if let Some(f) = &on_resize {
                 f(e, window, cx);
             }
+        });
+        let s = state.clone();
+        let on_drop = self.on_drop;
+        let el = el.on(move |e: &nd_ui::Dropped, window, cx| {
+            let Some(f) = &on_drop else { return };
+            let key = e.slot.as_ref().and_then(|slot| slot.on.as_ref()).and_then(|on| {
+                let row = RowId(on.parse().ok()?);
+                s.key_of(row)
+            });
+            f(&RowDropped { key, item: e.item.clone(), modifiers: e.modifiers, local: e.local }, window, cx);
         });
         let on_sort = self.on_sort;
         el.on(move |e: &SortChanged, window, cx| {

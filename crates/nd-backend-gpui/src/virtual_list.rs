@@ -20,7 +20,7 @@ use nd_core::{NodeId, Rect};
 use nd_gpui::gpui::{
     self, AnyElement, App, AvailableSpace, Bounds, ContentMask, DispatchPhase, ElementId, GlobalElementId, Hitbox,
     HitboxBehavior, Hsla, InspectorElementId, IntoElement, KeyDownEvent, LayoutId, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, Pixels, Point, Refineable, Style, fill, point, px, size,
+    MouseMoveEvent, MouseUpEvent, Pixels, Point, Refineable, SharedString, Style, fill, point, px, size,
 };
 use nd_ui::events::Emit;
 use nd_virtual::selection::{self, Extend, Nav};
@@ -69,6 +69,20 @@ pub struct Presenter {
     /// A plain press on a row of a multiple selection: it collapses the selection to that row
     /// on release, unless the press became a drag (the group moves together).
     pending: Option<(RowId, Point<Pixels>)>,
+    /// A press on a row of a list whose rows drag: where, and the row's bounds.
+    press: Option<(RowId, Point<Pixels>, Bounds<Pixels>)>,
+    /// The rows being dragged out, drawn under the pointer.
+    drag: Option<RowsDrag>,
+    /// The row a drag over the list would drop on, outlined.
+    pub(crate) drop_row: Option<RowId>,
+}
+
+struct RowsDrag {
+    item: nd_ui::DragItem,
+    /// The pointer, and where it holds the pressed row from its top-left.
+    at: Point<Pixels>,
+    grab: Point<Pixels>,
+    size: gpui::Size<Pixels>,
 }
 
 /// A rubber band dragged out from empty space.
@@ -425,7 +439,41 @@ impl gpui::Element for VirtualList {
                 (self.wake)(cx);
             }
         }
+        let preview = state.drag.as_ref().map(|d| (d.at - d.grab, d.size, d.item.ids.len()));
         drop(presenters);
+        if let Some((origin, size, count)) = preview {
+            use gpui::{ParentElement as _, Styled as _};
+            let mut card = gpui::div()
+                .w(size.width)
+                .h(size.height)
+                .rounded(px(6.))
+                .border_1()
+                .border_color(self.accent)
+                .bg(self.selection_color.opacity(0.85))
+                .opacity(0.9);
+            if count > 1 {
+                card = card.child(
+                    gpui::div()
+                        .absolute()
+                        .top(px(-8.))
+                        .right(px(-8.))
+                        .min_w(px(20.))
+                        .h(px(20.))
+                        .px(px(5.))
+                        .rounded_full()
+                        .bg(self.accent)
+                        .text_color(gpui::white())
+                        .text_size(px(12.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(count.to_string()),
+                );
+            }
+            let mut card = card.into_any_element();
+            card.layout_as_root(gpui::AvailableSpace::min_size(), window, cx);
+            window.defer_draw(card, origin, 2, None);
+        }
         Prepainted { hitbox, placed, selected: sel, disclosures, header, scrolled: (synced, range) }
     }
 
@@ -506,6 +554,9 @@ impl gpui::Element for VirtualList {
         let all: Vec<(RowId, Bounds<Pixels>)> =
             prepainted.placed.iter().map(|(i, b)| (self.rows[*i].tag.row, *b)).collect();
         let marquees = matches!(self.props.kind, ListKind::Table(_) | ListKind::Grid) && selection != Selection::None;
+        let drags = self.props.drag_kind.is_some();
+        let drag_kind = self.props.drag_kind.clone();
+        let drag_ids = Rc::new(self.props.drag_ids.clone());
         let focus = self.focus.clone();
         let pick = ctx.clone();
         // A press a row's own control took focus for (a text field renaming the row) is that
@@ -549,6 +600,9 @@ impl gpui::Element for VirtualList {
                     wake(cx);
                 }
                 (MouseButton::Left, Some(row)) if selection != Selection::None => {
+                    if drags && let Some((_, b)) = all.iter().find(|(r, _)| *r == row) {
+                        pick.with(|p| p.press = Some((row, at, *b)));
+                    }
                     if selection == Selection::Multiple && extend == Extend::default() && selected.contains(&row) {
                         pick.with(|p| p.pending = Some((row, at)));
                         return;
@@ -585,6 +639,12 @@ impl gpui::Element for VirtualList {
             if phase != DispatchPhase::Bubble || event.pressed_button != Some(MouseButton::Left) {
                 return;
             }
+            if let Some(kind) = &drag_kind
+                && pick.drag(kind, &drag_ids, event, cx)
+            {
+                window.refresh();
+                return;
+            }
             let at = (event.position.x.as_f32(), event.position.y.as_f32());
             let moved = pick.with(|p| {
                 if p.pending.is_some_and(|(_, from)| {
@@ -613,7 +673,18 @@ impl gpui::Element for VirtualList {
             if phase != DispatchPhase::Bubble || event.button != MouseButton::Left {
                 return;
             }
-            let (pending, marquee) = pick.with(|p| (p.pending.take(), p.marquee.take())).unwrap_or_default();
+            let (pending, marquee, drag) = pick
+                .with(|p| (p.pending.take(), p.marquee.take(), (p.press.take(), p.drag.take()).1))
+                .unwrap_or_default();
+            if let Some(drag) = drag {
+                let source =
+                    crate::nav::drag_source(&drag.item, nd_ui::GesturePhase::Ended, event.position, &event.modifiers);
+                pick.emit.emit(source);
+                (pick.wake)(cx);
+                cx.stop_propagation();
+                window.refresh();
+                return;
+            }
             if let Some((row, _)) = pending {
                 pick.click(row, Extend::default(), cx);
             }
@@ -685,6 +756,19 @@ impl gpui::Element for VirtualList {
             for (i, _) in &prepainted.placed {
                 self.rows[*i].element.paint(window, cx);
             }
+            let target = self.presenters.borrow().get(&self.node).and_then(|p| p.drop_row);
+            if let Some((_, b)) =
+                target.and_then(|t| prepainted.placed.iter().find(|(i, _)| self.rows[*i].tag.row == t))
+            {
+                let b = if self.props.kind == ListKind::Grid {
+                    *b
+                } else {
+                    Bounds::new(point(view.origin.x, b.origin.y), size(view.size.width, b.size.height))
+                };
+                let mut ring = gpui::outline(b, self.accent, gpui::BorderStyle::Solid).corner_radii(px(6.));
+                ring.border_widths = (px(2.)).into();
+                window.paint_quad(ring);
+            }
             if let Some(band) = self.band(view) {
                 window.paint_quad(fill(band, self.accent.opacity(0.2)));
                 window.paint_quad(gpui::outline(band, self.accent.opacity(0.8), gpui::BorderStyle::Solid));
@@ -733,6 +817,57 @@ impl Pick {
             p.cursor = picked.cursor;
         });
         self.report(picked.selected, picked.cursor, cx);
+    }
+
+    /// A move with the button held: past the slop a press on a row drags the selection (or the
+    /// row alone, selected first when it was not), and later moves carry the drag. True while
+    /// a drag runs.
+    fn drag(
+        &self,
+        kind: &SharedString,
+        ids: &HashMap<RowId, SharedString>,
+        event: &MouseMoveEvent,
+        cx: &mut App,
+    ) -> bool {
+        let at = event.position;
+        let running = self.with(|p| {
+            let d = p.drag.as_mut()?;
+            d.at = at;
+            Some(d.item.clone())
+        });
+        if let Some(Some(item)) = running {
+            self.emit.emit(crate::nav::drag_source(&item, nd_ui::GesturePhase::Changed, at, &event.modifiers));
+            (self.wake)(cx);
+            return true;
+        }
+        let Some(Some((row, from, bounds))) = self.with(|p| p.press) else { return false };
+        if (at.x - from.x).abs().as_f32() <= SLOP && (at.y - from.y).abs().as_f32() <= SLOP {
+            return false;
+        }
+        let rows = if self.selected.contains(&row) {
+            self.selected.clone()
+        } else {
+            self.click(row, Extend::default(), cx);
+            vec![row]
+        };
+        let item = nd_ui::DragItem::many(kind.clone(), rows.iter().filter_map(|r| ids.get(r).cloned()));
+        let grab = point(from.x - bounds.origin.x, from.y - bounds.origin.y);
+        let size = gpui::size(bounds.size.width.min(px(240.)), bounds.size.height.min(px(120.)));
+        self.with(|p| {
+            p.press = None;
+            p.pending = None;
+            p.marquee = None;
+            p.drag = Some(RowsDrag {
+                item: item.clone(),
+                at,
+                grab: point(grab.x.min(size.width), grab.y.min(size.height)),
+                size,
+            });
+        });
+        self.emit.emit(crate::nav::drag_source(&item, nd_ui::GesturePhase::Began, from, &event.modifiers));
+        self.emit.emit(crate::nav::drag_source(&item, nd_ui::GesturePhase::Changed, at, &event.modifiers));
+        (self.wake)(cx);
+        true
     }
 
     /// A key while the list has focus; true when it was the list's.

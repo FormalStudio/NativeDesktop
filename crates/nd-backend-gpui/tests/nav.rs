@@ -300,6 +300,7 @@ fn golden_tree() -> SourceTreeProps {
         empty: None,
         drag_kind: None,
         accepts: Vec::new(),
+        drop_onto: false,
         style: Default::default(),
     }
 }

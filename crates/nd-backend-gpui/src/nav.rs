@@ -775,11 +775,12 @@ fn row_drag_listener(drawn: &Rc<RefCell<Drawn>>, emit: &Emit, wake: &crate::back
                 let Some(press) = t.press.as_mut() else { return };
                 if event.pressed_button != Some(MouseButton::Left) {
                     if press.dragging {
-                        emit.emit(drag_source(&press.item, nd_ui::GesturePhase::Ended, press.at));
+                        emit.emit(drag_source(&press.item, nd_ui::GesturePhase::Ended, press.at, &event.modifiers));
                         wake(cx);
                     }
                     t.press = None;
                     t.slot = None;
+                    t.onto = None;
                     window.refresh();
                     return;
                 }
@@ -790,9 +791,9 @@ fn row_drag_listener(drawn: &Rc<RefCell<Drawn>>, emit: &Emit, wake: &crate::back
                 }
                 if !press.dragging {
                     press.dragging = true;
-                    emit.emit(drag_source(&press.item, nd_ui::GesturePhase::Began, press.start));
+                    emit.emit(drag_source(&press.item, nd_ui::GesturePhase::Began, press.start, &event.modifiers));
                 }
-                emit.emit(drag_source(&press.item, nd_ui::GesturePhase::Changed, press.at));
+                emit.emit(drag_source(&press.item, nd_ui::GesturePhase::Changed, press.at, &event.modifiers));
                 wake(cx);
                 window.refresh();
             });
@@ -804,8 +805,9 @@ fn row_drag_listener(drawn: &Rc<RefCell<Drawn>>, emit: &Emit, wake: &crate::back
                 let Drawn::Tree(t) = &mut *drawn.borrow_mut() else { return };
                 let Some(press) = t.press.take() else { return };
                 t.slot = None;
+                t.onto = None;
                 if press.dragging {
-                    emit.emit(drag_source(&press.item, nd_ui::GesturePhase::Ended, event.position));
+                    emit.emit(drag_source(&press.item, nd_ui::GesturePhase::Ended, event.position, &event.modifiers));
                     wake(cx);
                     // The release ends the drag, not a click on the row under it.
                     cx.stop_propagation();
@@ -1279,6 +1281,8 @@ pub(crate) struct TreeDrawn {
     pub rows: HashMap<SharedString, gpui::Bounds<Pixels>>,
     /// The line marking where a drag over the list lands: its left end and width.
     pub slot: Option<(gpui::Point<Pixels>, Pixels)>,
+    /// The row a drag over the list lands on, outlined instead of a slot line.
+    pub onto: Option<gpui::Bounds<Pixels>>,
     /// Each row's artwork load, by id, while the row has artwork.
     pub art: HashMap<SharedString, Rc<RefCell<crate::media::image::Picture>>>,
 }
@@ -1297,9 +1301,15 @@ pub(crate) struct RowPress {
 /// How far a press moves before it drags, as a window tab's does.
 const DRAG_START: f32 = 4.;
 
-fn drag_source(item: &nd_ui::DragItem, phase: nd_ui::GesturePhase, at: gpui::Point<Pixels>) -> nd_ui::DragSource {
+pub(crate) fn drag_source(
+    item: &nd_ui::DragItem,
+    phase: nd_ui::GesturePhase,
+    at: gpui::Point<Pixels>,
+    modifiers: &gpui::Modifiers,
+) -> nd_ui::DragSource {
     let at = nd_ui::DragPoint::Window(nd_core::Point { x: at.x.as_f32(), y: at.y.as_f32() });
-    nd_ui::DragSource { item: item.clone(), phase, at, native: false }
+    let modifiers = crate::gestures::key_modifiers(modifiers);
+    nd_ui::DragSource { item: item.clone(), phase, at, native: false, modifiers }
 }
 
 impl TreeDrawn {
@@ -1312,6 +1322,16 @@ impl TreeDrawn {
         let rows: Vec<(usize, gpui::Bounds<Pixels>)> =
             visible.iter().filter_map(|(i, _)| Some((*i, *self.rows.get(&props.nodes[*i].id)?))).collect();
         let over = rows.iter().find(|(_, b)| y >= b.top() && y < b.bottom());
+        self.onto = None;
+        if let Some((i, b)) = over
+            && props.lands_on(*i, ((y - b.top()) / b.size.height.max(px(1.))) as f32)
+        {
+            self.slot = None;
+            self.onto = Some(*b);
+            let row = visible.iter().position(|(v, _)| v == i);
+            let between = index.drop_slot(&props.nodes, &visible, row, true);
+            return nd_ui::DropSlot { on: Some(props.nodes[*i].id.clone()), ..between };
+        }
         let (row, upper, line) = match over {
             Some((i, b)) => {
                 let upper = y < b.center().y;
@@ -1671,13 +1691,14 @@ impl Build<'_> {
                 .entry(id)
                 .or_insert_with(|| Rc::new(RefCell::new(Drawn::Tree(TreeDrawn::default()))))
                 .clone();
-            let (hovered, slot, preview) = match &*drawn.borrow() {
+            let (hovered, slot, onto, preview) = match &*drawn.borrow() {
                 Drawn::Tree(t) => (
                     t.hovered.clone(),
                     t.slot,
+                    t.onto,
                     t.press.as_ref().filter(|p| p.dragging).map(|p| (p.title.clone(), p.at - p.grab, p.width)),
                 ),
-                _ => (None, None, None),
+                _ => (None, None, None, None),
             };
             let listener = props.drag_kind.is_some().then(|| row_drag_listener(&drawn, &emit, &wake));
             let art = self.source_art(&drawn, props, window, cx);
@@ -1738,6 +1759,16 @@ impl Build<'_> {
                     .children(slot.map(|(at, width)| {
                         let line = div().w(width).h(px(2.)).rounded(px(1.)).bg(theme.accent);
                         deferred(anchored().position(point(at.x, at.y - px(1.))).child(line))
+                            .with_priority(crate::overlay::PANEL_PRIORITY)
+                    }))
+                    .children(onto.map(|b| {
+                        let ring = div()
+                            .w(b.size.width)
+                            .h(b.size.height)
+                            .rounded(theme.radius.md)
+                            .border_2()
+                            .border_color(theme.accent);
+                        deferred(anchored().position(b.origin).child(ring))
                             .with_priority(crate::overlay::PANEL_PRIORITY)
                     }))
                     .children(

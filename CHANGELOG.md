@@ -25,6 +25,13 @@ and the one it moves to.
   on Return or focus loss) and `.on_cancel` (`TextCancelled` on Escape). A press inside a list
   row's own control no longer selects or activates the row. `TextFieldProps` gained
   `select_on_focus`.
+- Drag and drop on the GPUI backend: `List::drag_rows(kind, id)` drags the selection with a
+  count badge, `List::accepts_drops`, `.drop_on` and `.on_drop` (`RowDropped`) drop on a row,
+  `source_list(..).drops_onto_rows()` and `tab_strip(..).accepts_drops(..)` name the item or tab
+  in `DropSlot::on` (on macOS too), and files dragged in from outside reach any target taking
+  `DragItem::FILES`, with `FileDrop` still getting the drops no target takes. `DragOver`,
+  `Dropped` and `DragSource` carry the modifiers held. `DragItem` gained `ids`, `DropSlot` gained
+  `on`, and `DragSource`, `DragOver`, `Dropped` and `SourceTreeProps` gained fields.
 
 ## v0.6.1
 

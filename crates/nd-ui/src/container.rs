@@ -6,7 +6,7 @@ use std::any::TypeId;
 use std::rc::Rc;
 
 use nd_gpui::gpui::prelude::FluentBuilder;
-use nd_gpui::gpui::{StyleRefinement, Styled};
+use nd_gpui::gpui::{SharedString, StyleRefinement, Styled};
 
 use crate::app::App;
 use crate::backend::{AnyProps, NodeKind, WidgetKind};
@@ -24,6 +24,7 @@ pub struct ContainerElement<P> {
     children: Vec<AnyElement>,
     handlers: Vec<(TypeId, Handler)>,
     dispatch: DispatchProps,
+    drag: crate::drag::DragSpec,
 }
 
 impl<P: AnyProps> ContainerElement<P> {
@@ -36,7 +37,15 @@ impl<P: AnyProps> ContainerElement<P> {
             children: Vec::new(),
             handlers: Vec::new(),
             dispatch: DispatchProps::default(),
+            drag: crate::drag::DragSpec::default(),
         }
+    }
+
+    /// The widget takes drags of these kinds; where in it they land is the backend's
+    /// [`drop_slot`](crate::backend::Backend::drop_slot).
+    pub fn accepts_drops(mut self, kinds: impl IntoIterator<Item = impl Into<SharedString>>) -> Self {
+        self.drag.accepts = kinds.into_iter().map(Into::into).collect();
+        self
     }
 
     /// A container whose props `P` describe it to the semantic tree and answer semantic
@@ -111,7 +120,7 @@ impl<P: AnyProps> IntoElement for ContainerElement<P> {
             dispatch: self.dispatch,
             motion: None,
             paint: None,
-            drag: crate::drag::DragSpec::default(),
+            drag: self.drag,
         })))
     }
 }

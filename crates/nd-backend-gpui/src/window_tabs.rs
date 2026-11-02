@@ -46,6 +46,8 @@ pub(crate) struct TabSeam {
     pub detached: HashMap<NodeId, WindowId>,
     /// Where each drawn tab strip's parts were painted.
     pub strips: HashMap<NodeId, LayoutSink>,
+    /// The tab a drag over each strip would drop on.
+    pub drop_on: HashMap<NodeId, usize>,
 }
 
 pub(crate) struct Surface {

@@ -320,7 +320,7 @@ impl TileGrid {
                         f(&TileMoved { id: e.item.id.clone(), index: at }, window, app);
                     }
                 } else if let Some(f) = &on_drop {
-                    let e = Dropped { slot: Some(DropSlot { parent: None, index: at }), ..e.clone() };
+                    let e = Dropped { slot: Some(DropSlot { parent: None, index: at, on: None }), ..e.clone() };
                     f(&e, window, app);
                 }
             })

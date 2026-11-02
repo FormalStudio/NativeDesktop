@@ -15,6 +15,6 @@ pub use crate::core::{Align, Alignment, Core, Diff, Follow, GridSpec, Layout, Pl
 pub use crate::list::{
     ActivateEvent, CellTag, Column, ColumnResized, ExpandEvent, List, ListHandle, ListKind, ListProps, ListState,
     ListWidget, ROW_ACTION_WIDTH, RowAction, RowActionInvoked, RowActionSpec, RowActions, RowActionsSpec, RowActivated,
-    RowDisclosed, RowEdge, RowKey, RowTag, RowView, RowsSelected, SelectEvent, Selection, SelectionChanged,
+    RowDisclosed, RowDropped, RowEdge, RowKey, RowTag, RowView, RowsSelected, SelectEvent, Selection, SelectionChanged,
     SortChanged, SortDirection, TreeNode, ViewportChanged, column, grid, list, row_action, table, tree,
 };

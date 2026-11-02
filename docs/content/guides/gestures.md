@@ -53,6 +53,30 @@ that claims the press wins, and ties go to the innermost one. An inner tap and a
 never both fire for one press: the tap claims it on release, and the drag claims it once the
 pointer passes the slop.
 
+## Drag and drop
+
+`.draggable(DragItem::new(kind, id))` makes an element a drag source, and
+`.accepts_drops([kind])` makes any element a target. A target hears `DragOver` as the drag
+enters, moves and leaves, and `Dropped` on the release. Both carry the position, the target's
+`slot` and the `modifiers` held, which is how a target tells a copy from a move. The source
+hears `DragEnded` with the outcome. `DragItem::many(kind, ids)` carries several ids, as a list
+dragging its selection does.
+
+On the GPUI backend, files dragged in from a file manager are a `DragItem` of kind
+`DragItem::FILES` whose `ids` are the paths, so a target taking `DragItem::FILES` takes them with
+the same hover and the same `Dropped`. A drop that no target takes still reaches `FileDrop` (see
+[system](system.md)), which is the only place files dropped on macOS arrive for now.
+
+Lists, source lists and tab strips take drops on their parts. A list's drop names the row under
+the pointer (see [virtualization](virtualization.md)). `source_list(..).drops_onto_rows()` lands
+a drag over the middle of an item on that item, with the item outlined and `slot.on` naming it;
+above and below the middle it lands between items as before. `tab_strip(..).accepts_drops(..)`
+names the tab under the pointer in `slot.on`, outlined on the GPUI backend.
+
+Dragging files out of the app to a file manager isn't supported. GPUI's Wayland backend can
+start an outbound file drag, but only from its own element drags, which nd's drag sessions don't
+use; it needs a patch in the GPUI fork.
+
 ## Trackpad gestures
 
 `.on_pinch` delivers `PinchEvent { scale, phase, position }`. `scale` is a multiplier, so the

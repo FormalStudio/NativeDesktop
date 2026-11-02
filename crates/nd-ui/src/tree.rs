@@ -751,6 +751,10 @@ impl Tree {
         self.needs_layout = true;
     }
 
+    pub(crate) fn root_node(&self) -> NodeId {
+        self.root
+    }
+
     pub(crate) fn root_view_id(&self) -> EntityId {
         self.root_view.entity_id()
     }

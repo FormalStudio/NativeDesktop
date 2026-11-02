@@ -68,6 +68,11 @@ pub(crate) trait FormControl {
     fn placed_in_form_row(&self) {}
     /// nd focus just made [`Self::focus_view`] first responder.
     fn focused(&self) {}
+    /// Where a drag at `at` (window points, top-left origin) over the control would drop, for a
+    /// control whose parts take drops; `None` with no point clears what it shows.
+    fn drop_slot(&self, _at: Option<nd_core::Point>) -> Option<nd_ui::DropSlot> {
+        None
+    }
 }
 
 /// What a control needs to report user changes.

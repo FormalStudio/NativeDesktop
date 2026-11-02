@@ -1819,6 +1819,7 @@ impl Backend for AppKitBackend {
         let state = self.0.try_borrow().ok()?;
         match state.nodes.get(&node) {
             Some(Native::SourceTree(s)) => s.drop_slot(at),
+            Some(Native::Control(c)) => c.control.drop_slot(at),
             _ => None,
         }
     }

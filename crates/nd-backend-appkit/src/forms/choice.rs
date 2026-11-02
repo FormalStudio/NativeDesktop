@@ -18,7 +18,7 @@ use objc2_app_kit::{
     NSControlStateValueOn, NSLayoutAttribute, NSPopUpButton, NSSegmentStyle, NSSegmentSwitchTracking,
     NSSegmentedControl, NSStackView, NSUserInterfaceLayoutOrientation, NSView,
 };
-use objc2_foundation::{NSArray, NSRect, NSString};
+use objc2_foundation::{NSArray, NSPoint, NSRect, NSString};
 
 use super::{Ctx, FormControl, NdControlTarget, apply_common, fitting, props, send_action, set_accessibility_label};
 use crate::look::Color;
@@ -324,6 +324,31 @@ impl TabStripControl {
 impl FormControl for TabStripControl {
     fn view(&self) -> &NSView {
         &self.control
+    }
+
+    fn drop_slot(&self, at: Option<nd_core::Point>) -> Option<nd_ui::DropSlot> {
+        let at = at?;
+        let window = self.control.window()?;
+        let height = window.contentView().map_or(0., |v| v.frame().size.height);
+        let p = self.control.convertPoint_fromView(NSPoint::new(f64::from(at.x), height - f64::from(at.y)), None);
+        let ids = self.ids.borrow();
+        let count = self.control.segmentCount().max(0);
+        // An autosized segment reports width 0: those share what the fixed ones leave.
+        let widths: Vec<f64> = (0..count).map(|i| self.control.widthForSegment(i)).collect();
+        let fixed: f64 = widths.iter().sum();
+        let auto = widths.iter().filter(|w| **w <= 0.).count().max(1) as f64;
+        let share = ((self.control.bounds().size.width - fixed) / auto).max(0.);
+        let mut x = 0.;
+        let hit = widths.iter().position(|w| {
+            x += if *w > 0. { *w } else { share };
+            p.x < x
+        });
+        let hit = hit.filter(|_| p.x >= 0. && p.y >= 0. && p.y <= self.control.bounds().size.height);
+        Some(nd_ui::DropSlot {
+            parent: None,
+            index: hit.unwrap_or(ids.len()),
+            on: hit.and_then(|i| ids.get(i).cloned()),
+        })
     }
 
     fn update(&mut self, old: &Props, new: &Props) -> bool {

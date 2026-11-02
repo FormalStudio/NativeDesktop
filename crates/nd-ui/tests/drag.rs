@@ -40,12 +40,17 @@ impl Render for Side {
                     .id(SharedString::from(format!("{name}-list")))
                     .w_full()
                     .h(px(200.))
-                    .accepts_drops(["tab"])
+                    .accepts_drops(["tab", DragItem::FILES])
                     .on_drag_over(move |e: &DragOver, _, _| {
                         over.borrow_mut().push(format!("{name} {:?} {},{}", e.phase, e.local.x, e.local.y))
                     })
                     .on_drop(move |e: &Dropped, _, _| {
-                        drop.borrow_mut().push(format!("{name} drop {} {},{}", e.item.id, e.local.x, e.local.y))
+                        let line = if e.item.kind == DragItem::FILES {
+                            format!("{name} files {:?} alt {}", e.item.ids, e.modifiers.alt)
+                        } else {
+                            format!("{name} drop {} {},{}", e.item.id, e.local.x, e.local.y)
+                        };
+                        drop.borrow_mut().push(line)
                     })
                     .child(
                         div()
@@ -169,7 +174,7 @@ fn a_widget_source_drives_the_same_session() {
     let (mut cx, log, _, b) = open();
     let list = node(&cx, "a-list");
     let item = DragItem::new("tab", "row-7");
-    let source = |phase, at| DragSource { item: item.clone(), phase, at, native: false };
+    let source = |phase, at| DragSource { item: item.clone(), phase, at, native: false, modifiers: Default::default() };
     cx.emit(list, source(GesturePhase::Began, DragPoint::Window(Point { x: 10., y: 60. })));
     cx.emit(list, source(GesturePhase::Changed, DragPoint::Window(Point { x: 10., y: 61. })));
     assert_eq!(take(&log), ["a Entered 10,21"], "a source list is a target of its own rows");
@@ -193,6 +198,23 @@ fn a_backend_owned_drag_hit_tests_the_window_it_reports() {
     cx.drain_events();
     assert_eq!(take(&log), ["end Outside { screen: Point { x: 450.0, y: 20.0 } }"]);
     assert!(cx.backend().previews().is_empty(), "the backend draws its own drags");
+}
+
+#[test]
+fn files_from_outside_reach_a_target_with_the_keys_held() {
+    let (mut cx, log, _, b) = open();
+    cx.begin_external_drag(b, DragItem::many(DragItem::FILES, ["/tmp/a.txt", "/tmp/b.txt"]));
+    cx.drag_moved(b, Point { x: 30., y: 70. });
+    cx.drain_events();
+    assert_eq!(take(&log), ["b Entered 30,30"]);
+    cx.set_drag_modifiers(KeyModifiers { alt: true, ..Default::default() });
+    assert!(cx.drag_released(b, Point { x: 30., y: 70. }));
+    cx.drain_events();
+    assert_eq!(take(&log), ["b Moved 30,30", r#"b files ["/tmp/a.txt", "/tmp/b.txt"] alt true"#]);
+
+    cx.begin_external_drag(b, DragItem::many(DragItem::FILES, ["/tmp/c.txt"]));
+    assert!(!cx.drag_released(b, Point { x: 30., y: 5. }), "nothing above the list takes files");
+    assert!(!cx.is_dragging());
 }
 
 #[test]

@@ -112,6 +112,11 @@ harness = false
 name = "list_selection"
 harness = false
 
+# Rows dragged out of a table, and files dropped on rows, source list items and tabs.
+[[test]]
+name = "drop_targets"
+harness = false
+
 # Row swipe actions on the GPUI presenter.
 [[test]]
 name = "row_actions"

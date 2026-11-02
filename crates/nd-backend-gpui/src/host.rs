@@ -1184,7 +1184,12 @@ impl Inner {
         );
         let expose = self.debug.expose;
         let (backend, fresh) = (self.backend.clone(), self.backend.clone());
-        let drops = self.backend.clone();
+        let (drops, entering) = (self.backend.clone(), self.backend.clone());
+        // GPUI drops an outside drag that leaves the window and redraws it.
+        if self.backend.external_drag.borrow().active && !cx.has_active_drag() {
+            *self.backend.external_drag.borrow_mut() = Default::default();
+            self.backend.defer(|app| app.cancel_drag());
+        }
         let (unclaimed, keyed, wake) = (self.backend.clone(), self.backend.clone(), self.wake());
         let held = Rc::new(RefCell::new(None::<gpui::FocusHandle>));
         let holding = held.clone();
@@ -1239,12 +1244,33 @@ impl Inner {
                 }
             })
             .when(expose, |d| d.bg(gpui::rgb(0xff00ff)))
-            .on_drop(move |paths: &gpui::ExternalPaths, window, _cx| {
-                let listener = drops.state.borrow().file_drop_listener.clone();
-                if let Some(listener) = listener {
-                    let at = window.mouse_position();
-                    listener(id, paths.paths().to_vec(), (at.x.as_f32(), at.y.as_f32()));
+            .child(external_drop_listener(id, drops))
+            .on_drag_move::<gpui::ExternalPaths>(move |event, _, cx| {
+                if !event.bounds.contains(&event.event.position) {
+                    return;
                 }
+                let at = point_of(event.event.position);
+                let modifiers = crate::gestures::key_modifiers(&event.event.modifiers);
+                let mut external = entering.external_drag.borrow_mut();
+                let entered = (!std::mem::replace(&mut external.active, true)).then(|| {
+                    external.paths = event.drag(cx).paths().to_vec();
+                    let ids = external.paths.iter().map(|p| p.to_string_lossy().into_owned());
+                    nd_ui::DragItem::many(nd_ui::DragItem::FILES, ids)
+                });
+                external.over = Some(id);
+                if external.moved.replace((id, at, modifiers)).is_some() {
+                    return;
+                }
+                drop(external);
+                let moves = entering.external_drag.clone();
+                entering.defer(move |app| {
+                    if let Some(item) = entered {
+                        app.begin_external_drag(id, item);
+                    }
+                    let Some((window, at, modifiers)) = moves.borrow_mut().moved.take() else { return };
+                    app.set_drag_modifiers(modifiers);
+                    app.drag_moved(window, at);
+                });
             })
             .capture_any_mouse_down(move |event, window, cx| {
                 if let Some(diag) = nd_diag::global() {
@@ -1485,3 +1511,39 @@ pub fn run_with(hooks: impl OsHooks, init: impl FnOnce(&mut App) + 'static, star
 struct HostGlobal(#[allow(dead_code)] GpuiHost);
 
 impl gpui::Global for HostGlobal {}
+
+/// Ends an outside file drag on its release. A window-wide listener, since GPUI's own drop and
+/// release listeners on the root never fire under an occluding part (the tab bar).
+fn external_drop_listener(id: WindowId, backend: GpuiBackend) -> AnyElement {
+    gpui::canvas(
+        |_, _, _| (),
+        move |_, (), window, _| {
+            window.on_mouse_event(move |event: &gpui::MouseUpEvent, phase, _, cx| {
+                if phase != gpui::DispatchPhase::Capture
+                    || !cx.has_active_drag()
+                    || !backend.external_drag.borrow().active
+                {
+                    return;
+                }
+                let external = std::mem::take(&mut *backend.external_drag.borrow_mut());
+                let window = external.over.unwrap_or(id);
+                let at = point_of(event.position);
+                let listener = backend.state.borrow().file_drop_listener.clone();
+                backend.defer(move |app| {
+                    if let Some((w, p, _)) = external.moved {
+                        app.drag_moved(w, p);
+                    }
+                    if app.drag_released(window, at) {
+                        return;
+                    }
+                    if let Some(listener) = listener {
+                        listener(window, external.paths, (at.x, at.y));
+                    }
+                });
+            });
+        },
+    )
+    .absolute()
+    .size_0()
+    .into_any_element()
+}
