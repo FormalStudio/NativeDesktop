@@ -252,4 +252,39 @@ mod gate_m2 {
         assert!(probe.wait_for("nd: key a", Duration::from_secs(2)), "plain key:\n{}", probe.log());
         assert!(probe.wait_for("nd: key ctrl-s", Duration::from_secs(2)), "chord:\n{}", probe.log());
     }
+
+    #[test]
+    fn real_middle_button_and_held_modifiers_reach_app() {
+        let hyprland = start();
+        let (probe, client) = ready(&hyprland, &[]);
+        let mut input = VirtualInput::connect(&hyprland).unwrap();
+        let at = (f64::from(client.at.0) + 100., f64::from(client.at.1) + 200.);
+        let presses = || -> Vec<String> {
+            probe.lines.lock().unwrap().iter().filter(|l| l.starts_with("nd: press ")).cloned().collect()
+        };
+        let pressed = |line: &str| {
+            let want = format!("nd: press {line}");
+            let end = Instant::now() + Duration::from_secs(2);
+            while Instant::now() < end {
+                if presses().last() == Some(&want) {
+                    return true;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            false
+        };
+        input.click(at.0, at.1).unwrap();
+        assert!(pressed("left"), "plain press:\n{}", probe.log());
+        input.middle_click(at.0, at.1).unwrap();
+        assert!(pressed("middle"), "middle button:\n{}", probe.log());
+        input.hold(&[Modifier::Shift]).unwrap();
+        input.click(at.0, at.1).unwrap();
+        assert!(pressed("left shift"), "Shift held across the click:\n{}", probe.log());
+        input.hold(&[Modifier::Control]).unwrap();
+        input.drag(at, 30., 0., 4, Duration::from_millis(16)).unwrap();
+        assert!(pressed("left shift-ctrl"), "both held into the drag:\n{}", probe.log());
+        input.release().unwrap();
+        input.middle_click(at.0, at.1).unwrap();
+        assert!(pressed("middle"), "released, the next press holds none:\n{}", probe.log());
+    }
 }

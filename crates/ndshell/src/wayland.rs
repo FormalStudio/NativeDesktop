@@ -45,6 +45,7 @@ pub mod keys {
 
 const BTN_LEFT: u32 = 0x110;
 const BTN_RIGHT: u32 = 0x111;
+const BTN_MIDDLE: u32 = 0x112;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Modifier {
@@ -107,6 +108,8 @@ pub struct VirtualInput {
     extent: (u32, u32),
     position: (f64, f64),
     mod_masks: [u32; 4],
+    /// Modifiers [`VirtualInput::hold`] keeps down across clicks, drags and keys.
+    held: Vec<Modifier>,
     started: Instant,
 }
 
@@ -158,8 +161,17 @@ impl VirtualInput {
         file.write_all(text.as_bytes()).and_then(|()| file.write_all(&[0])).map_err(|e| e.to_string())?;
         keyboard.keymap(xkbcommon::xkb::KEYMAP_FORMAT_TEXT_V1, file.as_fd(), text.len() as u32 + 1);
 
-        let mut this =
-            Self { conn, queue, pointer, keyboard, extent, position: (0., 0.), mod_masks, started: Instant::now() };
+        let mut this = Self {
+            conn,
+            queue,
+            pointer,
+            keyboard,
+            extent,
+            position: (0., 0.),
+            mod_masks,
+            held: Vec::new(),
+            started: Instant::now(),
+        };
         this.sync()?;
         Ok(this)
     }
@@ -210,6 +222,37 @@ impl VirtualInput {
         self.sync()
     }
 
+    /// Presses and releases the middle button at `(x, y)`.
+    pub fn middle_click(&mut self, x: f64, y: f64) -> Result<(), String> {
+        self.move_to(x, y);
+        self.sync()?;
+        self.press(BTN_MIDDLE, true);
+        self.press(BTN_MIDDLE, false);
+        self.sync()
+    }
+
+    /// Presses `mods` and keeps them down through the clicks, drags and keys that follow, until
+    /// [`VirtualInput::release`]: a Shift-click, or a drag with Control held.
+    pub fn hold(&mut self, mods: &[Modifier]) -> Result<(), String> {
+        for m in mods {
+            if !self.held.contains(m) {
+                self.held.push(*m);
+                self.keyboard.key(self.time(), modifier_key(*m), 1);
+            }
+        }
+        self.set_modifiers(&[]);
+        self.sync()
+    }
+
+    /// Lets go of every modifier [`VirtualInput::hold`] pressed.
+    pub fn release(&mut self) -> Result<(), String> {
+        for m in std::mem::take(&mut self.held) {
+            self.keyboard.key(self.time(), modifier_key(m), 0);
+        }
+        self.set_modifiers(&[]);
+        self.sync()
+    }
+
     /// Turns the wheel `notches` steps at `(x, y)`: positive scrolls down, as a wheel turned
     /// towards the user does.
     pub fn scroll(&mut self, x: f64, y: f64, notches: i32) -> Result<(), String> {
@@ -256,8 +299,9 @@ impl VirtualInput {
         self.sync()
     }
 
+    /// Sets the modifier state to `mods` and the held ones.
     fn set_modifiers(&mut self, mods: &[Modifier]) {
-        let depressed = mods.iter().fold(0, |acc, m| {
+        let depressed = mods.iter().chain(&self.held).fold(0, |acc, m| {
             acc | match m {
                 Modifier::Shift => self.mod_masks[0],
                 Modifier::Control => self.mod_masks[1],
@@ -268,7 +312,8 @@ impl VirtualInput {
         self.keyboard.modifiers(depressed, 0, 0, 0);
     }
 
-    /// Presses and releases `key` (an evdev code, see [`keys`]) with `mods` held.
+    /// Presses and releases `key` (an evdev code, see [`keys`]) with `mods` held, and any
+    /// [`VirtualInput::hold`] keeps down.
     pub fn key(&mut self, key: u32, mods: &[Modifier]) -> Result<(), String> {
         const PRESSED: u32 = 1;
         const RELEASED: u32 = 0;
@@ -281,6 +326,15 @@ impl VirtualInput {
             self.set_modifiers(&[]);
         }
         self.sync()
+    }
+}
+
+fn modifier_key(m: Modifier) -> u32 {
+    match m {
+        Modifier::Shift => keys::LEFTSHIFT,
+        Modifier::Control => keys::LEFTCTRL,
+        Modifier::Alt => keys::LEFTALT,
+        Modifier::Super => keys::LEFTMETA,
     }
 }
 

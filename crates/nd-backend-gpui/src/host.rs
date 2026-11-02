@@ -1182,7 +1182,7 @@ impl Inner {
             Rc::downgrade(self),
             Rc::downgrade(self),
         );
-        let expose = self.debug.expose;
+        let (expose, diag) = (self.debug.expose, self.debug.diag);
         let (backend, fresh) = (self.backend.clone(), self.backend.clone());
         let (drops, entering) = (self.backend.clone(), self.backend.clone());
         // GPUI drops an outside drag that leaves the window and redraws it.
@@ -1202,7 +1202,10 @@ impl Inner {
             })
             // A new press starts clean: a release owed to an earlier consumed press that never
             // arrived (the compositor dropped it) must not eat this press's release.
-            .capture_any_mouse_down(move |_, window, cx| {
+            .capture_any_mouse_down(move |event, window, cx| {
+                if diag {
+                    eprintln!("nd: press {}", press_line(event));
+                }
                 fresh.clear_swallow(id);
                 fresh.invoker.borrow_mut().remove(&id);
                 if fresh.hide_key_tips(id) {
@@ -1546,4 +1549,21 @@ fn external_drop_listener(id: WindowId, backend: GpuiBackend) -> AnyElement {
     .absolute()
     .size_0()
     .into_any_element()
+}
+
+/// A press as the diagnostics print it: the button, then the modifiers held, as
+/// `middle` or `left shift-ctrl`.
+fn press_line(event: &gpui::MouseDownEvent) -> String {
+    let button = match event.button {
+        gpui::MouseButton::Left => "left",
+        gpui::MouseButton::Right => "right",
+        gpui::MouseButton::Middle => "middle",
+        gpui::MouseButton::Navigate(_) => "navigate",
+    };
+    let m = &event.modifiers;
+    let held: Vec<&str> = [(m.shift, "shift"), (m.control, "ctrl"), (m.alt, "alt"), (m.platform, "super")]
+        .into_iter()
+        .filter_map(|(on, name)| on.then_some(name))
+        .collect();
+    if held.is_empty() { button.to_owned() } else { format!("{button} {}", held.join("-")) }
 }
