@@ -68,8 +68,8 @@ pub use split::{
 };
 pub use status_page::{StatusPage, StatusPageKind, StatusPageProps, status_page};
 pub use tabs::{
-    TabAddRequested, TabChanged, TabCloseRequested, TabPage, TabSpec, TabStrip, TabStripKind, TabStripProps, TabStyle,
-    TabView, tab_page, tab_strip, tab_view,
+    TabAddRequested, TabChanged, TabCloseRequested, TabMenuRequested, TabPage, TabSpec, TabStrip, TabStripKind,
+    TabStripProps, TabStyle, TabView, tab_page, tab_strip, tab_view,
 };
 pub use tile_grid::{TILE_SLIDE, Tile, TileGrid, TileMetrics, TileMoved, tile, tile_grid};
 pub use titlebar::{InsetEdge, Titlebar, TitlebarInset, TitlebarInsetProps, TitlebarProps, titlebar};

@@ -358,6 +358,7 @@ impl Inner {
                 drag_region: !under_title,
                 label: None,
                 attached: false,
+                menus: false,
             };
             tab_bar_view(
                 "nd-tabbar",
@@ -452,6 +453,7 @@ impl Inner {
             let Some(tab) = (match input {
                 BarInput::Press(i, _) | BarInput::Close(i) => tabs.get(i).copied(),
                 BarInput::Add | BarInput::Overview => tabs.first().copied(),
+                BarInput::Menu(..) => None,
             }) else {
                 return;
             };
@@ -477,6 +479,7 @@ impl Inner {
                     return;
                 }
                 BarInput::Close(_) => groups.requests.push(Request::Close(tab)),
+                BarInput::Menu(..) => return,
                 BarInput::Add => {
                     let selected = groups.surfaces.get(&surface).map_or(tab, |s| s.selected);
                     groups.touch(surface);

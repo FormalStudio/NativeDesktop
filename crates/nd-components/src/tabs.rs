@@ -14,6 +14,7 @@ use nd_ui::{DispatchProps, Key, Role, StyleRefinement};
 
 use crate::forms::guard;
 use crate::icon::Icon;
+use crate::menu::ContextMenu;
 
 /// How the strip draws its tabs.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -50,6 +51,8 @@ pub struct TabStripProps {
     pub label: Option<SharedString>,
     pub enabled: bool,
     pub tooltip: Option<SharedString>,
+    /// A right click on a tab asks for that tab's menu ([`TabMenuRequested`]).
+    pub tab_menus: bool,
     pub style: StyleRefinement,
 }
 
@@ -81,6 +84,16 @@ pub struct TabChanged {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TabCloseRequested {
     pub id: SharedString,
+}
+
+/// A right click on tab `id`, which stays unselected as browser and GNOME tab bars leave it.
+/// `x`/`y` are in the coordinates of the strip's `node`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TabMenuRequested {
+    pub node: nd_core::NodeId,
+    pub id: SharedString,
+    pub x: f32,
+    pub y: f32,
 }
 
 /// The user pressed the strip's `+`.
@@ -124,6 +137,7 @@ pub fn tab_strip(id: impl Into<SharedString>) -> TabStrip {
         label: None,
         enabled: true,
         tooltip: None,
+        tab_menus: false,
         style: StyleRefinement::default(),
     };
     TabStrip(NativeElement::described::<TabStripKind>(Key::Id(id.into()), props))
@@ -170,6 +184,19 @@ impl TabStrip {
 
     pub fn on_add(self, f: impl Fn(&TabAddRequested, &mut Window, &mut App) + 'static) -> Self {
         TabStrip(self.0.on(f))
+    }
+
+    /// Each tab answers a right click with the menu `build` fills for its id. The tab is not
+    /// selected by it.
+    pub fn context_menu(
+        mut self,
+        build: impl Fn(&SharedString, ContextMenu, &mut Window, &mut App) -> ContextMenu + 'static,
+    ) -> Self {
+        self.0.props_mut().tab_menus = true;
+        TabStrip(self.0.on(move |e: &TabMenuRequested, window, cx| {
+            let menu = build(&e.id, ContextMenu::default(), window, cx);
+            crate::services::show_context_menu(cx, window.id(), e.node, e.x, e.y, menu);
+        }))
     }
 
     /// The strip takes drags of these kinds. Over a tab, the drag's [`DropSlot::on`] names it
@@ -300,6 +327,14 @@ impl TabView {
 
     pub fn on_add(mut self, f: impl Fn(&TabAddRequested, &mut Window, &mut App) + 'static) -> Self {
         self.strip = self.strip.on_add(f);
+        self
+    }
+
+    pub fn context_menu(
+        mut self,
+        build: impl Fn(&SharedString, ContextMenu, &mut Window, &mut App) -> ContextMenu + 'static,
+    ) -> Self {
+        self.strip = self.strip.context_menu(build);
         self
     }
 }

@@ -164,6 +164,10 @@ pass the id back with `.selected(..)`.
   segmented control, and closing a tab goes through your own command. For document tabs on
   macOS, use window tabs.
 - `tab_page(id, title)` takes `.icon(..)` and `.closable()`.
+- `.context_menu(|id, menu, _, _| menu.item("Close Others", CloseOthers))` gives each tab its
+  own menu. The right click does not select the tab, as browsers and GNOME's tab bars leave it.
+  A middle click on a closable document tab reports `on_close`. The segmented control on macOS
+  raises neither yet.
 
 Settings windows that put their tabs in the toolbar use `toolbar().tab(..)`, as shown in
 [chrome](../../../examples/chrome/src/lib.rs).

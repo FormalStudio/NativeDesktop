@@ -9,6 +9,10 @@ and the one it moves to.
   a press keeps nd focus on it, Tab stops on it and bindings of the contexts around it match while
   it has focus. The GPUI presenter rings the keyboard's row with the theme's focus ring. On macOS
   nd focus makes the table or collection view first responder.
+- `tab_strip(..).context_menu(|id, menu, window, cx| ..)` and `tab_view(..).context_menu(..)`:
+  a menu per tab on the GPUI backend, the tab left unselected. A middle click on a closable
+  document tab reports `TabCloseRequested`. `TabStripProps` gained `tab_menus`, and the drawn
+  `tab_bar::Bar` gained `menus`.
 - `source_tree(..).context_menu(|id, menu, window, cx| ..)` builds a menu per row, the row
   selected first, and `.on_middle_click` reports `SourceMiddleClicked { id }`, on the GPUI
   backend. `SourceTreeProps` gained `row_menus`.

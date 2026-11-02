@@ -475,6 +475,32 @@ mod gate_m6 {
         }
     }
 
+    /// A right click opens the menu built for the tab under it and leaves the selection; a
+    /// middle click closes a closable document tab.
+    pub fn gpui_tab_strip_menus_and_middle_close() {
+        use nd_ui::backend::Backend as _;
+        for presentation in [TabStyle::Strip, TabStyle::Automatic] {
+            let mut s = strip(presentation);
+            let tabs = s.layout().tabs;
+            s.press(center(&tabs[2]), MouseButton::Right);
+            assert_eq!(s.take(), ["menu c"], "{presentation:?}: the menu is asked for Gamma, which is not selected");
+            assert_eq!(s.node().value.as_deref(), Some("Alpha"), "a right click does not switch tabs");
+            assert!(s.host.backend().menu_open(s.window), "{presentation:?}: the menu opens");
+            let paints = s.host.backend().paints(s.window).expect("paints");
+            assert!(paints.iter().any(|p| p.label == "Close c"), "the menu is the one built for c");
+            let escape = SyntheticInput::Key(Keystroke::parse("escape").expect("key"));
+            let window = s.window;
+            s.cx.update(|cx| s.host.update(cx, |app| app.synthesize(window, &escape))).expect("posted");
+            s.settle();
+            assert!(!s.host.backend().menu_open(s.window));
+
+            s.press(center(&tabs[1]), MouseButton::Middle);
+            s.press(center(&tabs[0]), MouseButton::Middle);
+            let closed: &[&str] = if presentation == TabStyle::Strip { &["close b"] } else { &[] };
+            assert_eq!(s.take(), closed, "{presentation:?}: a middle click closes only a closable document tab");
+        }
+    }
+
     pub fn gpui_tab_goldens() {
         // GPUI renders headless only on macOS (Metal) and Linux (wgpu); Windows captures arrive
         // with the Fluent goldens (M3).
@@ -520,6 +546,7 @@ impl Render for StripView {
         let tabs = [("a", "Alpha", false), ("b", "Beta", true), ("c", "Gamma", true)]
             .map(|(id, title, closable)| TabSpec { id: id.into(), title: title.into(), icon: None, closable });
         let (select, close, add) = (self.state.clone(), self.state.clone(), self.state.clone());
+        let menu_log = self.state.clone();
         v_flex().size_full().child(
             tab_strip("strip")
                 .tabs(tabs)
@@ -536,10 +563,16 @@ impl Render for StripView {
                     cx.notify();
                 }))
                 .on_close(move |e: &TabCloseRequested, _, _| close.borrow_mut().log.push(format!("close {}", e.id)))
-                .on_add(move |_: &TabAddRequested, _, _| add.borrow_mut().log.push("add".into())),
+                .on_add(move |_: &TabAddRequested, _, _| add.borrow_mut().log.push("add".into()))
+                .context_menu(move |id, menu, _, _| {
+                    menu_log.borrow_mut().log.push(format!("menu {id}"));
+                    menu.item(format!("Close {id}"), CloseTab)
+                }),
         )
     }
 }
+
+gpui::actions!(test, [CloseTab]);
 
 struct StripRig {
     cx: HeadlessAppContext,
@@ -555,6 +588,8 @@ fn strip(presentation: TabStyle) -> StripRig {
     let out = slot.clone();
     let host = cx.update(|cx| {
         GpuiHost::builder().quit_when_empty(false).start(cx, move |app| {
+            let backend = app.backend_as::<nd_backend_gpui::GpuiBackend>().expect("GPUI backend").clone();
+            app.set_global(Chrome(nd_backend_gpui::GpuiChrome::new(backend)));
             let w = app.open_window(WindowOptions::main("strip").size(gpui::size(px(640.), px(240.))), |_, cx| {
                 cx.new(|_| StripView { presentation, state: s })
             });
@@ -580,11 +615,15 @@ impl StripRig {
     }
 
     fn click(&mut self, at: Point) {
+        self.press(at, MouseButton::Left);
+    }
+
+    fn press(&mut self, at: Point, button: MouseButton) {
         let window = self.window;
         self.cx.update(|cx| {
             self.host.update(cx, |app| {
                 for phase in [PointerPhase::Down, PointerPhase::Up] {
-                    let input = SyntheticInput::Pointer { phase, at, button: MouseButton::Left, click_count: 1 };
+                    let input = SyntheticInput::Pointer { phase, at, button, click_count: 1 };
                     app.synthesize(window, &input).expect("posted");
                 }
             })
@@ -632,6 +671,7 @@ impl gpui::Render for Golden {
             drag_region: false,
             label: None,
             attached: false,
+            menus: false,
         };
         let content = match self.view {
             GoldenView::Bar => tab_bar_view("golden", &bar, &theme, None, None, &marks),
@@ -753,6 +793,7 @@ fn main() {
         ("gate_m6::gpui_window_tabs_single_canvas", gate_m6::gpui_window_tabs_single_canvas),
         ("gate_m6::gpui_window_tabs_view_moves_between_windows", gate_m6::gpui_window_tabs_view_moves_between_windows),
         ("gate_m6::gpui_tab_strip_both_presentations", gate_m6::gpui_tab_strip_both_presentations),
+        ("gate_m6::gpui_tab_strip_menus_and_middle_close", gate_m6::gpui_tab_strip_menus_and_middle_close),
         ("gate_m6::gpui_tab_goldens", gate_m6::gpui_tab_goldens),
     ];
     let has = |flag: &str| args.iter().any(|a| a == flag);

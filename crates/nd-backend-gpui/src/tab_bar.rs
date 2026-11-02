@@ -10,7 +10,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use nd_components::{TabAddRequested, TabChanged, TabCloseRequested, TabStripProps, TabStyle};
+use nd_components::{TabAddRequested, TabChanged, TabCloseRequested, TabMenuRequested, TabStripProps, TabStyle};
 use nd_core::{NodeId, Rect};
 use nd_gpui::gpui::{
     self, AnyElement, Bounds, BoxShadow, ElementId, FontWeight, GlobalElementId, Hsla, InspectorElementId,
@@ -135,6 +135,8 @@ pub struct Bar {
     /// The selected tab takes the content's surface and opens into the content below it; the
     /// rest sit on the header's surface. Otherwise the selected tab is a filled pill.
     pub attached: bool,
+    /// A right click on a tab reports [`BarInput::Menu`] instead of passing to the bar's parent.
+    pub menus: bool,
 }
 
 /// Input on a drawn bar or switcher.
@@ -146,6 +148,19 @@ pub enum BarInput {
     Close(usize),
     Add,
     Overview,
+    /// A right click on a tab, in window coordinates.
+    Menu(usize, gpui::Point<Pixels>),
+}
+
+fn menu_press(
+    on_input: &OnInput<BarInput>,
+    i: usize,
+) -> impl Fn(&MouseDownEvent, &mut gpui::Window, &mut gpui::App) + 'static {
+    let on_input = on_input.clone();
+    move |event, window, cx| {
+        cx.stop_propagation();
+        on_input(BarInput::Menu(i, event.position), window, cx);
+    }
 }
 
 /// Where the last paint put a bar's parts, in window coordinates, by tab index.
@@ -394,6 +409,7 @@ pub fn tab_bar_view(
                         press(BarInput::Press(i, event.position), window, cx);
                     }
                 })
+                .when(bar.menus, |e| e.on_mouse_down(MouseButton::Right, menu_press(&on_input, i)))
                 .when_some(tab.closable.then_some(()), |e, ()| {
                     e.on_mouse_up(MouseButton::Middle, move |_, window, cx| on_input(BarInput::Close(i), window, cx))
                 });
@@ -562,6 +578,7 @@ pub fn switcher_view(
             toggle.hover(move |s| s.bg(hover))
         };
         if let Some(on_input) = on_input.clone() {
+            toggle = toggle.when(bar.menus, |e| e.on_mouse_down(MouseButton::Right, menu_press(&on_input, i)));
             toggle = toggle.on_mouse_down(MouseButton::Left, move |event: &MouseDownEvent, window, cx| {
                 on_input(BarInput::Press(i, event.position), window, cx)
             });
@@ -714,6 +731,7 @@ impl Build<'_> {
         let wake = self.wake.clone();
         let selected = props.selected_index();
         let ids: Vec<SharedString> = props.tabs.iter().map(|t| t.id.clone()).collect();
+        let bounds = self.backend.bounds.clone();
         let on_input: OnInput<BarInput> = Rc::new(move |input, _window, cx| {
             match input {
                 BarInput::Press(i, _) if Some(i) != selected => {
@@ -725,6 +743,12 @@ impl Build<'_> {
                     emit.emit(TabCloseRequested { id: id.clone() });
                 }
                 BarInput::Add => emit.emit(TabAddRequested),
+                BarInput::Menu(i, at) => {
+                    let Some(tab) = ids.get(i) else { return };
+                    let origin = bounds.borrow().get(&id).map_or(nd_core::Point::default(), |b| b.origin);
+                    let (x, y) = (at.x.as_f32() - origin.x, at.y.as_f32() - origin.y);
+                    emit.emit(TabMenuRequested { node: id, id: tab.clone(), x, y });
+                }
                 BarInput::Press(..) | BarInput::Overview => return,
             }
             wake(cx);
@@ -740,6 +764,7 @@ impl Build<'_> {
             drag_region: false,
             label: props.label.clone(),
             attached: strip,
+            menus: props.tab_menus,
         };
         let sink = self.backend.tab_seam.borrow_mut().strips.entry(id).or_default().clone();
         let key = format!("nd-strip-{}", id.0);
