@@ -14,10 +14,10 @@ use std::time::Duration;
 use nd_backend_gpui::GpuiHost;
 use nd_components::forms::{PastedImage, TextChanged, TextSubmitted, text_area};
 use nd_components::{
-    Attachment, BubbleSide, ChatMessage, ComposerEvent, Draft, Icon, ImageLoaded, ImageSource, LyricClicked, LyricLine,
-    Lyrics, LyricsFollowChanged, NowPlaying, Person, PlaybackClock, Reaction, RunPosition, SeekPhase, Seeked,
-    ShelfArrows, ShelfHandle, ShelfScrolled, TransportLayout, avatar, avatar_group, chat_bubble, chat_row, composer,
-    icon_button, image, image_placeholder, lyrics_view, player_bar, seek_bar, shelf,
+    Attachment, BubbleSide, ChatMessage, ComposerEvent, Draft, Icon, ImageFit, ImageLoaded, ImageSource, LyricClicked,
+    LyricLine, Lyrics, LyricsFollowChanged, NowPlaying, Person, PlaybackClock, Reaction, RunPosition, SeekPhase,
+    Seeked, ShelfArrows, ShelfHandle, ShelfScrolled, TransportLayout, avatar, avatar_group, chat_bubble, chat_row,
+    composer, icon_button, image, image_placeholder, lyrics_view, player_bar, seek_bar, shelf,
 };
 use nd_gpui::gpui::{HeadlessAppContext, Modifiers, PlatformInput, ScrollDelta, ScrollWheelEvent, TouchPhase};
 use nd_gpui::gpui::{WindowAppearance, point as gpoint, px as gpx};
@@ -230,6 +230,35 @@ impl Render for Board {
                     }))),
             );
         h_flex().size_full().p(px(16.)).gap(px(24.)).items_start().child(left).child(right)
+    }
+}
+
+/// A 400x100 photo, black at both ends, red then green between, in two 200 pt boxes over blue
+/// as a file manager's preview lays one out.
+struct Fits {
+    log: Log,
+    path: PathBuf,
+}
+
+impl Render for Fits {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        let boxed = |id: &'static str, fit: ImageFit| {
+            let log = self.log.clone();
+            div().size(px(200.)).flex().items_center().justify_center().bg(rgb(0x0000ff)).child(
+                image(ImageSource::path(&self.path))
+                    .id(id)
+                    .fit(fit)
+                    .rounded(px(6.))
+                    .w_full()
+                    .h(px(200.))
+                    .on_load(move |_: &ImageLoaded, _, _| log.borrow_mut().push(id.into())),
+            )
+        };
+        h_flex()
+            .gap(px(20.))
+            .p(px(10.))
+            .child(boxed("contain", ImageFit::Contain))
+            .child(boxed("cover", ImageFit::Cover))
     }
 }
 
@@ -543,6 +572,62 @@ mod media {
         rig.keys(&["left", "left"]);
         assert_eq!(rig.take(), ["seek:Committed:50", "seek:Committed:45"]);
         quiet(&mut rig);
+    }
+
+    /// A wide picture in a square box: `Contain` shows all of it between bands of what is
+    /// behind, `Cover` fills the box with its middle, neither one stretched.
+    pub fn image_fit_letterboxes_and_crops() {
+        if nd_gpui::gpui_platform::current_headless_renderer().ok().flatten().is_none() {
+            println!("skipped: GPUI has no headless renderer on this OS");
+            return;
+        }
+        let path = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("bands.jpg");
+        image::RgbImage::from_fn(400, 100, |x, _| match x {
+            0..100 | 300.. => image::Rgb([0, 0, 0]),
+            100..200 => image::Rgb([255, 0, 0]),
+            _ => image::Rgb([0, 255, 0]),
+        })
+        .save(&path)
+        .expect("jpg");
+        let mut cx = headless();
+        let log: Log = Rc::default();
+        let l = log.clone();
+        let mut window = None;
+        let host = cx.update(|cx| {
+            GpuiHost::builder().quit_when_empty(false).start(cx, |app| {
+                let handle = app.open_window(WindowOptions::main("fit").size(size(px(440.), px(220.))), |_, cx| {
+                    cx.new(|_| Fits { log: l, path })
+                });
+                window = Some(handle.id());
+            })
+        });
+        let window = window.expect("window");
+        let mut rig = Rig { cx, host, window, log, view: Rc::default() };
+        rig.settle_until("both pictures", |r| r.log.borrow().len() >= 2);
+        for _ in 0..10 {
+            std::thread::sleep(Duration::from_millis(10));
+            rig.settle();
+        }
+        let capture = rig.host.job(|app| app.capture(rig.window)).expect("capture");
+        let shot = image::load_from_memory(&capture.png).expect("png").to_rgba8();
+        let scale = shot.width() as f32 / 440.;
+        let at = |id: &str, fx: f32, fy: f32| {
+            let b = rig.node(id).bounds.expect("laid out");
+            let (x, y) = (b.origin.x + b.size.width * fx, b.origin.y + b.size.height * fy);
+            let p = shot.get_pixel((x * scale) as u32, (y * scale) as u32);
+            [p[0], p[1], p[2]]
+        };
+        let is = |p: [u8; 3], c: [u8; 3]| p.iter().zip(c).all(|(a, b)| (i16::from(*a) - i16::from(b)).abs() < 40);
+        let (blue, red, green, black) = ([0, 0, 255], [255, 0, 0], [0, 255, 0], [0, 0, 0]);
+        // Contain: the 4:1 picture is 50 tall in the 200 box, centred.
+        assert!(is(at("contain", 0.5, 0.1), blue), "a band above the picture: {:?}", at("contain", 0.5, 0.1));
+        assert!(is(at("contain", 0.5, 0.9), blue), "and below it: {:?}", at("contain", 0.5, 0.9));
+        assert!(is(at("contain", 0.05, 0.5), black), "its whole width shows: {:?}", at("contain", 0.05, 0.5));
+        assert!(is(at("contain", 0.4, 0.5), red) && is(at("contain", 0.6, 0.5), green), "in order");
+        // Cover: the picture is 800 wide at the box's height, the box its middle 200.
+        assert!(is(at("cover", 0.25, 0.1), red), "the middle's left half, edge to edge: {:?}", at("cover", 0.25, 0.1));
+        assert!(is(at("cover", 0.75, 0.9), green), "and its right half: {:?}", at("cover", 0.75, 0.9));
+        assert!(is(at("cover", 0.02, 0.5), red), "no black bars: the sides are cut: {:?}", at("cover", 0.02, 0.5));
     }
 
     pub fn image_placeholder_has_its_final_size_and_loads_once() {
@@ -919,6 +1004,7 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let tests: Vec<(&str, fn())> = vec![
         ("media::seek_bar_drag_scrubs_then_commits_once", media::seek_bar_drag_scrubs_then_commits_once),
+        ("media::image_fit_letterboxes_and_crops", media::image_fit_letterboxes_and_crops),
         (
             "media::image_placeholder_has_its_final_size_and_loads_once",
             media::image_placeholder_has_its_final_size_and_loads_once,
