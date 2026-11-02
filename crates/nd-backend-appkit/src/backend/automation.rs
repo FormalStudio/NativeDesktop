@@ -299,10 +299,14 @@ impl AppKitBackend {
                 }
                 if window.makeFirstResponder(Some(&view)) { Ok(()) } else { Err(not_actionable("focus refused")) }
             }
-            SemanticAction::SetValue(_)
-            | SemanticAction::Type(_)
-            | SemanticAction::Scroll { .. }
-            | SemanticAction::ScrollIntoView => {
+            // AppKit scrolls the nearest clip view and every one around it, so a column in a
+            // horizontal scroll view and a row in its table both come into view.
+            SemanticAction::ScrollIntoView => {
+                let view = self.view(node).ok_or_else(|| not_actionable("no view"))?;
+                view.scrollRectToVisible(view.bounds());
+                Ok(())
+            }
+            SemanticAction::SetValue(_) | SemanticAction::Type(_) | SemanticAction::Scroll { .. } => {
                 Err(ActionError::Unsupported(format!("{action:?}: no AppKit control takes it yet")))
             }
         }

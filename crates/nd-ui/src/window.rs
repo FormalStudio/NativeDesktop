@@ -192,6 +192,12 @@ impl Window {
         cx.focus_id(self.id, id)
     }
 
+    /// Scrolls the element given `.id(id)` in this window into view; see
+    /// [`App::scroll_into_view`].
+    pub fn scroll_into_view(&self, cx: &mut App, id: &str) -> bool {
+        cx.scroll_into_view(self.id, id)
+    }
+
     pub fn title(&self) -> &SharedString {
         &self.title
     }

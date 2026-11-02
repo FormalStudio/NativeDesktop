@@ -11,7 +11,8 @@ use std::time::Duration;
 
 use nd_backend_gpui::GpuiHost;
 use nd_gpui::gpui::{
-    HeadlessAppContext, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PlatformInput, point,
+    HeadlessAppContext, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PlatformInput,
+    ScrollDelta, ScrollWheelEvent, TouchPhase, point,
 };
 use nd_ui::WindowId;
 use nd_ui::prelude::*;
@@ -373,8 +374,114 @@ pub fn scroll_into_view_reaches_a_row_below_the_fold() {
     assert!(shows(&host), "row 14 shows whole after ScrollIntoView");
 }
 
+struct Columns {
+    lists: Vec<ListState<u32>>,
+}
+
+impl Render for Columns {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        h_flex().id("columns").size_full().overflow_x_scroll().children(self.lists.iter().enumerate().map(
+            |(c, state)| {
+                div().id(format!("column-{c}")).w(px(200.)).h_full().flex_shrink_0().child(list(
+                    format!("list-{c}"),
+                    state,
+                    move |row: u32, _, _| {
+                        div().h(px(30.)).child(div().id(format!("cell-{c}-{row}")).child(format!("{c}.{row}")))
+                    },
+                ))
+            },
+        ))
+    }
+}
+
+fn wheel(cx: &mut HeadlessAppContext, host: &GpuiHost, window: WindowId, at: (f32, f32), dx: f32, dy: f32) {
+    let handle = host.window_handle(window).expect("gpui window");
+    let event = ScrollWheelEvent {
+        position: point(px(at.0), px(at.1)),
+        // A notched wheel, so each call is a gesture of its own rather than one trackpad session.
+        delta: ScrollDelta::Lines(point(-dx / 20., -dy / 20.)),
+        modifiers: Modifiers::default(),
+        touch_phase: TouchPhase::Moved,
+    };
+    cx.update(|cx| {
+        let _ = handle.update(cx, |_, window, cx| window.dispatch_event(PlatformInput::ScrollWheel(event), cx));
+    });
+    let glide = Duration::from_secs_f64(nd_gesture::GestureConfig::default().wheel_glide);
+    let until = std::time::Instant::now() + glide + Duration::from_millis(50);
+    while std::time::Instant::now() < until {
+        frames(cx, host, 1);
+    }
+    frames(cx, host, 4);
+}
+
+/// A row of virtual lists wider than the window, a Miller column browser's shape: a sideways
+/// wheel scrolls the row, an upright one scrolls the list under the pointer, and
+/// `scroll_into_view` brings a column, or a row in one, whole into view.
+pub fn columns_scroll_sideways_and_into_view() {
+    let (mut cx, host, window, view) = open(300., |cx| {
+        let lists = (0..4)
+            .map(|_| {
+                let mut list = ListState::new(cx);
+                list.set_items((0..30).collect::<Vec<u32>>(), cx);
+                list
+            })
+            .collect();
+        Columns { lists }
+    });
+    let at = |host: &GpuiHost, id: &str| {
+        let node =
+            host.read(|app| app.node_with_id(window, id).map(|(n, _)| n)).unwrap_or_else(|| panic!("{id} mounted"));
+        host.backend().bounds(node).unwrap_or_else(|| panic!("{id} laid out"))
+    };
+    assert_eq!(at(&host, "column-0").origin.x, 0., "the row starts at its first column");
+    wheel(&mut cx, &host, window, (100., 100.), 120., 0.);
+    let first = at(&host, "column-0").origin.x;
+    assert!((first + 120.).abs() < 1., "a sideways wheel moves the row 120 left, column 0 at {first}");
+    let states = host.read(|app| view.read(app).lists.clone());
+    // The first row each list paints at its top edge.
+    let tops = |host: &GpuiHost| -> Vec<Option<u32>> {
+        host.backend()
+            .lists()
+            .iter()
+            .zip(&states)
+            .map(|(l, state)| {
+                let (viewport, rows) = host.backend().painted_rows(*l).expect("painted");
+                rows.iter().find(|(_, b)| b.origin.y >= viewport.origin.y - 0.5).and_then(|(r, _)| state.key_of(*r))
+            })
+            .collect()
+    };
+    wheel(&mut cx, &host, window, (150., 100.), 0., 90.);
+    assert!((at(&host, "column-0").origin.x - first).abs() < 0.5, "an upright wheel leaves the row where it was");
+    assert_eq!(tops(&host), vec![Some(0), Some(3), Some(0), Some(0)], "only the list under the pointer scrolls");
+    let host2 = host.clone();
+    let ok = cx.update(|cx| host2.update(cx, |app| app.scroll_into_view(window, "column-3")));
+    assert!(ok, "scroll_into_view finds the column");
+    frames(&mut cx, &host, 6);
+    let last = at(&host, "column-3");
+    assert!((last.origin.x + last.size.width - 300.).abs() < 1., "the last column ends at the window's edge, {last:?}");
+    let host2 = host.clone();
+    assert!(cx.update(|cx| host2.update(cx, |app| app.scroll_into_view(window, "column-0"))));
+    frames(&mut cx, &host, 6);
+    assert!(at(&host, "column-0").origin.x.abs() < 1., "and back to the first");
+    // A row past the fold of a column off screen, a revealed file's shape: rows a list never
+    // mounted have no id to find, so the list jumps to the row and the column scrolls in.
+    let host2 = host.clone();
+    let shown = cx.update(|cx| {
+        host2.update(cx, |app| {
+            view.update(app, |this, cx| this.lists[2].jump_to(25, nd_virtual::Align::End, px(0.), cx));
+            app.scroll_into_view(window, "column-2")
+        })
+    });
+    assert!(shown);
+    frames(&mut cx, &host, 6);
+    let column = at(&host, "column-2");
+    assert!((column.origin.x + column.size.width - 300.).abs() < 1., "column 2 ends at the window's edge, {column:?}");
+    assert_eq!(tops(&host)[2], Some(16), "row 25 is column 2's last whole row");
+}
+
 fn main() {
-    let tests: [(&str, fn()); 6] = [
+    let tests: [(&str, fn()); 7] = [
+        ("gate_m5::gpui_kinds::columns_scroll_sideways_and_into_view", columns_scroll_sideways_and_into_view),
         ("gate_m5::gpui_kinds::row_hover_follows_the_pointer", row_hover_follows_the_pointer),
         ("gate_m5::gpui_kinds::unselectable_row_takes_no_selection", unselectable_row_takes_no_selection),
         (

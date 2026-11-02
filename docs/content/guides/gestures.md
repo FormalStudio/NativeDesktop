@@ -127,6 +127,19 @@ that axis wins: a scroller with room, a row swipe, or a page swipe. So a row swi
 vertical list never fights the list, and a horizontal scroller inside a vertical one keeps its
 own axis.
 
+A row of lists wider than the window, as a column browser lays them out, is an `h_flex` with
+`overflow_x_scroll()` around fixed-width, `flex_shrink_0()` columns. A sideways wheel or swipe
+scrolls the row and an upright one scrolls the list under the pointer.
+
+### Scrolling into view
+
+`window.scroll_into_view(cx, "column-3")` (or `cx.scroll_into_view(window_id, id)`) scrolls
+every scroll view around the element given that id until it shows, the nearest edge first, and
+a list to the row holding it. It returns false when no element has the id or nothing around it
+scrolls. A list mounts only the rows near its viewport, so reach an unmounted row with the
+list's `scroll_to` or `jump_to` first. Automation's `scrollIntoView` does the same. On macOS
+it's `scrollRectToVisible:` on the element's view.
+
 ### Row actions
 
 Swipe actions on list rows come from the list (`list(..).row_actions(|key, cx| ..)`) instead of

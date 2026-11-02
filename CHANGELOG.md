@@ -5,6 +5,10 @@ and the one it moves to.
 
 ## Unreleased
 
+- `window.scroll_into_view(cx, id)` and `App::scroll_into_view(window, id)` scroll every scroll
+  view around an element, horizontal ones included, until it shows. Automation's
+  `scrollIntoView` reaches scroll views on the GPUI backend and works on macOS through
+  `scrollRectToVisible:`.
 - A list, table, grid or tree with a selection is a focus target: `window.focus(id)` reaches it,
   a press keeps nd focus on it, Tab stops on it and bindings of the contexts around it match while
   it has focus. The GPUI presenter rings the keyboard's row with the theme's focus ring. On macOS

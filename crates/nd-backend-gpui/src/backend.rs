@@ -888,7 +888,7 @@ impl Backend for GpuiBackend {
                     self.synthesize(window, &input)?;
                 }
             }
-            SemanticAction::ScrollIntoView => self.scroll_row_into_view(node)?,
+            SemanticAction::ScrollIntoView => self.scroll_into_view(node)?,
             // A wheel over the node's centre, through the window's own input path: nd scrolls
             // what is under the pointer, as it would for the user.
             SemanticAction::Scroll { dx, dy } => {
@@ -1034,6 +1034,54 @@ impl GpuiBackend {
         }
     }
 
+    /// Brings `node` into view: its list scrolls to its row, and every scroll view around it
+    /// scrolls along the axes it scrolls until the node's last laid-out frame shows whole (its
+    /// leading edge where it is larger than the view).
+    fn scroll_into_view(&self, node: NodeId) -> Result<(), ActionError> {
+        let listed = self.scroll_row_into_view(node).is_ok();
+        let window = self.window_of(node).ok_or_else(|| not_actionable(format!("{node:?} is not in a window")))?;
+        let mut scrolled = false;
+        if let Some(target) = self.bounds(node) {
+            let scrollers: Vec<(NodeId, nd_gesture::Axes)> = {
+                let state = self.state.borrow();
+                let mut out = Vec::new();
+                let mut at = state.nodes.get(&node).and_then(|n| n.parent);
+                while let Some(id) = at {
+                    let Some(n) = state.nodes.get(&id) else { break };
+                    if let Some(p) = n.props.downcast_ref::<nd_ui::DivProps>().filter(|p| p.gestures.scroll.any()) {
+                        out.push((id, p.gestures.scroll));
+                    }
+                    at = n.parent;
+                }
+                out
+            };
+            for (scroller, axes) in scrollers {
+                let (Some(view), Some((offset, _))) =
+                    (self.bounds(scroller), self.gestures.scroll_metrics(window, scroller))
+                else {
+                    continue;
+                };
+                let mut to = offset;
+                if axes.horizontal {
+                    to.x = reveal(offset.x, target.origin.x, target.size.width, view.origin.x, view.size.width);
+                }
+                if axes.vertical && !listed {
+                    to.y = reveal(offset.y, target.origin.y, target.size.height, view.origin.y, view.size.height);
+                }
+                if to != offset {
+                    self.gestures.scroll_to(window, scroller, to);
+                }
+                scrolled = true;
+            }
+        }
+        if !listed && !scrolled {
+            return Err(ActionError::Unsupported(format!("ScrollIntoView: {node:?} is in no list or scroll view")));
+        }
+        self.state.borrow_mut().dirty.insert(window);
+        let _ = self.with_window(window, |w, _| w.refresh());
+        Ok(())
+    }
+
     /// Scrolls the virtual list `node` sits in until the row holding it shows, the nearest edge
     /// first. A node in no list has nothing to scroll here.
     fn scroll_row_into_view(&self, node: NodeId) -> Result<(), ActionError> {
@@ -1082,4 +1130,14 @@ impl GpuiBackend {
     pub(crate) fn button_label(props: &Props) -> &ButtonProps {
         self::props(props, "Button")
     }
+}
+
+/// The scroll offset along one axis that shows `start..start + len` inside the view at
+/// `view_start..view_start + view_len`, moving as little as it can from `offset`; the span's
+/// start where it is longer than the view. Positions are as laid out at `offset`.
+fn reveal(offset: f32, start: f32, len: f32, view_start: f32, view_len: f32) -> f32 {
+    let past_end = start + len - (view_start + view_len);
+    let to = if past_end > 0. { offset + past_end } else { offset };
+    let before_start = view_start - (start - (to - offset));
+    if before_start > 0. { to - before_start } else { to }
 }

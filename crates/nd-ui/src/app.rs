@@ -617,6 +617,14 @@ impl App {
         node.is_some_and(|node| self.focus(window, node))
     }
 
+    /// Scrolls the element given `.id(id)` into view: a list to its row, and every scroll view
+    /// around it, horizontal ones included, until it shows. False when none is mounted or
+    /// nothing around it scrolls.
+    pub fn scroll_into_view(&mut self, window: WindowId, id: &str) -> bool {
+        let Some((node, _)) = self.node_with_id(window, id) else { return false };
+        self.perform(node, &crate::semantics::SemanticAction::ScrollIntoView).is_ok()
+    }
+
     pub fn blur(&mut self, window: WindowId) {
         self.with_dispatch(window, (), |tree, _| tree.blur());
     }
