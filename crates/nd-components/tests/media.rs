@@ -147,6 +147,30 @@ fn the_header_gives_the_size_without_decoding() {
     assert_eq!(p.intrinsic_size(&ImageSource::url("https://example.com/x.png")), None, "not downloaded yet");
 }
 
+const TINY_HEIC: &[u8] = include_bytes!("fixtures/tiny.heic");
+
+#[test]
+fn heif_is_found_by_its_brand_and_decoded_with_its_size() {
+    let source = ImageSource::bytes("no-extension", TINY_HEIC.to_vec());
+    let p = pipeline(|_| Err("offline".into()));
+    assert_eq!(p.intrinsic_size(&source), Some((64, 48)));
+    let request = DecodeRequest { source, width: 0, height: 0, fit: ImageFit::Cover, tint: None, blur: 0 };
+    let d = decode(TINY_HEIC, &request, 1 << 30).unwrap();
+    assert_eq!((d.width, d.height, d.source_width, d.source_height), (64, 48, 64, 48));
+    let px = |x: usize, y: usize| {
+        let at = (y * 64 + x) * 4;
+        let p = &d.frames[0].rgba[at..at + 4];
+        (p[0], p[2])
+    };
+    let (r, b) = px(8, 24);
+    assert!(r > 150 && b < 100, "left half is red: {r} {b}");
+    let (r, b) = px(56, 24);
+    assert!(b > 150 && r < 100, "right half is blue: {r} {b}");
+    let small = DecodeRequest { width: 32, height: 32, ..request };
+    let d = decode(TINY_HEIC, &small, 1 << 30).unwrap();
+    assert_eq!((d.width, d.height), (43, 32), "scaled like any still");
+}
+
 #[test]
 fn loads_for_one_request_share_a_decode_and_hit_memory_after() {
     let fetches = Arc::new(AtomicUsize::new(0));

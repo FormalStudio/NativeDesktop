@@ -3461,6 +3461,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
+name = "heic-rs"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8883c3bfa6b4ff19a40e52a6dc051c5612cbe21bf408fc6d4875e8dfd777cb66"
+dependencies = [
+ "rayon",
+]
+
+[[package]]
 name = "hello"
 version = "0.6.1"
 dependencies = [
@@ -4786,6 +4795,7 @@ name = "nd-components"
 version = "0.6.1"
 dependencies = [
  "base64 0.22.1",
+ "heic-rs",
  "image",
  "js-sys",
  "nd-core",

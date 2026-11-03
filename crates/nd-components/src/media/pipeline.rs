@@ -655,6 +655,11 @@ fn header_size_file(path: &Path) -> Option<(u32, u32)> {
     if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("svg")) {
         return header_size_bytes(&std::fs::read(path).ok()?);
     }
+    let mut head = [0u8; 64];
+    let n = std::fs::File::open(path).and_then(|mut f| std::io::Read::read(&mut f, &mut head)).ok()?;
+    if is_heif(&head[..n]) {
+        return header_size_bytes(&std::fs::read(path).ok()?);
+    }
     let reader = ImageReader::open(path).ok()?.with_guessed_format().ok()?;
     oriented(reader.into_dimensions().ok()?, orientation_of_file(path))
 }
@@ -663,6 +668,10 @@ fn header_size_bytes(bytes: &[u8]) -> Option<(u32, u32)> {
     if is_svg(bytes) {
         let size = svg_tree(bytes).ok()?.size();
         return Some((size.width().ceil() as u32, size.height().ceil() as u32));
+    }
+    if is_heif(bytes) {
+        let info = heic_rs::probe(bytes).ok()?;
+        return Some((info.width, info.height));
     }
     let reader = ImageReader::new(Cursor::new(bytes)).with_guessed_format().ok()?;
     oriented(reader.into_dimensions().ok()?, orientation_of_bytes(bytes))
@@ -751,6 +760,37 @@ fn is_svg(bytes: &[u8]) -> bool {
         || text.starts_with("<svg")
 }
 
+/// An ISO BMFF `ftyp` box naming a HEIF brand, in the major slot or among the compatible ones.
+/// The brand decides, never the file name.
+fn is_heif(bytes: &[u8]) -> bool {
+    const BRANDS: [&[u8; 4]; 10] =
+        [b"heic", b"heix", b"hevc", b"hevx", b"heim", b"heis", b"hevm", b"hevs", b"mif1", b"msf1"];
+    if bytes.len() < 12 || &bytes[4..8] != b"ftyp" {
+        return false;
+    }
+    let size = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
+    let end = if size >= 16 { size.min(bytes.len()) } else { bytes.len().min(64) };
+    let brand = |at: usize| bytes.get(at..at + 4).is_some_and(|b| BRANDS.iter().any(|k| &k[..] == b));
+    brand(8) || (16..end.saturating_sub(3)).step_by(4).any(brand)
+}
+
+fn decode_heif(bytes: &[u8], request: &DecodeRequest) -> Result<Decoded, String> {
+    let options = heic_rs::DecodeOptions { layout: heic_rs::PixelLayout::Rgba8, ..heic_rs::DecodeOptions::default() };
+    let image = heic_rs::decode(bytes, &options).map_err(|e| e.to_string())?;
+    let (sw, sh) = (image.width, image.height);
+    let rgba = RgbaImage::from_raw(sw, sh, image.data)
+        .ok_or_else(|| "heif: pixel buffer does not match its size".to_string())?;
+    let rgba = resize(rgba, scale_for(sw, sh, request));
+    let (width, height) = rgba.dimensions();
+    Ok(Decoded {
+        width,
+        height,
+        source_width: sw,
+        source_height: sh,
+        frames: vec![Frame { rgba: Arc::from(rgba.into_raw()), delay: Duration::ZERO }],
+    })
+}
+
 fn svg_tree(bytes: &[u8]) -> Result<resvg::usvg::Tree, String> {
     resvg::usvg::Tree::from_data(bytes, &resvg::usvg::Options::default()).map_err(|e| e.to_string())
 }
@@ -829,6 +869,9 @@ pub fn decode(bytes: &[u8], request: &DecodeRequest, animation_budget: usize) ->
 fn decode_untinted(bytes: &[u8], request: &DecodeRequest, animation_budget: usize) -> Result<Decoded, String> {
     if is_svg(bytes) {
         return decode_svg(bytes, request);
+    }
+    if is_heif(bytes) {
+        return decode_heif(bytes, request);
     }
     let format = image::guess_format(bytes).map_err(|e| e.to_string())?;
     let frames = match format {
