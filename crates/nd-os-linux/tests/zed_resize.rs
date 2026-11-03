@@ -218,17 +218,11 @@ fn zed_resize_labwc() {
 #[test]
 #[ignore = "needs ZED_PROBE_BIN and Hyprland with Xwayland"]
 fn zed_x11_refresh() {
-    let x11_sockets = || -> std::collections::BTreeSet<String> {
-        std::fs::read_dir("/tmp/.X11-unix")
-            .map(|d| d.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect())
-            .unwrap_or_default()
-    };
-    let before = x11_sockets();
     let options = ndshell::hyprland::Options {
         refresh: 144,
+        xwayland: true,
         extra_config: r#"
 hl.monitor({ output = "HEADLESS-2", mode = "1280x800@240", position = "1600x0", scale = "1" })
-hl.config({ xwayland = { enabled = true } })
 "#
         .into(),
         ..Default::default()
@@ -236,14 +230,6 @@ hl.config({ xwayland = { enabled = true } })
     let hyprland = ndshell::hyprland::Hyprland::start(options).unwrap();
     let created = hyprland.request("output create headless HEADLESS-2").unwrap();
     assert_eq!(created.trim(), "ok", "second output: {created}");
-    let end = Instant::now() + Duration::from_secs(10);
-    let display = loop {
-        if let Some(new) = x11_sockets().difference(&before).next() {
-            break format!(":{}", new.trim_start_matches('X'));
-        }
-        assert!(Instant::now() < end, "Xwayland never started: {}", hyprland.log_tail());
-        std::thread::sleep(Duration::from_millis(100));
-    };
     std::thread::sleep(Duration::from_millis(500));
     println!(
         "monitors: {}",
@@ -256,7 +242,7 @@ hl.config({ xwayland = { enabled = true } })
             .join(" ")
     );
     let mut command = hyprland.command(probe_bin());
-    command.env_remove("WAYLAND_DISPLAY").env("DISPLAY", &display);
+    command.env_remove("WAYLAND_DISPLAY");
     let probe = Probe::launch(command);
     assert!(probe.wait_frame(), "probe never drew:\n{}\n{}", probe.log(), hyprland.log_tail());
     hyprland.wait_for_client(probe.child.id(), Duration::from_secs(5)).unwrap();

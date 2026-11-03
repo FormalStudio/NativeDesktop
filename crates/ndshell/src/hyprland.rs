@@ -45,13 +45,16 @@ pub struct Options {
     pub width: u32,
     pub height: u32,
     pub refresh: u32,
+    /// Starts the instance's XWayland with it, for X11 clients: [`Hyprland::x11_display`], and
+    /// `DISPLAY` in [`Hyprland::client_env`].
+    pub xwayland: bool,
     /// Lua appended to the generated config.
     pub extra_config: String,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Self { width: 1600, height: 1000, refresh: 60, extra_config: String::new() }
+        Self { width: 1600, height: 1000, refresh: 60, xwayland: false, extra_config: String::new() }
     }
 }
 
@@ -74,6 +77,7 @@ pub struct Hyprland {
     runtime_dir: PathBuf,
     signature: String,
     wayland_display: String,
+    x11_display: Option<String>,
     pub options: Options,
 }
 
@@ -125,9 +129,20 @@ impl Hyprland {
                 return Err(format!("{}: {e}", Path::new(&binary).display()));
             }
         };
-        let mut this =
-            Self { child, parent, bus, runtime_dir, signature: String::new(), wayland_display: String::new(), options };
+        let mut this = Self {
+            child,
+            parent,
+            bus,
+            runtime_dir,
+            signature: String::new(),
+            wayland_display: String::new(),
+            x11_display: None,
+            options,
+        };
         this.wait_ready()?;
+        if this.options.xwayland {
+            this.x11_display = Some(this.find_x11_display(Duration::from_secs(10))?);
+        }
         Ok(this)
     }
 
@@ -186,11 +201,13 @@ impl Hyprland {
 
     /// The environment a client needs to land on this instance and nowhere else.
     pub fn client_env(&self) -> Vec<(&'static str, String)> {
-        vec![
+        let mut env = vec![
             ("XDG_RUNTIME_DIR", self.runtime_dir.display().to_string()),
             ("WAYLAND_DISPLAY", self.wayland_display.clone()),
             ("HYPRLAND_INSTANCE_SIGNATURE", self.signature.clone()),
-        ]
+        ];
+        env.extend(self.x11_display.clone().map(|display| ("DISPLAY", display)));
+        env
     }
 
     /// The run's private session bus, which clients only get when they ask for it.
@@ -252,10 +269,14 @@ impl Hyprland {
         }
     }
 
-    /// The X display of the instance's XWayland, with `hl.config({ xwayland = { enabled = true } })`
-    /// in [`Options::extra_config`]: the `/tmp/.X11-unix` socket that this Hyprland or its
-    /// Xwayland holds, so parallel runs never take each other's.
-    pub fn x11_display(&self, timeout: Duration) -> Result<String, String> {
+    /// The X display of the instance's XWayland (`:N`), with [`Options::xwayland`].
+    pub fn x11_display(&self) -> Option<&str> {
+        self.x11_display.as_deref()
+    }
+
+    /// The `/tmp/.X11-unix` socket that this Hyprland or its Xwayland holds, so parallel runs
+    /// never take each other's.
+    fn find_x11_display(&self, timeout: Duration) -> Result<String, String> {
         let end = Instant::now() + timeout;
         let hyprland = self.child.id().to_string();
         loop {
@@ -504,7 +525,7 @@ hl.config({{
     -- Not drawn into captures; the virtual pointer still moves it.
     cursor = {{ invisible = true }},
     ecosystem = {{ no_update_news = true, no_donation_nag = true }},
-    xwayland = {{ enabled = false }},
+    xwayland = {{ enabled = {xwayland} }},
 }})
 
 hl.window_rule({{ name = "nd-float", match = {{ class = ".*" }}, float = true }})
@@ -515,6 +536,7 @@ hl.window_rule({{ name = "nd-float", match = {{ class = ".*" }}, float = true }}
         hz = o.refresh,
         border = rgb(BORDER),
         background = rgb(BACKGROUND),
+        xwayland = o.xwayland,
         extra = o.extra_config,
     )
 }

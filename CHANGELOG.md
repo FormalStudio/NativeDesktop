@@ -27,6 +27,9 @@ and the one it moves to.
   `parent_window` (`wayland:<handle>` or `x11:<xid>`). On Linux the GPUI backend imports the
   handle over xdg-foreign v2 and marks the window modal over xdg-dialog v1 (WM_TRANSIENT_FOR and
   `_NET_WM_STATE_MODAL` on X11); other platforms open it on its own.
+- `ndshell::hyprland::Options::xwayland` starts the headless Hyprland with XWayland from its
+  config, for a tier 3 test with an X11 client: `Hyprland::x11_display()` names the display and
+  `client_env()` carries it as `DISPLAY`.
 - `Window::focus_if_lost(id)` focuses `id` after the frame only when nothing mounted holds focus,
   for a view that swaps one list for another without taking the keys out of a text field.
 - A scaffold's sidebar on the libadwaita look gets no header bar of its own when nothing sits

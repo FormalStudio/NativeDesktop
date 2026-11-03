@@ -83,28 +83,20 @@ mod gate_m8_webview {
     /// A headless Hyprland for one run, with XWayland for a Chrome-style page.
     struct Run {
         hyprland: Hyprland,
-        display: Option<String>,
         style: &'static str,
     }
 
     impl Run {
         fn start(style: &'static str) -> Self {
-            let chrome = style == "chrome";
-            let extra_config =
-                if chrome { "hl.config({ xwayland = { enabled = true } })".into() } else { String::new() };
-            let hyprland = Hyprland::start(Options { extra_config, ..Options::default() })
+            let hyprland = Hyprland::start(Options { xwayland: style == "chrome", ..Options::default() })
                 .unwrap_or_else(|e| panic!("headless Hyprland: {e}"));
-            let display = chrome.then(|| hyprland.x11_display(Duration::from_secs(10)).unwrap());
-            Self { hyprland, display, style }
+            Self { hyprland, style }
         }
 
         /// The browser, as a client of this instance in this run's style.
         fn command(&self) -> std::process::Command {
             let mut command = self.hyprland.command(browser_bin());
             command.env("ND_CEF_STYLE", self.style);
-            if let Some(display) = &self.display {
-                command.env("DISPLAY", display);
-            }
             command
         }
 
