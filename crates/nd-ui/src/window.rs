@@ -160,6 +160,9 @@ pub struct Window {
     insets: TitlebarInsets,
     /// An element id to focus once the frame has rendered; see [`Window::focus`].
     pub(crate) focus_request: Option<SharedString>,
+    /// Whether that request stands only when nothing mounted holds focus; see
+    /// [`Window::focus_if_lost`].
+    pub(crate) focus_if_lost: bool,
     pub(crate) should_close: Option<ShouldClose>,
     pub(crate) new_tab: Option<NewTab>,
 }
@@ -178,6 +181,7 @@ impl Window {
             options: options.clone(),
             insets: TitlebarInsets::default(),
             focus_request: None,
+            focus_if_lost: false,
             should_close: None,
             new_tab: None,
         }
@@ -265,6 +269,15 @@ impl Window {
     /// later request in the same frame replaces this one; an id nothing carries is dropped.
     pub fn focus(&mut self, id: impl Into<SharedString>) {
         self.focus_request = Some(id.into());
+        self.focus_if_lost = false;
+    }
+
+    /// Like [`Window::focus`], but only when, once this frame has rendered, no mounted node
+    /// holds focus: for an element put in place of the one that had the keys, which leaves
+    /// them where they are when something else, a text field say, has them.
+    pub fn focus_if_lost(&mut self, id: impl Into<SharedString>) {
+        self.focus_request = Some(id.into());
+        self.focus_if_lost = true;
     }
 
     pub(crate) fn set_frame_time(&mut self, time: FrameTime) {

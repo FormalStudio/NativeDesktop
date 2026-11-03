@@ -1477,7 +1477,8 @@ impl App {
             tree.release_orphans(self);
         }
         tree.dispatch.settle_scopes();
-        if let Some(node) = window.focus_request.take().and_then(|id| tree.focus_target(&id)) {
+        let held = std::mem::take(&mut window.focus_if_lost) && tree.dispatch.focused().is_some();
+        if let Some(node) = window.focus_request.take().filter(|_| !held).and_then(|id| tree.focus_target(&id)) {
             tree.dispatch.focus(node);
         }
         tree.push_focus_change();

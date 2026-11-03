@@ -280,6 +280,44 @@ mod gate_m4 {
         assert_eq!(cx.focused(handle.id()), Some(field));
     }
 
+    /// A field beside a list the view swaps for another, handing the keys on only when the
+    /// list it took out had them.
+    struct Swap {
+        grid: bool,
+        shown: bool,
+    }
+
+    impl Render for Swap {
+        fn render(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            let target = if self.grid { "grid" } else { "list" };
+            if std::mem::replace(&mut self.shown, self.grid) != self.grid {
+                window.focus_if_lost(target);
+            }
+            v_flex().child(div().id("field").focusable()).child(div().id(target).focusable())
+        }
+    }
+
+    #[test]
+    fn focus_if_lost_moves_the_keys_only_off_an_element_that_went() {
+        let mut cx = TestApp::new();
+        let handle = cx.open_window(WINDOW, |_, cx| cx.new(|_| Swap { grid: false, shown: false }));
+        let swap = |cx: &mut TestApp, grid: bool| {
+            handle.root().update(cx, |s, cx| {
+                s.grid = grid;
+                cx.notify();
+            });
+            cx.run_until_idle();
+        };
+        let list = node(&cx, "list");
+        assert!(cx.focus(handle.id(), list));
+        swap(&mut cx, true);
+        assert_eq!(cx.focused(handle.id()), Some(node(&cx, "grid")), "the list had the keys, so the grid takes them");
+        let field = node(&cx, "field");
+        assert!(cx.focus(handle.id(), field));
+        swap(&mut cx, false);
+        assert_eq!(cx.focused(handle.id()), Some(field), "the field keeps them");
+    }
+
     struct Counter(u32);
 
     #[test]
