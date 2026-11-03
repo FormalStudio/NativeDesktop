@@ -32,6 +32,9 @@ use crate::menu::ContextMenu;
 /// covers.
 pub const SOURCE_ART: f32 = 20.;
 
+/// The corner radius of a row's artwork, in points: Music's playlist covers.
+pub const SOURCE_ART_RADIUS: f32 = 4.;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct SourceNode {
     pub id: SharedString,

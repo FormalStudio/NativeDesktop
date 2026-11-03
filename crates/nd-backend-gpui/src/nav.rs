@@ -605,7 +605,7 @@ pub fn source_tree_view(
             .children(pill);
         // A cover in the icon's place, at the sidebar's icon size with Music's corners.
         let cover = art.get(&node.id).map(|image| {
-            let mut corners = div().rounded(px(4.));
+            let mut corners = div().rounded(px(nd_components::SOURCE_ART_RADIUS));
             let corners = corners.style().clone();
             div().flex_none().size(px(nd_components::SOURCE_ART)).child(crate::media::image::picture(
                 image.clone(),

@@ -18,8 +18,8 @@ use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 
 use nd_components::{
-    ActionVisibility, ImageFit, SOURCE_ART, SourceAction, SourceActionClicked, SourceActivated, SourceCollapsed,
-    SourceExpanded, SourceIndex, SourceNode, SourceSelected, SourceTreeProps,
+    ActionVisibility, ImageFit, SOURCE_ART, SOURCE_ART_RADIUS, SourceAction, SourceActionClicked, SourceActivated,
+    SourceCollapsed, SourceExpanded, SourceIndex, SourceNode, SourceSelected, SourceTreeProps,
 };
 use nd_ui::events::Emit;
 use nd_ui::prelude::SharedString;
@@ -485,8 +485,7 @@ impl NdSourceCell {
         if let Some(layer) = iv.art.layer() {
             layer.addSublayer(&iv.slot.0.layer);
         }
-        // Music's playlist covers: a small square with softly rounded corners.
-        iv.slot.0.layer.setCornerRadius(4.);
+        iv.slot.0.layer.setCornerRadius(f64::from(SOURCE_ART_RADIUS));
         let icon = iv.icon.clone();
         iv.slot.on_load(move |loaded| {
             if matches!(loaded, Loaded::Ready(_)) {
