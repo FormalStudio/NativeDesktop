@@ -41,7 +41,8 @@ pub use nd_core::{FrameTime, NodeId, Point, Rect, Size, WindowId};
 pub use nd_gesture as gesture;
 pub use nd_gesture::{
     DoubleTapEvent, DragEvent, ForceClickEvent, GesturePhase, Haptic, KeyModifiers, LongPressEvent, MiddleClickEvent,
-    NavigateEvent, PinchEvent, RotateEvent, SmartMagnifyEvent, SwipeDirection, SwipePageEvent, TapEvent,
+    NavigateEvent, PinchEvent, RotateEvent, ScrollZoomEvent, SmartMagnifyEvent, SwipeDirection, SwipePageEvent,
+    TapEvent,
 };
 pub use nd_gpui::gpui::prelude::FluentBuilder;
 pub use nd_gpui::gpui::{Action, KeyBinding, KeyContext, Keystroke, Modifiers, StyleRefinement, Styled};
@@ -71,8 +72,8 @@ pub mod prelude {
     };
     pub use nd_gesture::{
         DoubleTapEvent, DragEvent, ForceClickEvent, GesturePhase, Haptic, KeyModifiers, LongPressEvent,
-        MiddleClickEvent, NavigateEvent, PinchEvent, RotateEvent, SmartMagnifyEvent, SwipeDirection, SwipePageEvent,
-        TapEvent,
+        MiddleClickEvent, NavigateEvent, PinchEvent, RotateEvent, ScrollZoomEvent, SmartMagnifyEvent, SwipeDirection,
+        SwipePageEvent, TapEvent,
     };
     pub use nd_gpui::gpui::{
         AbsoluteLength, DefiniteLength, FontWeight, Hsla, Length, Pixels, Rems, Rgba, SharedString, hsla, point, px,

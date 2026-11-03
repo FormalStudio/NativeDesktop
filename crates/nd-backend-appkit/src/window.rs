@@ -87,6 +87,9 @@ define_class!(
             if event.r#type() == NSEventType::KeyDown && self.route_key(event) {
                 return;
             }
+            if event.r#type() == NSEventType::ScrollWheel && crate::gestures::scroll_zoom(self, event) {
+                return;
+            }
             if event.r#type() == NSEventType::LeftMouseDown {
                 if let Some(router) = self.router() {
                     router.pointer_down();

@@ -50,6 +50,8 @@ pub struct GestureSet {
     pub swipe_page: bool,
     pub force_click: bool,
     pub smart_magnify: bool,
+    /// Scrolling with the secondary key held zooms instead ([`crate::ScrollZoomEvent`]).
+    pub scroll_zoom: bool,
     pub row_swipe: Option<RowSwipeConfig>,
     /// Axes the node scrolls on (its style's `overflow: scroll`).
     pub scroll: Axes,

@@ -161,6 +161,7 @@ pub fn emit_gesture(emit: &Emit, event: nd_gesture::GestureEvent) {
         G::RowSwipe(e) => emit.emit(e),
         G::ForceClick(e) => emit.emit(e),
         G::SmartMagnify(e) => emit.emit(e),
+        G::ScrollZoom(e) => emit.emit(e),
         G::MiddleClick(e) => emit.emit(e),
         G::Navigate(e) => emit.emit(e),
     }

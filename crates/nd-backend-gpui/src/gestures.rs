@@ -13,7 +13,7 @@ use std::rc::Rc;
 use nd_core::{NodeId, Point, Rect, Size, WindowId};
 use nd_gesture::{
     ForceClickEvent, GestureEvent, GesturePhase, GestureRouter, GestureSet, HitEntry, KeyModifiers, MomentumInference,
-    Output, PinchEvent, PointerButton, PointerInput, PointerPhase, ScrollInput, ScrollPhase,
+    Output, PinchEvent, PointerButton, PointerInput, PointerPhase, ScrollInput, ScrollPhase, WHEEL_LINE,
 };
 use nd_gpui::gpui::{
     self, AnyElement, App, Bounds, ElementId, GlobalElementId, InspectorElementId, IntoElement, LayoutId, Pixels,
@@ -275,13 +275,13 @@ impl Gestures {
                 };
                 (Point { x: -d.x.as_f32(), y: -d.y.as_f32() }, Some(phase))
             }
-            // A notched wheel: GPUI's default line height, as its own scrolling uses.
-            ScrollDelta::Lines(d) => (Point { x: -d.x * 20., y: -d.y * 20. }, None),
+            ScrollDelta::Lines(d) => (Point { x: -d.x * WHEEL_LINE, y: -d.y * WHEEL_LINE }, None),
         };
         let mut windows = self.windows.borrow_mut();
         let w = windows.entry(window).or_insert_with(|| self.window_state());
         let (phase, momentum) = w.momentum.classify(finger);
-        let input = ScrollInput { position: at, delta, phase, momentum, time: self.now() };
+        let modifiers = key_modifiers(&event.modifiers);
+        let input = ScrollInput { position: at, delta, phase, momentum, time: self.now(), modifiers };
         self.with_hit(tree.0, tree.1, tree.2, at, true, |hit| {
             if debug() {
                 let path: Vec<(NodeId, Rect)> = hit.iter().map(|h| (h.node, h.bounds)).collect();

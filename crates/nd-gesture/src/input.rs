@@ -51,6 +51,10 @@ pub enum MomentumPhase {
     Ended,
 }
 
+/// Points one notch of a mouse wheel scrolls by: GPUI's default line height, as its own
+/// scrolling uses.
+pub const WHEEL_LINE: f32 = 20.;
+
 /// One scroll event. `delta` is in offset units: positive moves the content's offset forward
 /// (towards the end), which is the opposite of the finger's direction under natural scrolling.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -60,6 +64,9 @@ pub struct ScrollInput {
     pub phase: ScrollPhase,
     pub momentum: MomentumPhase,
     pub time: f64,
+    /// Held during the event: the secondary key turns it into a [`ScrollZoomEvent`](crate::ScrollZoomEvent)
+    /// over a node that zooms on scroll.
+    pub modifiers: crate::KeyModifiers,
 }
 
 /// Turns a stream that carries only finger phases (GPUI's `ScrollWheelEvent.touch_phase`, which

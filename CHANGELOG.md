@@ -9,6 +9,10 @@ and the one it moves to.
   windows carry their files to the app they land in (a browser, a chat app) as a `text/uri-list`,
   on the GPUI backend under Wayland (`Feature::DragFilesOut`). Inside the app the drag is the same
   `drag_rows` drag. `ListProps` gained `drag_files`.
+- `.on_scroll_zoom(|e: &ScrollZoomEvent, window, cx| ..)`: a wheel or two-finger scroll with the
+  secondary key held (Command on macOS, Control elsewhere) over the element zooms it instead of
+  scrolling anything. `e.steps` is in wheel notches, positive to zoom in, and `e.modifiers` the
+  keys held. `ScrollInput` gained `modifiers` and `GestureSet` gained `scroll_zoom`.
 - A scaffold's inspector on the libadwaita look gets no header bar of its own when the window
   draws no controls over it (a tiling compositor): it runs to the top instead of under an empty
   band.

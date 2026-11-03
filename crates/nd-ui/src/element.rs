@@ -13,7 +13,8 @@ use nd_core::semantic::Role;
 use nd_core::{NodeId, WindowId};
 use nd_gesture::{
     Axes, Axis, DoubleTapEvent, DragEvent, ForceClickEvent, GestureSet, LongPressEvent, MiddleClickEvent,
-    NavigateEvent, PinchEvent, RotateEvent, RowSwipeConfig, RowSwipeEvent, SmartMagnifyEvent, SwipePageEvent, TapEvent,
+    NavigateEvent, PinchEvent, RotateEvent, RowSwipeConfig, RowSwipeEvent, ScrollZoomEvent, SmartMagnifyEvent,
+    SwipePageEvent, TapEvent,
 };
 use nd_gpui::gpui::prelude::FluentBuilder;
 use nd_gpui::gpui::{Action, KeyContext, Overflow, SharedString, StyleRefinement, Styled};
@@ -623,6 +624,14 @@ impl Div {
     /// A trackpad pinch: `zoom *= event.scale`.
     pub fn on_pinch(mut self, handler: impl Fn(&PinchEvent, &mut Window, &mut App) + 'static) -> Self {
         self.gestures.pinch = true;
+        self.on(handler)
+    }
+
+    /// The wheel or two fingers scrolled over the element with the secondary key held (Control,
+    /// Command on macOS): a zoom by `event.steps`, as a browser or file manager zooms there.
+    /// Nothing under the pointer scrolls for it.
+    pub fn on_scroll_zoom(mut self, handler: impl Fn(&ScrollZoomEvent, &mut Window, &mut App) + 'static) -> Self {
+        self.gestures.scroll_zoom = true;
         self.on(handler)
     }
 

@@ -25,6 +25,7 @@ mod gate_m4 {
                 phase: ScrollPhase::Began,
                 momentum: MomentumPhase::None,
                 time: t,
+                modifiers: KeyModifiers::default(),
             },
             hit,
         ));
@@ -37,6 +38,7 @@ mod gate_m4 {
                     phase: ScrollPhase::Changed,
                     momentum: MomentumPhase::None,
                     time: t,
+                    modifiers: KeyModifiers::default(),
                 },
                 hit,
             ));
@@ -52,6 +54,7 @@ mod gate_m4 {
                 phase: ScrollPhase::Ended,
                 momentum: MomentumPhase::None,
                 time: t,
+                modifiers: KeyModifiers::default(),
             },
             &[],
         )
@@ -118,6 +121,7 @@ mod gate_m4 {
                     phase: ScrollPhase::Changed,
                     momentum: MomentumPhase::None,
                     time: t,
+                    modifiers: KeyModifiers::default(),
                 },
                 hit,
             );
@@ -240,6 +244,7 @@ mod gate_m4 {
                 phase: ScrollPhase::Changed,
                 momentum: MomentumPhase::Began,
                 time: t + 0.008,
+                modifiers: KeyModifiers::default(),
             },
             &hit,
         );
@@ -267,6 +272,7 @@ mod gate_m4 {
                 phase: ScrollPhase::Began,
                 momentum: MomentumPhase::None,
                 time: t + 0.1,
+                modifiers: KeyModifiers::default(),
             },
             &hit,
         );
@@ -347,6 +353,7 @@ mod gate_m4 {
                 phase: ScrollPhase::Began,
                 momentum: MomentumPhase::None,
                 time: 0.,
+                modifiers: KeyModifiers::default(),
             },
             &hit,
         ));
@@ -358,6 +365,7 @@ mod gate_m4 {
                     phase: ScrollPhase::Changed,
                     momentum: MomentumPhase::None,
                     time: f64::from(i) / 120.,
+                    modifiers: KeyModifiers::default(),
                 },
                 &hit,
             ));
@@ -423,6 +431,7 @@ mod gate_m4 {
                 phase: ScrollPhase::Began,
                 momentum: MomentumPhase::None,
                 time: 0.,
+                modifiers: KeyModifiers::default(),
             },
             &hit,
         ));
@@ -434,6 +443,7 @@ mod gate_m4 {
                     phase: ScrollPhase::Changed,
                     momentum: MomentumPhase::None,
                     time: f64::from(i) / 120.,
+                    modifiers: KeyModifiers::default(),
                 },
                 &hit,
             ));
@@ -686,6 +696,49 @@ mod gate_m4 {
         let fling = Spring::FLING.start(0., 100., 2000., 0.);
         let peak = (1..200).map(|i| fling.sample(f64::from(i) / 200.).0).fold(f64::MIN, f64::max);
         assert!(peak > 100., "an underdamped spring with velocity overshoots");
+    }
+
+    #[test]
+    fn a_wheel_with_the_secondary_key_zooms_instead_of_scrolling() {
+        let mut router = bouncy();
+        let list = NodeId(1);
+        let set = GestureSet { scroll_zoom: true, ..vertical() };
+        router.set_scroll_extent(list, &set, size(400., 600.), size(400., 1000.));
+        let hit = [HitEntry { node: list, gestures: &set, bounds: BOUNDS }];
+        let held = KeyModifiers {
+            control: !cfg!(target_os = "macos"),
+            platform: cfg!(target_os = "macos"),
+            ..KeyModifiers::default()
+        };
+        let wheel = |delta: f32, modifiers: KeyModifiers, time: f64| ScrollInput {
+            position: p(10., 10.),
+            delta: p(0., delta),
+            phase: ScrollPhase::Wheel,
+            momentum: MomentumPhase::None,
+            time,
+            modifiers,
+        };
+        let out = router.scroll(&wheel(-2. * WHEEL_LINE, held, 0.), &hit);
+        let Some(Output::Event(node, GestureEvent::ScrollZoom(zoom))) = out.first() else {
+            panic!("no zoom: {out:?}");
+        };
+        assert_eq!((*node, zoom.steps, zoom.modifiers), (list, 2., held), "two notches up zoom in by two");
+        assert_eq!(out.len(), 1);
+        assert_eq!(router.scroll_offset(list).y, 0., "nothing scrolled");
+        let out = router.scroll(&wheel(WHEEL_LINE / 2., held, 0.1), &hit);
+        assert!(matches!(out.first(), Some(Output::Event(_, GestureEvent::ScrollZoom(z))) if z.steps == -0.5));
+
+        router.scroll(&wheel(3. * WHEEL_LINE, KeyModifiers::default(), 0.2), &hit);
+        router.step(1.);
+        assert!(router.scroll_offset(list).y > 0., "without the key the wheel scrolls");
+
+        let plain = vertical();
+        let other = [HitEntry { node: NodeId(2), gestures: &plain, bounds: BOUNDS }];
+        let out = router.scroll(&wheel(WHEEL_LINE, held, 2.), &other);
+        assert!(
+            !out.iter().any(|o| matches!(o, Output::Event(_, GestureEvent::ScrollZoom(_)))),
+            "no zoom where none was asked"
+        );
     }
 }
 

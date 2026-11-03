@@ -162,6 +162,18 @@ pub struct SmartMagnifyEvent {
     pub position: Point,
 }
 
+/// The wheel or two fingers scrolled with the secondary key held (Control, Command on macOS),
+/// over a node with `.on_scroll_zoom`: the zoom a browser or file manager does there, and the
+/// view under the pointer does not scroll. `steps` counts wheel notches, fractions of one from a
+/// trackpad; positive where the same scroll would move the content towards its start, which
+/// zooms in.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScrollZoomEvent {
+    pub position: Point,
+    pub steps: f32,
+    pub modifiers: KeyModifiers,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum GestureEvent {
     Tap(TapEvent),
@@ -173,6 +185,7 @@ pub enum GestureEvent {
     RowSwipe(RowSwipeEvent),
     ForceClick(ForceClickEvent),
     SmartMagnify(SmartMagnifyEvent),
+    ScrollZoom(ScrollZoomEvent),
     MiddleClick(MiddleClickEvent),
     Navigate(NavigateEvent),
 }

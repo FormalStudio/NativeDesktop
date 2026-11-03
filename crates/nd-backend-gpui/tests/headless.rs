@@ -339,7 +339,7 @@ mod gate_m4 {
 
     impl Render for Feed {
         fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-            let (pinch, drag) = (self.log.clone(), self.log.clone());
+            let (pinch, drag, zoom) = (self.log.clone(), self.log.clone(), self.log.clone());
             v_flex()
                 .size_full()
                 .on_pinch(move |e: &PinchEvent, _, _| {
@@ -352,9 +352,19 @@ mod gate_m4 {
                         .w(px(100.))
                         .on_drag(move |e: &DragEvent, _, _| drag.borrow_mut().push(format!("drag {:?}", e.phase))),
                 )
-                .child(v_flex().id("list").h(px(200.)).overflow_y_scroll().children(
-                    (0..40).map(|i| div().id(format!("row-{i}")).h(px(30.)).flex_none().child(format!("Row {i}"))),
-                ))
+                .child(
+                    v_flex()
+                        .id("list")
+                        .h(px(200.))
+                        .overflow_y_scroll()
+                        .on_scroll_zoom(move |e: &ScrollZoomEvent, _, _| {
+                            zoom.borrow_mut().push(format!("zoom {:.2} {}", e.steps, e.modifiers.secondary()))
+                        })
+                        .children(
+                            (0..40)
+                                .map(|i| div().id(format!("row-{i}")).h(px(30.)).flex_none().child(format!("Row {i}"))),
+                        ),
+                )
         }
     }
 
@@ -470,6 +480,32 @@ mod gate_m4 {
         assert_eq!(log.last().map(String::as_str), Some("drag Ended"), "{log:?}");
     }
 
+    pub fn a_wheel_with_the_secondary_key_zooms_instead_of_scrolling() {
+        let (mut cx, host, window, log) = open_feed();
+        let top = row_top(&host, window);
+        let mac = cfg!(target_os = "macos");
+        let wheel = |cx: &mut HeadlessAppContext, lines: f32, modifiers: gpui::Modifiers| {
+            let event = ScrollWheelEvent {
+                position: point(px(100.), px(100.)),
+                delta: ScrollDelta::Lines(point(0., lines)),
+                modifiers,
+                touch_phase: TouchPhase::Moved,
+            };
+            send(cx, &host, window, PlatformInput::ScrollWheel(event));
+        };
+        let held = gpui::Modifiers { control: !mac, platform: mac, ..Default::default() };
+        wheel(&mut cx, 2., held);
+        wheel(&mut cx, -1., held);
+        frames(&mut cx, &host, 200);
+        assert_eq!(*log.borrow(), ["zoom 2.00 true", "zoom -1.00 true"]);
+        assert_eq!(row_top(&host, window), top, "nothing scrolled");
+
+        wheel(&mut cx, -3., Default::default());
+        frames(&mut cx, &host, 600);
+        assert!(row_top(&host, window) < top, "without the key the wheel scrolls");
+        assert_eq!(log.borrow().len(), 2);
+    }
+
     trait FirstDrag {
         fn first_drag(&self) -> Option<&str>;
     }
@@ -502,6 +538,10 @@ fn main() {
         ),
         ("gate_m4::a_fling_carries_on_and_a_pull_springs_back", gate_m4::a_fling_carries_on_and_a_pull_springs_back),
         ("gate_m4::pinch_and_drag_reach_their_handlers", gate_m4::pinch_and_drag_reach_their_handlers),
+        (
+            "gate_m4::a_wheel_with_the_secondary_key_zooms_instead_of_scrolling",
+            gate_m4::a_wheel_with_the_secondary_key_zooms_instead_of_scrolling,
+        ),
     ];
     harness(&args, &tests);
 }

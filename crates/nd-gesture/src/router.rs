@@ -4,7 +4,8 @@ use nd_core::{NodeId, Point, Rect, Size};
 
 use crate::arena::{Arena, ArenaMember};
 use crate::events::{
-    GestureEvent, KeyModifiers, MiddleClickEvent, NavigateEvent, PointerButton, RowSwipeEvent, SwipeDirection,
+    GestureEvent, KeyModifiers, MiddleClickEvent, NavigateEvent, PointerButton, RowSwipeEvent, ScrollZoomEvent,
+    SwipeDirection,
 };
 use crate::haptic::Haptic;
 use crate::input::{MomentumPhase, PointerInput, PointerPhase, ScrollInput, ScrollPhase};
@@ -209,6 +210,7 @@ impl GestureRouter {
             GestureEvent::Rotate(_) => set.rotate,
             GestureEvent::ForceClick(_) => set.force_click,
             GestureEvent::SmartMagnify(_) => set.smart_magnify,
+            GestureEvent::ScrollZoom(_) => set.scroll_zoom,
             GestureEvent::SwipePage(_) => set.swipe_page,
             GestureEvent::Tap(_) => set.tap || set.double_tap,
             GestureEvent::LongPress(_) => set.long_press,
@@ -270,6 +272,9 @@ impl GestureRouter {
 
     /// One scroll event with the hit path under it, read when a gesture begins and for wheels.
     pub fn scroll(&mut self, input: &ScrollInput, hit: &[HitEntry<'_>]) -> Vec<Output> {
+        if let Some(zoom) = self.scroll_zoom(input, hit) {
+            return zoom.into_iter().collect();
+        }
         let before = self.offsets();
         let mut out = Vec::new();
         match (input.phase, input.momentum) {
@@ -311,6 +316,21 @@ impl GestureRouter {
         }
         self.push_moved(&before, &mut out);
         out
+    }
+
+    /// The secondary key held over a node that zooms on scroll: the event is that node's zoom
+    /// and scrolls nothing. `Some(None)` takes an event with no delta (a trackpad's touch and
+    /// lift). Only between scroll sessions, so pressing the key cuts no running scroll short.
+    fn scroll_zoom(&self, input: &ScrollInput, hit: &[HitEntry<'_>]) -> Option<Option<Output>> {
+        if !input.modifiers.secondary() || self.session.is_some() || input.momentum != MomentumPhase::None {
+            return None;
+        }
+        let node = hit.iter().find(|e| e.gestures.scroll_zoom)?.node;
+        let steps = -input.delta.y / crate::input::WHEEL_LINE;
+        Some((steps != 0.).then(|| {
+            let zoom = ScrollZoomEvent { position: input.position, steps, modifiers: input.modifiers };
+            Output::Event(node, GestureEvent::ScrollZoom(zoom))
+        }))
     }
 
     fn wheel(&mut self, input: &ScrollInput, hit: &[HitEntry<'_>]) {

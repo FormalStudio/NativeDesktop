@@ -14,8 +14,8 @@ use block2::RcBlock;
 use nd_core::{NodeId, Point, Rect};
 use nd_gesture::{
     ForceClickEvent, GestureEvent, GesturePhase, GestureRouter, GestureSet, Haptic, HitEntry, KeyModifiers,
-    MiddleClickEvent, NavigateEvent, Output, PinchEvent, PointerInput, PointerPhase, RotateEvent, SmartMagnifyEvent,
-    SwipeDirection, SwipePageEvent, TapEvent,
+    MiddleClickEvent, NavigateEvent, Output, PinchEvent, PointerInput, PointerPhase, RotateEvent, ScrollZoomEvent,
+    SmartMagnifyEvent, SwipeDirection, SwipePageEvent, TapEvent, WHEEL_LINE,
 };
 use nd_ui::events::{Emit, emit_gesture};
 use objc2::Message;
@@ -284,6 +284,36 @@ pub(crate) fn mouse(view: &NdLayerView, event: &NSEvent, pointer_phase: PointerP
     apply(outputs);
     arm_timer();
     true
+}
+
+/// A scroll with Command held over a layer view with `.on_scroll_zoom`: that view's zoom. Taken
+/// at the window, since the table or scroll view under the pointer scrolls for the event before
+/// any view around it is asked. The OS's momentum after the fingers lift zooms nothing.
+pub(crate) fn scroll_zoom(window: &NSWindow, event: &NSEvent) -> bool {
+    let modifiers = key_modifiers(event);
+    if !modifiers.secondary() {
+        return false;
+    }
+    let Some(content) = window.contentView() else { return false };
+    let in_window = event.locationInWindow();
+    // SAFETY: main thread, the content view of a live window; `superview` is weak and retained.
+    let at = unsafe { content.superview() }.map_or(in_window, |s| s.convertPoint_fromView(in_window, None));
+    let mut cursor = content.hitTest(at);
+    while let Some(v) = cursor {
+        if let Some(host) = v.downcast_ref::<NdLayerView>().and_then(|l| l.gesture_host()).filter(|h| h.set.scroll_zoom)
+        {
+            let line = if event.hasPreciseScrollingDeltas() { f64::from(WHEEL_LINE) } else { 1. };
+            let steps = (event.scrollingDeltaY() / line) as f32;
+            if steps != 0. && event.momentumPhase() == NSEventPhase::empty() {
+                let position = window_point(&v, event);
+                host.deliver(GestureEvent::ScrollZoom(ScrollZoomEvent { position, steps, modifiers }));
+            }
+            return true;
+        }
+        // SAFETY: as above.
+        cursor = unsafe { v.superview() };
+    }
+    false
 }
 
 /// A double click on read-only selectable text is the double tap of the nearest element around
