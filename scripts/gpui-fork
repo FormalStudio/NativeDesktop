@@ -218,7 +218,8 @@ cmd_patch_tests() {
       for pkg in $(grep -rl "fn $name(" "$vendor_dir" 2>/dev/null | sed "s#^$vendor_dir/\([^/]*\)/.*#\1#" | sort -u); do
         case "$pkg:$os" in
           *linux*:linux | *wgpu*:linux | *windows*:windows | *macos*:macos | *apple*:macos) ;;
-          *linux* | *wgpu* | *windows* | *macos* | *apple*) say "  $pkg $name: builds on another OS, skipped"; continue ;;
+          # Matched on the package alone: the `:$os` suffix would put every generic crate here.
+          *linux*:* | *wgpu*:* | *windows*:* | *macos*:* | *apple*:*) say "  $pkg $name: builds on another OS, skipped"; continue ;;
         esac
         case "$pkg" in
           # gpui-fast crates are in the build graph only with nd-gpui's `fast` feature.
