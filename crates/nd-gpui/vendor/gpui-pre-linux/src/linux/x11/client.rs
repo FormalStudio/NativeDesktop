@@ -1693,8 +1693,10 @@ impl X11Client {
         params: WindowParams,
     ) -> anyhow::Result<Box<dyn PlatformWindow>> {
         let mut state = self.0.borrow_mut();
+        // A window of another client takes the place of the app's own.
         let parent_window = state
             .keyboard_focused_window
+            .filter(|_| params.foreign_parent.is_none())
             .and_then(|focused_window| state.windows.get(&focused_window))
             .map(|w| w.window.clone());
         let x_window = state

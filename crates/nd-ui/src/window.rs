@@ -3,6 +3,11 @@ use std::rc::Rc;
 use nd_core::{FrameTime, Size, WindowId};
 use nd_gpui::gpui::{self, Pixels, SharedString};
 
+/// A window of another app, by the handle that app exported for it: an xdg-foreign v2 handle on
+/// Wayland, a window id on X11. [`ForeignParent::from_portal`] reads the `parent_window` string
+/// xdg-desktop-portal hands its backends.
+pub use nd_gpui::gpui::ForeignParent;
+
 use crate::app::{App, Entity};
 
 /// How the window's title bar is drawn (ARCHITECTURE.md 5.4).
@@ -47,6 +52,12 @@ pub struct WindowOptions {
     /// Where the window's top-left corner opens, in global points from the primary screen's
     /// top-left. Centred when unset.
     pub origin: Option<nd_core::Point>,
+    /// Another app's window this one opens over as its child, as a file chooser opens over the
+    /// app that asked for it: the compositor places it over the parent and keeps it there.
+    /// Read on Linux; elsewhere the window opens on its own.
+    pub parent: Option<ForeignParent>,
+    /// With a `parent`, the parent takes no input until this window closes.
+    pub modal: bool,
 }
 
 impl WindowOptions {
@@ -62,7 +73,21 @@ impl WindowOptions {
             tab_group: None,
             activate: true,
             origin: None,
+            parent: None,
+            modal: false,
         }
+    }
+
+    /// Opens as the child of `parent`, a window of another app; see [`WindowOptions::parent`].
+    pub fn child_of(mut self, parent: ForeignParent) -> Self {
+        self.parent = Some(parent);
+        self
+    }
+
+    /// Blocks the parent's input while open; see [`WindowOptions::modal`].
+    pub fn modal(mut self) -> Self {
+        self.modal = true;
+        self
     }
 
     /// Opens with the window's top-left corner at `at` (global points), as a tab dragged out of

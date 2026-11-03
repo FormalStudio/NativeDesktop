@@ -52,7 +52,7 @@ pub use overlay::{
 };
 pub use rich_text::{LinkClicked, RichText, Span, SpanStyle, TextColor, span};
 pub use surface::{InputCounts, SurfaceProps, SurfaceSource, native_surface};
-pub use window::{Titlebar, TitlebarInsets, Window, WindowHandle, WindowKind, WindowOptions};
+pub use window::{ForeignParent, Titlebar, TitlebarInsets, Window, WindowHandle, WindowKind, WindowOptions};
 
 /// What an app imports: the vocabulary plus GPUI's geometry and colour helpers.
 pub mod prelude {

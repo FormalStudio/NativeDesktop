@@ -11,7 +11,7 @@ use nd_backend_gpui::{GpuiHost, OsHooks};
 use nd_gpui::gpui::{self, HeadlessAppContext};
 use nd_ui::prelude::*;
 use nd_ui::semantics::{MouseButton, PointerPhase, SemanticAction, SyntheticInput};
-use nd_ui::{KeyBinding, Keystroke, Role, SemanticNode, TitlebarInsets, WindowId};
+use nd_ui::{ForeignParent, KeyBinding, Keystroke, Role, SemanticNode, TitlebarInsets, WindowId};
 
 gpui::actions!(test, [Bump]);
 
@@ -66,6 +66,18 @@ struct Captions;
 impl OsHooks for Captions {
     fn titlebar_insets(&self, _: WindowId, _: &gpui::Window) -> Option<TitlebarInsets> {
         Some(TitlebarInsets { leading: 0., trailing: 138., height: 32. })
+    }
+}
+
+/// Keeps what each window asked GPUI for, after the backend filled the options in.
+#[derive(Clone, Default)]
+struct Asked(Rc<std::cell::RefCell<Vec<AskedFor>>>);
+
+type AskedFor = (gpui::WindowKind, Option<gpui::ForeignParent>);
+
+impl OsHooks for Asked {
+    fn window_options(&self, _: WindowId, options: &mut gpui::WindowOptions) {
+        self.0.borrow_mut().push((options.kind.clone(), options.foreign_parent.clone()));
     }
 }
 
@@ -291,6 +303,32 @@ mod gate_m2 {
         // The test platform decorates on the server side: the controls draw nothing.
         let controls = node(&host, window, |n| n.role == Role::WindowControls);
         assert!(controls.bounds.is_none_or(|b| b.size.width == 0.), "{:?}", controls.bounds);
+    }
+
+    pub fn a_window_of_another_app_parents_a_modal_child() {
+        let mut cx = headless();
+        let asked = Asked::default();
+        let parent = ForeignParent::from_portal("wayland:1f2e").expect("a handle");
+        let host = cx.update(|cx| {
+            GpuiHost::builder().quit_when_empty(false).hooks(asked.clone()).start(cx, |app| {
+                let child = WindowOptions::main("child").child_of(parent.clone());
+                app.open_window(child.clone().modal(), |_, cx| cx.new(|_| TitleRow));
+                app.open_window(child, |_, cx| cx.new(|_| TitleRow));
+                app.open_window(WindowOptions::main("main"), |_, cx| cx.new(|_| TitleRow));
+            })
+        });
+        settle(&mut cx, &host);
+        let asked = asked.0.borrow().clone();
+        let expected = if cfg!(target_os = "linux") {
+            vec![
+                (gpui::WindowKind::Dialog, Some(parent.clone())),
+                (gpui::WindowKind::Floating, Some(parent)),
+                (gpui::WindowKind::Normal, None),
+            ]
+        } else {
+            vec![(gpui::WindowKind::Normal, None); 3]
+        };
+        assert_eq!(asked, expected);
     }
 
     pub fn capture_renders_the_window() {
@@ -531,6 +569,10 @@ fn main() {
         ("gate_m2::fluent_access_keys_press_buttons", gate_m2::fluent_access_keys_press_buttons),
         ("gate_m2::windows_open_and_close_with_the_app", gate_m2::windows_open_and_close_with_the_app),
         ("gate_m2::titlebar_insets_come_from_the_os_hooks", gate_m2::titlebar_insets_come_from_the_os_hooks),
+        (
+            "gate_m2::a_window_of_another_app_parents_a_modal_child",
+            gate_m2::a_window_of_another_app_parents_a_modal_child,
+        ),
         ("gate_m2::capture_renders_the_window", gate_m2::capture_renders_the_window),
         (
             "gate_m2::the_backend_releases_what_the_reconciler_drops",

@@ -16,6 +16,12 @@ and the one it moves to.
 - A scaffold's inspector on the libadwaita look gets no header bar of its own when the window
   draws no controls over it (a tiling compositor): it runs to the top instead of under an empty
   band.
+- `WindowOptions::child_of(ForeignParent)` opens a window over a window of another app, and
+  `.modal()` blocks that window's input while it is open: what a file chooser portal backend
+  needs to sit on the app that asked. `ForeignParent::from_portal` reads the portal's
+  `parent_window` (`wayland:<handle>` or `x11:<xid>`). On Linux the GPUI backend imports the
+  handle over xdg-foreign v2 and marks the window modal over xdg-dialog v1 (WM_TRANSIENT_FOR and
+  `_NET_WM_STATE_MODAL` on X11); other platforms open it on its own.
 - A scaffold's sidebar on the libadwaita look gets no header bar of its own when nothing sits
   over it and the window draws no controls there (a tiling compositor): it runs to the top
   instead of under an empty band.

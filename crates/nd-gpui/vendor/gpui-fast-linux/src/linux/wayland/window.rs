@@ -21,6 +21,7 @@ use wayland_client::{
 };
 use wayland_protocols::wp::viewporter::client::wp_viewport;
 use wayland_protocols::xdg::decoration::zv1::client::zxdg_toplevel_decoration_v1;
+use wayland_protocols::xdg::foreign::zv2::client::zxdg_imported_v2;
 use wayland_protocols::xdg::shell::client::xdg_popup;
 use wayland_protocols::xdg::shell::client::xdg_positioner;
 use wayland_protocols::xdg::shell::client::xdg_surface;
@@ -36,7 +37,7 @@ use crate::linux::wayland::{display::WaylandDisplay, serial::SerialKind};
 use crate::linux::{Globals, Output, WaylandClientStatePtr, get_window};
 use gpui::{
     AnyWindowHandle, Bounds, Capslock, Decorations, DevicePixels, ExternalDragPayload,
-    FrameRequestSource, GpuSpecs, Modifiers, Pixels, PlatformAtlas, PlatformDisplay,
+    ForeignParent, FrameRequestSource, GpuSpecs, Modifiers, Pixels, PlatformAtlas, PlatformDisplay,
     PlatformFrameSignal, PlatformInput, PlatformInputHandler, PlatformWindow, Point, PromptButton,
     PromptLevel, RequestFrameOptions, ResizeEdge, Scene, Size, Tiling, WindowAppearance,
     WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowControls, WindowDecorations,
@@ -282,9 +283,22 @@ impl WaylandSurfaceState {
         let toplevel = xdg_surface.get_toplevel(&globals.qh, surface.id());
         let xdg_parent = parent.as_ref().and_then(|w| w.toplevel());
 
-        if params.kind == WindowKind::Floating || params.kind == WindowKind::Dialog {
+        let child = params.kind == WindowKind::Floating || params.kind == WindowKind::Dialog;
+        if child {
             toplevel.set_parent(xdg_parent.as_ref());
         }
+
+        // Before the first commit, so the compositor maps the window as the child it is (Hyprland
+        // floats it centred over the parent). The import lives as long as the window: destroying
+        // it ends the relationship.
+        let imported = match (&params.foreign_parent, &globals.foreign_importer) {
+            (Some(ForeignParent::Wayland(handle)), Some(importer)) if child => {
+                let imported = importer.import_toplevel(handle.clone(), &globals.qh, ());
+                imported.set_parent_of(surface);
+                Some(imported)
+            }
+            _ => None,
+        };
 
         let dialog = if params.kind == WindowKind::Dialog {
             let dialog = globals.dialog.as_ref().map(|dialog| {
@@ -319,6 +333,7 @@ impl WaylandSurfaceState {
             toplevel,
             decoration,
             dialog,
+            imported,
         }))
     }
 }
@@ -328,6 +343,7 @@ pub struct WaylandXdgSurfaceState {
     toplevel: xdg_toplevel::XdgToplevel,
     decoration: Option<zxdg_toplevel_decoration_v1::ZxdgToplevelDecorationV1>,
     dialog: Option<XdgDialogV1>,
+    imported: Option<zxdg_imported_v2::ZxdgImportedV2>,
 }
 
 pub struct WaylandLayerSurfaceState {
@@ -537,10 +553,14 @@ impl WaylandSurfaceState {
                 toplevel,
                 decoration: _decoration,
                 dialog,
+                imported,
             }) => {
                 // drop the dialog before toplevel so compositor can explicitly unapply it's effects
                 if let Some(dialog) = dialog {
                     dialog.destroy();
+                }
+                if let Some(imported) = imported {
+                    imported.destroy();
                 }
 
                 // The role object (toplevel) must always be destroyed before the xdg_surface.

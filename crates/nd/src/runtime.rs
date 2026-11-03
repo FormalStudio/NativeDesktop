@@ -16,7 +16,7 @@ pub mod prelude {
     pub use nd_gpui::gpui;
     pub use nd_gpui::gpui::{Action, Bounds, EventEmitter, FocusHandle, Font, KeyBinding, Point, Size, actions};
 
-    pub use nd_ui::{Bezel, ButtonVariant, Titlebar, WindowKind};
+    pub use nd_ui::{Bezel, ButtonVariant, ForeignParent, Titlebar, WindowKind};
 
     #[cfg(feature = "settings-ui")]
     pub use crate::AppSettings;

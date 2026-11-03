@@ -781,8 +781,16 @@ impl Inner {
             inactive_frame_interval: None,
             ..Default::default()
         };
-        options.focus =
-            self.app.try_borrow().ok().and_then(|app| app.window(id).map(|w| w.options().activate)).unwrap_or(true);
+        let opened = self.app.try_borrow().ok().and_then(|app| app.window(id).map(|w| w.options().clone()));
+        options.focus = opened.as_ref().is_none_or(|o| o.activate);
+        // Only GPUI's Linux platform reads a foreign parent; elsewhere the window opens on its own.
+        if cfg!(any(target_os = "linux", target_os = "freebsd"))
+            && let Some(opened) = opened
+            && let Some(parent) = opened.parent
+        {
+            options.kind = if opened.modal { gpui::WindowKind::Dialog } else { gpui::WindowKind::Floating };
+            options.foreign_parent = Some(parent);
+        }
         self.hooks.window_options(id, &mut options);
         let host = Rc::downgrade(self);
         let Ok(handle) = cx.open_window(options, |window, cx| {

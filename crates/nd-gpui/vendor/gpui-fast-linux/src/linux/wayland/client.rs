@@ -64,6 +64,7 @@ use wayland_protocols::xdg::activation::v1::client::{xdg_activation_token_v1, xd
 use wayland_protocols::xdg::decoration::zv1::client::{
     zxdg_decoration_manager_v1, zxdg_toplevel_decoration_v1,
 };
+use wayland_protocols::xdg::foreign::zv2::client::{zxdg_imported_v2, zxdg_importer_v2};
 use wayland_protocols::xdg::shell::client::{
     xdg_popup, xdg_positioner, xdg_surface, xdg_toplevel, xdg_wm_base,
 };
@@ -260,6 +261,7 @@ pub struct Globals {
     pub text_input_manager: Option<zwp_text_input_manager_v3::ZwpTextInputManagerV3>,
     pub gesture_manager: Option<zwp_pointer_gestures_v1::ZwpPointerGesturesV1>,
     pub dialog: Option<xdg_wm_dialog_v1::XdgWmDialogV1>,
+    pub foreign_importer: Option<zxdg_importer_v2::ZxdgImporterV2>,
     pub system_bell: Option<xdg_system_bell_v1::XdgSystemBellV1>,
     pub presentation: Option<wp_presentation::WpPresentation>,
     pub executor: ForegroundExecutor,
@@ -312,6 +314,7 @@ impl Globals {
             text_input_manager: globals.bind(&qh, 1..=1, ()).ok(),
             gesture_manager: globals.bind(&qh, 1..=3, ()).ok(),
             dialog: globals.bind(&qh, dialog_v..=dialog_v, ()).ok(),
+            foreign_importer: globals.bind(&qh, 1..=1, ()).ok(),
             system_bell: globals.bind(&qh, 1..=1, ()).ok(),
             presentation: globals.bind(&qh, 1..=1, ()).ok(),
             executor,
@@ -1325,6 +1328,8 @@ impl WaylandConnection {
                 });
                 (Some(parent), popup_grab.flatten())
             }
+            // A window of another client takes the place of the app's own.
+            _ if params.foreign_parent.is_some() => (None, None),
             _ => (state.keyboard_focused_window.clone(), None),
         };
 
@@ -1689,6 +1694,10 @@ delegate_noop!(WaylandClientStatePtr: ignore zwp_text_input_manager_v3::ZwpTextI
 delegate_noop!(WaylandClientStatePtr: ignore org_kde_kwin_blur::OrgKdeKwinBlur);
 delegate_noop!(WaylandClientStatePtr: ignore wp_viewporter::WpViewporter);
 delegate_noop!(WaylandClientStatePtr: ignore wp_viewport::WpViewport);
+delegate_noop!(WaylandClientStatePtr: ignore zxdg_importer_v2::ZxdgImporterV2);
+// `destroyed` (the parent went away) needs no answer: the compositor has already dropped the
+// relationship, and the child is left a toplevel of its own.
+delegate_noop!(WaylandClientStatePtr: ignore zxdg_imported_v2::ZxdgImportedV2);
 
 impl Dispatch<WlCallback, ObjectId> for WaylandClientStatePtr {
     fn event(
