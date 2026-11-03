@@ -13,6 +13,7 @@ use nd_core::time::Instant;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::OnceLock;
 
@@ -79,10 +80,43 @@ pub struct Presenter {
 
 struct RowsDrag {
     item: nd_ui::DragItem,
+    rows: Vec<RowId>,
+    /// The rows' files went to the platform's drag when the pointer left the window: the
+    /// release then happens in another app, and the platform says when it is over.
+    handed: bool,
     /// The pointer, and where it holds the pressed row from its top-left.
     at: Point<Pixels>,
     grab: Point<Pixels>,
     size: gpui::Size<Pixels>,
+}
+
+/// What a row's GPUI drag carries, so that GPUI can hand the files of the rows being dragged to
+/// the platform when the pointer leaves the window (`List::drag_out_files`). nd's own drag
+/// session runs alongside it and stays the drag inside the app.
+struct FilesOut {
+    node: NodeId,
+    presenters: Presenters,
+    files: Rc<HashMap<RowId, PathBuf>>,
+}
+
+impl FilesOut {
+    /// GPUI starts the row's drag on any press past its own threshold, so a press that never
+    /// became an nd row drag (past `SLOP`) offers nothing.
+    fn payload(&self) -> Option<gpui::ExternalDragPayload> {
+        let mut presenters = self.presenters.borrow_mut();
+        let drag = presenters.get_mut(&self.node)?.drag.as_mut()?;
+        let entries = files_out(&drag.rows, &self.files);
+        if entries.is_empty() {
+            return None;
+        }
+        drag.handed = true;
+        Some(gpui::ExternalDragPayload::Files(gpui::FileDragPaths::new(entries)))
+    }
+}
+
+/// The dragged rows' files in drag order, each with whether it is a directory.
+fn files_out(rows: &[RowId], files: &HashMap<RowId, PathBuf>) -> Vec<(PathBuf, bool)> {
+    rows.iter().filter_map(|r| files.get(r)).map(|p| (p.clone(), p.is_dir())).collect()
 }
 
 /// A rubber band dragged out from empty space.
@@ -206,6 +240,9 @@ pub(crate) struct Prepainted {
     header: Option<Bounds<Pixels>>,
     /// The router's offset and scrollable range this frame.
     scrolled: (f32, f32),
+    /// Over each placed row of a list whose rows carry files out of the app, the element GPUI's
+    /// own drag starts from: any row, since a drag from one carries the whole selection.
+    handles: Vec<AnyElement>,
 }
 
 impl IntoElement for VirtualList {
@@ -378,6 +415,9 @@ impl gpui::Element for VirtualList {
         }
 
         let selected: HashSet<RowId> = self.props.selected.iter().copied().collect();
+        let files = (self.props.drag_kind.is_some() && !self.props.drag_files.is_empty())
+            .then(|| Rc::new(self.props.drag_files.clone()));
+        let mut handles = Vec::new();
         let mut placed = Vec::new();
         let mut painted = Vec::new();
         let mut sel = Vec::new();
@@ -412,6 +452,27 @@ impl gpui::Element for VirtualList {
                 let full = Bounds::new(point(view.origin.x, origin.y), size(view.size.width, px(h)));
                 if selected.contains(&p.row) {
                     sel.push(if grid.is_some() { row_bounds } else { full });
+                }
+                if let Some(files) = &files {
+                    use gpui::{
+                        AppContext as _, InteractiveElement as _, StatefulInteractiveElement as _, Styled as _,
+                    };
+                    let b = if grid.is_some() { row_bounds } else { full };
+                    let out = FilesOut { node: self.node, presenters: self.presenters.clone(), files: files.clone() };
+                    let mut handle = gpui::div()
+                        .id(ElementId::NamedInteger("drag-out".into(), p.row.0))
+                        .w(b.size.width)
+                        .h(b.size.height)
+                        .on_drag(out, |_, _, _, cx| cx.new(|_| gpui::Empty))
+                        .external_drag_payload(|out: &FilesOut, _, _| out.payload())
+                        .into_any_element();
+                    handle.layout_as_root(
+                        size(AvailableSpace::Definite(b.size.width), AvailableSpace::Definite(b.size.height)),
+                        window,
+                        cx,
+                    );
+                    handle.prepaint_at(b.origin, window, cx);
+                    handles.push(handle);
                 }
                 if tag.expandable {
                     let d = Bounds::new(point(origin.x - px(INDENT), origin.y), size(px(INDENT), px(h)));
@@ -480,7 +541,7 @@ impl gpui::Element for VirtualList {
             card.layout_as_root(gpui::AvailableSpace::min_size(), window, cx);
             window.defer_draw(card, origin, 2, None);
         }
-        Prepainted { hitbox, placed, selected: sel, disclosures, header, scrolled: (synced, range) }
+        Prepainted { hitbox, placed, selected: sel, disclosures, header, scrolled: (synced, range), handles }
     }
 
     fn paint(
@@ -493,6 +554,11 @@ impl gpui::Element for VirtualList {
         window: &mut gpui::Window,
         cx: &mut App,
     ) {
+        // Before the list's own listeners, so the list sees every move before GPUI's drag start
+        // on a row stops it from reaching further.
+        for handle in &mut prepainted.handles {
+            handle.paint(window, cx);
+        }
         let emit = self.emit.clone();
         let wake = self.wake.clone();
         // An unselectable row leaves the pointer and presses to its own content.
@@ -699,6 +765,23 @@ impl gpui::Element for VirtualList {
                 window.refresh();
             }
         });
+        // The platform's drag ended (dropped in another app, or let go nowhere): the release
+        // never reached this window, so the drag ends where the pointer left it. A drop back in
+        // this window arrives as a release first and has already ended it.
+        let pick = ctx.clone();
+        window.on_mouse_event(move |event: &gpui::FileDropEvent, phase, window, cx| {
+            if phase != DispatchPhase::Bubble || !matches!(event, gpui::FileDropEvent::Ended) {
+                return;
+            }
+            let Some(drag) = pick.with(|p| p.drag.take_if(|d| d.handed)).flatten() else { return };
+            pick.with(|p| p.press = None);
+            let mut source =
+                crate::nav::drag_source(&drag.item, nd_ui::GesturePhase::Ended, drag.at, &gpui::Modifiers::default());
+            source.native = true;
+            pick.emit.emit(source);
+            (pick.wake)(cx);
+            window.refresh();
+        });
         if selection != Selection::None {
             let (pick, focus) = (ctx.clone(), self.focus.clone());
             let page = (view_rect.size.height / self.props.handle.0.borrow().estimate().max(1.) as f32) as usize;
@@ -895,6 +978,8 @@ impl Pick {
             p.marquee = None;
             p.drag = Some(RowsDrag {
                 item: item.clone(),
+                rows,
+                handed: false,
                 at,
                 grab: point(grab.x.min(size.width), grab.y.min(size.height)),
                 size,

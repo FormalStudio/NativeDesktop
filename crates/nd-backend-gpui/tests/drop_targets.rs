@@ -1,6 +1,7 @@
 //! Tier 2: drag and drop onto the parts of a window in GPUI's headless app. Rows dragged out of
-//! a table carry the selection; files dragged in from outside land on a table row, a source
-//! list item or a tab, each named in what the app receives, and skip `on_file_drop`.
+//! a table carry the selection, and their files once they leave the window; files dragged in
+//! from outside land on a table row, a source list item or a tab, each named in what the app
+//! receives, and skip `on_file_drop`.
 
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -68,6 +69,7 @@ impl Render for Targets {
                         })
                         .selection(Selection::Multiple)
                         .drag_rows("file", |k| format!("file-{k}").into())
+                        .drag_out_files(|k| (k % 4 != 3).then(|| PathBuf::from(format!("/tmp/file-{k}"))))
                         .accepts_drops(["file", DragItem::FILES])
                         .drop_on(|k| k % 2 == 0)
                         .on_drop(move |e: &RowDropped<u32>, _, _| {
@@ -294,11 +296,69 @@ fn rows_drag_out_with_the_selection() {
     assert_eq!(r.list.selected(), vec![7], "an unselected row is selected and drags alone");
 }
 
+/// A row drag that leaves the window offers the rows' files to the platform's drag, which then
+/// holds the pointer: nd's drag runs on until the platform says its drag is over (a drop in
+/// another app), and ends there with nothing in the app taking it. A drag that never left the
+/// window offered nothing, so that end leaves it alone.
+fn rows_carry_files_out_of_the_window() {
+    let mut r = open();
+    let table = r.bounds("files", None);
+    let x = table.origin.x + 40.;
+    let dragging = |r: &Rig| r.host.read(|app| app.is_dragging());
+    let down = |y: f32| {
+        PlatformInput::MouseDown(MouseDownEvent {
+            button: MouseButton::Left,
+            position: point(px(x), px(y)),
+            modifiers: Modifiers::none(),
+            click_count: 1,
+            first_mouse: false,
+        })
+    };
+    let moved = |x: f32, y: f32| {
+        PlatformInput::MouseMove(MouseMoveEvent {
+            position: point(px(x), px(y)),
+            pressed_button: Some(MouseButton::Left),
+            modifiers: Modifiers::none(),
+        })
+    };
+    let up = |x: f32, y: f32| {
+        PlatformInput::MouseUp(MouseUpEvent {
+            button: MouseButton::Left,
+            position: point(px(x), px(y)),
+            modifiers: Modifiers::none(),
+            click_count: 1,
+        })
+    };
+
+    r.dispatch(vec![down(row_y(table, 1)), moved(x, row_y(table, 1) + 12.)]);
+    assert!(dragging(&r), "the row drags");
+    r.dispatch(vec![PlatformInput::FileDrop(FileDropEvent::Ended)]);
+    assert!(dragging(&r), "a drag still inside the window handed nothing to the platform");
+    r.dispatch(vec![up(x, row_y(table, 4))]);
+    assert_eq!(r.take(), [r#"row Some(4) ["file-1"] alt false"#], "and drops inside the app as before");
+
+    r.dispatch(vec![down(row_y(table, 2)), moved(x, row_y(table, 2) + 12.), moved(-20., row_y(table, 2))]);
+    assert!(dragging(&r), "the drag runs on while the platform holds the pointer");
+    r.dispatch(vec![PlatformInput::FileDrop(FileDropEvent::Ended)]);
+    assert!(!dragging(&r), "the platform's drag ending ends it");
+    assert!(r.take().is_empty(), "nothing in the app took it");
+    // The test window refuses the platform drag, so GPUI still holds its own until a release.
+    r.dispatch(vec![up(-20., row_y(table, 2))]);
+
+    // Row 3 carries no file: leaving the window offers nothing, and the drag is the app's alone.
+    r.dispatch(vec![down(row_y(table, 3)), moved(x, row_y(table, 3) + 12.), moved(-20., row_y(table, 3))]);
+    r.dispatch(vec![PlatformInput::FileDrop(FileDropEvent::Ended)]);
+    assert!(dragging(&r), "a drag with no files was never the platform's");
+    r.dispatch(vec![up(-20., row_y(table, 3))]);
+    assert!(!dragging(&r));
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let tests: Vec<(&str, fn())> = vec![
         ("gpui_drops::files_land_on_rows_items_and_tabs", files_land_on_rows_items_and_tabs),
         ("gpui_drops::rows_drag_out_with_the_selection", rows_drag_out_with_the_selection),
+        ("gpui_drops::rows_carry_files_out_of_the_window", rows_carry_files_out_of_the_window),
     ];
     let has = |flag: &str| args.iter().any(|a| a == flag);
     if has("--list") {

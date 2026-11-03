@@ -12,6 +12,7 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::hash::Hash;
+use std::path::PathBuf;
 use std::rc::{Rc, Weak};
 
 use nd_ui::prelude::*;
@@ -156,6 +157,8 @@ pub struct ListProps {
     pub drag_kind: Option<SharedString>,
     /// The drag id of each rendered or selected row.
     pub drag_ids: HashMap<RowId, SharedString>,
+    /// The file each rendered or selected row carries out of the app ([`List::drag_out_files`]).
+    pub drag_files: HashMap<RowId, PathBuf>,
     /// The rendered rows a drop may land on; every row when `None` ([`List::drop_on`]).
     pub drop_on: Option<HashSet<RowId>>,
 }
@@ -879,6 +882,7 @@ impl<K: RowKey> ListState<K> {
             inset,
             drag_kind: None,
             drag_ids: HashMap::new(),
+            drag_files: HashMap::new(),
             drop_on: None,
         }
     }
@@ -1053,12 +1057,14 @@ pub struct List<K: RowKey> {
     on_column_resize: Option<Handler<ColumnResized>>,
     on_sort: Option<Handler<SortChanged>>,
     drag: Option<(SharedString, DragIdFn<K>)>,
+    drag_files: Option<DragFileFn<K>>,
     accepts: Vec<SharedString>,
     drop_on: Option<DropOnFn<K>>,
     on_drop: Option<Handler<RowDropped<K>>>,
 }
 
 type DragIdFn<K> = Rc<dyn Fn(&K) -> SharedString>;
+type DragFileFn<K> = Rc<dyn Fn(&K) -> Option<PathBuf>>;
 type DropOnFn<K> = Rc<dyn Fn(&K) -> bool>;
 
 fn build<K: RowKey>(id: SharedString, state: &ListState<K>, kind: ListKind, renderer: Renderer<K>) -> List<K> {
@@ -1080,6 +1086,7 @@ fn build<K: RowKey>(id: SharedString, state: &ListState<K>, kind: ListKind, rend
         on_column_resize: None,
         on_sort: None,
         drag: None,
+        drag_files: None,
         accepts: Vec::new(),
         drop_on: None,
         on_drop: None,
@@ -1246,6 +1253,16 @@ impl<K: RowKey> List<K> {
         self
     }
 
+    /// Rows dragged by [`drag_rows`](Self::drag_rows) out of the app's windows carry
+    /// `path(key)` to the app they land in (a browser, a chat app, a file manager) as a
+    /// `text/uri-list` of file URIs; rows with `None` leave nothing there. Inside the app the drag
+    /// is the same `drag_rows` drag. Only where `nd::platform::has(Feature::DragFilesOut)`: the
+    /// GPUI backend under Wayland. Elsewhere the rows still drag inside the app.
+    pub fn drag_out_files(mut self, path: impl Fn(&K) -> Option<PathBuf> + 'static) -> Self {
+        self.drag_files = Some(Rc::new(path));
+        self
+    }
+
     /// The list takes drops of these kinds: on the row under the pointer, highlighted while the
     /// drag is over it, or on empty space. [`DragItem::FILES`](nd_ui::DragItem::FILES) takes
     /// files dragged in from outside the app.
@@ -1292,6 +1309,9 @@ impl<K: RowKey> IntoElement for List<K> {
             if let Some((kind, id)) = &self.drag {
                 props.drag_kind = Some(kind.clone());
                 props.drag_ids = live.iter().map(|(r, k)| (*r, id(k))).collect();
+                if let Some(path) = &self.drag_files {
+                    props.drag_files = live.iter().filter_map(|(r, k)| Some((*r, path(k)?))).collect();
+                }
             }
             if let Some(f) = &self.drop_on {
                 props.drop_on = Some(live.iter().filter(|(_, k)| f(k)).map(|(r, _)| *r).collect());

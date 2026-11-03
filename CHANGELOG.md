@@ -5,6 +5,10 @@ and the one it moves to.
 
 ## Unreleased
 
+- `List::drag_out_files(|key| Option<PathBuf>)`: rows dragged by `drag_rows` out of the app's
+  windows carry their files to the app they land in (a browser, a chat app) as a `text/uri-list`,
+  on the GPUI backend under Wayland (`Feature::DragFilesOut`). Inside the app the drag is the same
+  `drag_rows` drag. `ListProps` gained `drag_files`.
 - A scaffold's inspector on the libadwaita look gets no header bar of its own when the window
   draws no controls over it (a tiling compositor): it runs to the top instead of under an empty
   band.

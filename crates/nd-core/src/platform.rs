@@ -72,16 +72,22 @@ pub enum Feature {
     MediaSession,
     /// Audio playback with a spectrum (`nd::system`).
     Audio,
+    /// List rows dragged out of the app's windows carry files to other apps
+    /// (`List::drag_out_files`). Linux sessions under Wayland only: GPUI starts no outbound drag
+    /// on X11, and the AppKit and Windows lists have no row drags yet.
+    DragFilesOut,
 }
 
 /// Whether `feature` works on the running target.
 pub const fn has(feature: Feature) -> bool {
     match target() {
         Target::Web => matches!(feature, Feature::Clipboard),
-        Target::MacOs => true,
+        Target::MacOs => !matches!(feature, Feature::DragFilesOut),
         Target::Linux => !matches!(feature, Feature::MenuBar | Feature::NativeOnlyWidgets),
         // nd-system has no Windows audio player yet.
-        Target::Windows => !matches!(feature, Feature::MenuBar | Feature::NativeOnlyWidgets | Feature::Audio),
+        Target::Windows => {
+            !matches!(feature, Feature::MenuBar | Feature::NativeOnlyWidgets | Feature::Audio | Feature::DragFilesOut)
+        }
     }
 }
 

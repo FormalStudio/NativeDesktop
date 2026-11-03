@@ -128,10 +128,15 @@ presenter draws the row under the pointer with a count badge when there are seve
 `.drop_on(|key| ..)` limits which rows take a drop on themselves, as a file manager's folders do.
 `.on_drop` reports `RowDropped { key, item, modifiers, local }`, where `key` is the row it landed
 on or `None` for empty space. Pass `DragItem::FILES` to take files from outside the app.
+`.drag_out_files(|key| Some(path))` lets the same drag carry files out of the app: once the
+pointer leaves the window, the platform's drag takes the rows' files to whatever app the user
+drops them on. That works on the GPUI backend under Wayland, where
+`nd::platform::has(Feature::DragFilesOut)`; elsewhere the rows still drag inside the app.
 
 ```rust
 table("files", &self.files, columns, render_cell)
     .drag_rows("file", |id: &FileId| id.to_string().into())
+    .drag_out_files(|id| Some(id.path()))
     .accepts_drops(["file", DragItem::FILES])
     .drop_on(|id| id.is_folder())
     .on_drop(cx.listener(|this, e: &RowDropped<FileId>, _, cx| this.drop_into(e.key, &e.item.ids, cx)))
