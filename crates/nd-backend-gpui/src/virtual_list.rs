@@ -554,11 +554,6 @@ impl gpui::Element for VirtualList {
         window: &mut gpui::Window,
         cx: &mut App,
     ) {
-        // Before the list's own listeners, so the list sees every move before GPUI's drag start
-        // on a row stops it from reaching further.
-        for handle in &mut prepainted.handles {
-            handle.paint(window, cx);
-        }
         let emit = self.emit.clone();
         let wake = self.wake.clone();
         // An unselectable row leaves the pointer and presses to its own content.
@@ -587,6 +582,37 @@ impl gpui::Element for VirtualList {
         let grid = self.props.kind == ListKind::Grid;
         let hitbox = prepainted.hitbox.clone();
         let view_rect = self.presenters.borrow().get(&self.node).map_or(rect(bounds), |p| p.viewport);
+        let ctx = Pick {
+            node: self.node,
+            handle: self.props.handle.clone(),
+            presenters: self.presenters.clone(),
+            emit: emit.clone(),
+            wake: wake.clone(),
+            selection,
+            selected: selected.clone(),
+            unselectable: Rc::new(unselectable),
+        };
+        // Before any child paints: painting one leaves GPUI's active dispatch node on it, and a
+        // key listener added after would sit off the list's focus path.
+        if selection != Selection::None {
+            let (pick, focus) = (ctx.clone(), self.focus.clone());
+            let page = (view_rect.size.height / self.props.handle.0.borrow().estimate().max(1.) as f32) as usize;
+            window.on_key_event(move |event: &KeyDownEvent, phase, window, cx| {
+                if phase != DispatchPhase::Bubble || !focus.focus.is_focused(window) {
+                    return;
+                }
+                if pick.key(event, tree, page.saturating_sub(1).max(1), cx) {
+                    focus.keyboard();
+                    cx.stop_propagation();
+                    window.refresh();
+                }
+            });
+        }
+        // Before the list's own listeners, so the list sees every move before GPUI's drag start
+        // on a row stops it from reaching further.
+        for handle in &mut prepainted.handles {
+            handle.paint(window, cx);
+        }
         // The row under the pointer gets the hover fill, as GTK's navigation lists and boxed
         // tables show it; a move onto another row repaints. A plain list of mixed rows (a page
         // of headers and shelves) leaves hover to the rows themselves.
@@ -613,16 +639,6 @@ impl gpui::Element for VirtualList {
                 }
             });
         }
-        let ctx = Pick {
-            node: self.node,
-            handle: self.props.handle.clone(),
-            presenters: self.presenters.clone(),
-            emit: emit.clone(),
-            wake: wake.clone(),
-            selection,
-            selected: selected.clone(),
-            unselectable: Rc::new(unselectable),
-        };
         let all: Vec<(RowId, Bounds<Pixels>)> =
             prepainted.placed.iter().map(|(i, b)| (self.rows[*i].tag.row, *b)).collect();
         let marquees = matches!(self.props.kind, ListKind::Table(_) | ListKind::Grid) && selection != Selection::None;
@@ -782,20 +798,6 @@ impl gpui::Element for VirtualList {
             (pick.wake)(cx);
             window.refresh();
         });
-        if selection != Selection::None {
-            let (pick, focus) = (ctx.clone(), self.focus.clone());
-            let page = (view_rect.size.height / self.props.handle.0.borrow().estimate().max(1.) as f32) as usize;
-            window.on_key_event(move |event: &KeyDownEvent, phase, window, cx| {
-                if phase != DispatchPhase::Bubble || !focus.focus.is_focused(window) {
-                    return;
-                }
-                if pick.key(event, tree, page.saturating_sub(1).max(1), cx) {
-                    focus.keyboard();
-                    cx.stop_propagation();
-                    window.refresh();
-                }
-            });
-        }
 
         if let (Some(header), Some(_)) = (self.header.as_mut(), prepainted.header) {
             header.paint(window, cx);

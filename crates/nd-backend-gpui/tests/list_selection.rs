@@ -170,6 +170,38 @@ pub fn keys_move_extend_and_select_all() {
     assert_eq!(list.selected(), (0..20).collect::<Vec<_>>());
 }
 
+/// A table whose rows drag their files out of the window, as a file manager's do.
+struct Carrying {
+    list: ListState<u32>,
+}
+
+impl Render for Carrying {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        table("files", &self.list, vec![column("name", "Name").width(300.)], |row: u32, _, _, _| {
+            div().h(px(24.)).child(format!("file-{row}"))
+        })
+        .selection(Selection::Multiple)
+        .drag_rows("files", |row: &u32| format!("file-{row}").into())
+        .drag_out_files(|row: &u32| Some(std::path::PathBuf::from(format!("/tmp/file-{row}"))))
+    }
+}
+
+/// Each row's drag-out handle is a child the list paints; the keys still reach the list.
+pub fn keys_reach_a_list_whose_rows_drag_files_out() {
+    let (mut cx, host, window, view) = open(|cx| {
+        let mut list = ListState::new(cx);
+        list.set_items(0..10, cx);
+        Carrying { list }
+    });
+    let list = host.read(|app| view.read(app).list.clone());
+    dispatch(&mut cx, &host, window, press(MouseButton::Left, 100., y(3), Modifiers::none()));
+    assert_eq!(list.selected(), vec![3]);
+    dispatch(&mut cx, &host, window, key("down"));
+    assert_eq!(list.selected(), vec![4], "Down moves the selection");
+    dispatch(&mut cx, &host, window, key("shift-down"));
+    assert_eq!(list.selected(), vec![4, 5], "Shift+Down extends it");
+}
+
 /// A list is a focus target: `window.focus` reaches it and keys move its selection, and a press
 /// keeps nd focus on it. Its selection is the focus mark, as in Finder: a row the keyboard
 /// selected looks the same as one a press selected, with no ring round it or the list.
@@ -366,7 +398,8 @@ pub fn a_cell_field_renames_inline() {
 }
 
 fn main() {
-    let tests: [(&str, fn()); 7] = [
+    let tests: [(&str, fn()); 8] = [
+        ("gpui_selection::keys_reach_a_list_whose_rows_drag_files_out", keys_reach_a_list_whose_rows_drag_files_out),
         ("gpui_selection::a_cell_field_renames_inline", a_cell_field_renames_inline),
         (
             "gpui_selection::a_list_takes_focus_by_id_and_its_selection_marks_it",
