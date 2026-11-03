@@ -446,6 +446,18 @@ mod gate_m4_overlays {
         assert!(!o.host.backend().menu_open(o.window), "Esc closes the menu");
     }
 
+    /// A row whose action has a key binding shows the binding as the platform writes it, read
+    /// from the app's bindings: Choose and Again are both bound to Ctrl+K, the submenu is not.
+    pub fn gpui_context_menu_rows_show_their_shortcut() {
+        let mut o = open();
+        let surface = center(&o.host, o.window, "surface");
+        post(&mut o, click(surface, GpuiButton::Right));
+        assert!(o.host.backend().menu_open(o.window));
+        let texts: Vec<String> =
+            o.host.backend().paints(o.window).expect("paints").iter().map(|p| p.label.clone()).collect();
+        assert_eq!(texts.iter().filter(|t| *t == "Ctrl+K").count(), 2, "a shortcut beside each bound row in {texts:?}");
+    }
+
     /// A submenu opens beside its row on hover, and its items dispatch like the menu's own.
     pub fn gpui_context_submenu_opens_on_hover() {
         let mut o = open();
@@ -667,6 +679,10 @@ fn main() {
         (
             "gate_m4_overlays::gpui_context_menu_is_drawn_above_and_consumes",
             gate_m4_overlays::gpui_context_menu_is_drawn_above_and_consumes,
+        ),
+        (
+            "gate_m4_overlays::gpui_context_menu_rows_show_their_shortcut",
+            gate_m4_overlays::gpui_context_menu_rows_show_their_shortcut,
         ),
         (
             "gate_m4_overlays::gpui_context_submenu_opens_on_hover",

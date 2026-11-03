@@ -5,6 +5,11 @@ and the one it moves to.
 
 ## Unreleased
 
+- Drawn menus on the GPUI backend (context menus, `menu_button`) show each row's key binding at
+  its trailing edge, read from the app's bindings: "Ctrl+Shift+T", with Super for the platform
+  key on Linux. Only Fluent showed them before.
+- A drawn `form_row`'s help wraps to the room its control leaves, so a long help line under a
+  settings row no longer pushes the control past the window's edge.
 - `List::drag_out_files(|key| Option<PathBuf>)`: rows dragged by `drag_rows` out of the app's
   windows carry their files to the app they land in (a browser, a chat app) as a `text/uri-list`,
   on the GPUI backend under Wayland (`Feature::DragFilesOut`). Inside the app the drag is the same

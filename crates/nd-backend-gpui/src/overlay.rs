@@ -77,7 +77,7 @@ pub(crate) struct MenuOverlay {
     /// Where the pointer last moved over a row.
     pub pointer: Option<Point>,
     pub placed: Placed,
-    /// The single keystroke bound to each action, as the menu shows it (Fluent's "Ctrl+C").
+    /// The single keystroke bound to each action, as the menu shows it ("Ctrl+C").
     pub shortcuts: Vec<(Box<dyn gpui::Action>, SharedString)>,
 }
 
@@ -685,7 +685,7 @@ impl Build<'_> {
                     .flex()
                     .items_center()
                     .rounded(look.radius),
-                None => div().id(ElementId::Integer(i as u64)).px(px(12.)).py(px(4.)),
+                None => div().id(ElementId::Integer(i as u64)).px(px(12.)).py(px(4.)).flex().items_center(),
             };
             if columns.check {
                 let mark = match fluent {
@@ -698,23 +698,25 @@ impl Build<'_> {
                         .into_any_element(),
                     None => div().w(px(16.)).child(if checked { "\u{2713}" } else { "" }).into_any_element(),
                 };
-                row = row.flex().child(mark);
+                row = row.child(mark);
             }
             if columns.icon {
                 let art = icon.and_then(|i| crate::nav::icon_glyph(Some(i))).map(|g| glyph(g, px(16.), ink, px(1.5)));
                 row = row.child(div().flex_none().w(px(28.)).flex().items_center().children(art));
             }
-            row = row.child(match fluent {
-                Some(_) => div().flex_1().child(label.clone()).into_any_element(),
-                None => label.clone().into_any_element(),
-            });
+            row = row.child(div().flex_1().child(label.clone()));
+            // Trailing, in the row's own colour family: WinUI's Caption accelerators, and on
+            // GNOME a dimmed label at the item's size.
             if let Some(keys) = shortcut {
-                row = row.child(div().flex_none().ml(px(24.)).text_size(px(12.)).text_color(secondary).child(keys));
+                let size = if fluent.is_some() { px(12.) } else { body };
+                let color = if enabled { secondary } else { theme.text.tertiary };
+                marks.text(&keys, color, &[surface], size, regular);
+                row = row.child(div().flex_none().ml(px(24.)).text_size(size).text_color(color).child(keys));
             }
             if submenu {
                 row = match fluent {
                     Some(_) => row.child(div().flex_none().ml(px(24.)).child(chevron_right(secondary))),
-                    None => row.flex().justify_between().gap(px(16.)).child("\u{203a}"),
+                    None => row.child(div().flex_none().ml(px(16.)).child("\u{203a}")),
                 };
             }
             if lit {
@@ -782,7 +784,7 @@ impl Build<'_> {
                         level = level.child(match item {
                             MenuItem::Separator => separator(),
                             MenuItem::Action { label, action, enabled, checked, icon, .. } => {
-                                let shortcut = fluent.and_then(|_| menu.shortcut(&**action));
+                                let shortcut = menu.shortcut(&**action);
                                 let cell = Cell {
                                     label,
                                     enabled: *enabled,
@@ -1298,13 +1300,20 @@ impl ChromeServices for GpuiChrome {
     }
 }
 
-/// A key binding as a menu row shows it on Windows: "Ctrl+Shift+S".
+/// A key binding as a menu row shows it on Windows and GNOME: "Ctrl+Shift+S". The platform key
+/// is Super on Linux.
 fn accelerator_text(modifiers: &gpui::Modifiers, key: &str) -> SharedString {
+    let platform = if cfg!(target_os = "macos") {
+        "Cmd"
+    } else if cfg!(target_os = "windows") {
+        "Win"
+    } else {
+        "Super"
+    };
     let mut parts: Vec<String> = Vec::new();
     for (on, name) in [
         (modifiers.control, "Ctrl"),
-        (modifiers.platform && !cfg!(target_os = "macos"), "Win"),
-        (modifiers.platform && cfg!(target_os = "macos"), "Cmd"),
+        (modifiers.platform, platform),
         (modifiers.alt, "Alt"),
         (modifiers.shift, "Shift"),
     ] {
@@ -1544,6 +1553,21 @@ mod tests {
         let left = Bounds { origin: point(px(-100.), px(100.)), size: size(px(80.), px(120.)) };
         assert!(super::heading_for(from, at(60., 130.), left));
         assert!(!super::heading_for(from, at(150., 130.), left));
+    }
+
+    #[test]
+    fn accelerators_read_as_the_platform_writes_them() {
+        let keys = |binding: &str| {
+            let k = nd_gpui::gpui::Keystroke::parse(binding).expect("keystroke");
+            super::accelerator_text(&k.modifiers, &k.key).to_string()
+        };
+        assert_eq!(keys("ctrl-shift-t"), "Ctrl+Shift+T");
+        assert_eq!(keys("ctrl-,"), "Ctrl+,");
+        assert_eq!(keys("alt-up"), "Alt+Up");
+        assert_eq!(keys("f2"), "F2");
+        if cfg!(target_os = "linux") {
+            assert_eq!(keys("super-l"), "Super+L");
+        }
     }
 
     use super::Beside;
