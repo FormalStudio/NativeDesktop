@@ -5,6 +5,9 @@ and the one it moves to.
 
 ## Unreleased
 
+- A scaffold's inspector on the libadwaita look gets no header bar of its own when the window
+  draws no controls over it (a tiling compositor): it runs to the top instead of under an empty
+  band.
 - A scaffold's sidebar on the libadwaita look gets no header bar of its own when nothing sits
   over it and the window draws no controls there (a tiling compositor): it runs to the top
   instead of under an empty band.

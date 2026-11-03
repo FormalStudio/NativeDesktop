@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
-use nd_backend_gpui::{GpuiBackend, GpuiChrome, GpuiHost};
+use nd_backend_gpui::{GpuiBackend, GpuiChrome, GpuiHost, OsHooks};
 use nd_components::services::{self, Chrome};
 use nd_components::split::Axis;
 use nd_components::*;
@@ -19,7 +19,7 @@ use nd_theme::{OsTheme, Preset, Scheme, Theme, ThemeRegistry};
 use nd_ui::backend::Backend;
 use nd_ui::prelude::*;
 use nd_ui::semantics::{MouseButton, PaintKind, PointerPhase, SyntheticInput};
-use nd_ui::{Keystroke, Point, SemanticNode, WindowId};
+use nd_ui::{Keystroke, Point, SemanticNode, TitlebarInsets, WindowId};
 
 fn headless() -> HeadlessAppContext {
     let text = nd_gpui::gpui_platform::current_platform(true).text_system();
@@ -195,7 +195,7 @@ impl Render for Scene {
                     .toolbar(bar)
                     .sidebar(sidebar().width(px(220.)).child(div().id("folders").child(text("Folders"))))
                     .content(text("Body"))
-                    .inspector(inspector().width(px(260.)).child(text("Info")))
+                    .inspector(inspector().width(px(260.)).child(div().id("details").child(text("Info"))))
                     .into_any_element();
             }
             Kind::Resizable => {
@@ -281,13 +281,29 @@ fn open_with(kind: Kind, scheme: Scheme) -> Opened {
     open_in(kind, Preset::Adwaita, scheme)
 }
 
+/// Window controls drawn at the end of the title row, as a floating window's under client-side
+/// decorations.
+struct EndControls;
+
+impl OsHooks for EndControls {
+    fn titlebar_insets(&self, _: WindowId, _: &nd_gpui::gpui::Window) -> Option<TitlebarInsets> {
+        Some(TitlebarInsets { leading: 0., trailing: 80., height: 46. })
+    }
+}
+
 fn open_in(kind: Kind, preset: Preset, scheme: Scheme) -> Opened {
+    open_hooked(kind, preset, scheme, false)
+}
+
+fn open_hooked(kind: Kind, preset: Preset, scheme: Scheme, end_controls: bool) -> Opened {
     let mut cx = headless();
     let log: Rc<RefCell<Log>> = Rc::default();
     let l = log.clone();
     let mut opened = None;
     let host = cx.update(|cx| {
-        GpuiHost::builder().quit_when_empty(false).start(cx, |app| {
+        let builder = GpuiHost::builder().quit_when_empty(false);
+        let builder = if end_controls { builder.hooks(EndControls) } else { builder };
+        builder.start(cx, |app| {
             let backend = app.backend_as::<GpuiBackend>().expect("GPUI backend").clone();
             backend.set_theme(registry_in(preset, scheme));
             app.set_global(Chrome(GpuiChrome::new(backend)));
@@ -720,6 +736,19 @@ mod gate_m6 {
         assert!(folders.origin.y < 1., "the sidebar runs to the top: {folders:?}");
     }
 
+    /// The inspector's header holds nothing but the window's end controls: with none there it
+    /// is not drawn and the inspector runs to the top, and with them it keeps their row clear.
+    pub fn gpui_inspector_header_only_under_window_controls() {
+        let o = open(Kind::FlexibleItem);
+        let details = o.node("details").bounds.expect("inspector laid out");
+        assert!(details.origin.y < 1., "no empty band over the inspector: {details:?}");
+        let o = open_hooked(Kind::FlexibleItem, Preset::Adwaita, Scheme::Light, true);
+        let details = o.node("details").bounds.expect("inspector laid out");
+        assert!(details.origin.y >= 46., "the inspector's content clears the controls' row: {details:?}");
+        let inspector = o.node("nd-inspector").bounds.expect("inspector laid out");
+        assert!(inspector.origin.y < 1., "the pane itself still starts at the top: {inspector:?}");
+    }
+
     /// WinUI's title bar: the search box is the bar's content, centred and stretched to the
     /// Gallery's 580 px where the window has room.
     pub fn gpui_toolbar_search_fills_the_title_bar_on_windows() {
@@ -956,6 +985,10 @@ fn main() {
         (
             "gate_m6::gpui_flexible_toolbar_item_gives_way_in_a_short_header",
             gate_m6::gpui_flexible_toolbar_item_gives_way_in_a_short_header,
+        ),
+        (
+            "gate_m6::gpui_inspector_header_only_under_window_controls",
+            gate_m6::gpui_inspector_header_only_under_window_controls,
         ),
         (
             "gate_m6::gpui_split_hidden_subtree_is_not_hit_or_painted",

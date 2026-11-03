@@ -283,7 +283,9 @@ impl Build<'_> {
                     split.sidebar = Some(with_bar(head, sidebar_bar));
                 }
                 split.content = Some(with_bar(header, bar));
-                if let Some(insets) = inspector {
+                // Nothing goes over the inspector but the window's end controls: with none
+                // there (a tiling compositor), the inspector runs to the top.
+                if let Some(insets) = inspector.filter(|i| i.trailing > 0.) {
                     split.inspector = Some(self.title_row(
                         id,
                         ElementId::NamedInteger("inspector".into(), id.0),
