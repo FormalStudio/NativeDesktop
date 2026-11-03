@@ -423,6 +423,39 @@ impl Rig {
     }
 }
 
+/// A settings row whose help runs far past a narrow window, with a stepper beside it.
+struct NarrowForm;
+
+impl Render for NarrowForm {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        let help = "Row size in the list and columns views, from the smallest to the largest, \
+                    stepped with Ctrl+= and Ctrl+- there and kept for the next launch.";
+        nd_components::form().child(
+            nd_components::form_section().child(
+                nd_components::form_row("List zoom")
+                    .help(help)
+                    .child(stepper("zoom", 1.).range(0.0..=2.0).label("List zoom")),
+            ),
+        )
+    }
+}
+
+/// The narrow window's width: a settings window dragged to its smallest.
+const NARROW: f32 = 320.;
+
+fn open_narrow() -> Rig {
+    let mut cx = headless();
+    let mut window = None;
+    let host = cx.update(|cx| {
+        GpuiHost::builder().quit_when_empty(false).start(cx, |app| {
+            let options = WindowOptions::main("narrow").size(size(px(NARROW), px(400.)));
+            window = Some(app.open_window(options, |_, cx| cx.new(|_| NarrowForm)).id());
+        })
+    });
+    settle(&mut cx, &host);
+    Rig { cx, host, window: window.expect("window"), log: Rc::default(), view: Rc::default() }
+}
+
 /// Settling again produces nothing: the value the app fed back is no new report.
 fn quiet(rig: &mut Rig) {
     rig.settle();
@@ -683,6 +716,16 @@ mod forms {
         rig.settle();
     }
 
+    /// Help under a row wraps to the room the control leaves, so the control stays inside the
+    /// window however long the help runs.
+    pub fn form_help_wraps_and_the_control_stays_inside() {
+        let rig = open_narrow();
+        let zoom = rig.node("zoom").bounds.expect("stepper laid out");
+        let right = zoom.origin.x + zoom.size.width;
+        assert!(right <= NARROW, "the stepper ends at {right}, past the {NARROW} wide window");
+        assert!(zoom.size.width > 0. && zoom.origin.x > NARROW / 2., "the stepper sits on the row's trailing side");
+    }
+
     pub fn goldens() {
         // GPUI renders headless only on macOS (Metal) and Linux (wgpu); Windows captures arrive
         // with the Fluent goldens (M3).
@@ -789,6 +832,7 @@ fn main() {
         ("forms::automation_set_value_reaches_the_app", forms::automation_set_value_reaches_the_app),
         ("forms::disabled_controls_refuse", forms::disabled_controls_refuse),
         ("forms::animated_progress_keeps_drawing", forms::animated_progress_keeps_drawing),
+        ("forms::form_help_wraps_and_the_control_stays_inside", forms::form_help_wraps_and_the_control_stays_inside),
         ("forms::goldens", forms::goldens),
     ];
     harness(&args, &tests);

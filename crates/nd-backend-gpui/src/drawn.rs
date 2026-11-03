@@ -453,6 +453,8 @@ impl Build<'_> {
                 div().text_sm().text_color(color).child(h)
             });
             let s = &theme.spacing;
+            // The text column may shrink below its unwrapped width, so help wraps and leaves the
+            // control its room.
             div()
                 .flex()
                 .flex_row()
@@ -464,6 +466,7 @@ impl Build<'_> {
                 .child(
                     div()
                         .flex_1()
+                        .min_w_0()
                         .flex()
                         .flex_col()
                         .child(div().text_color(label).child(p.label.clone()))
