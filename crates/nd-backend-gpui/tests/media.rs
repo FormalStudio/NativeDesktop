@@ -19,7 +19,7 @@ use nd_components::{
     Seeked, ShelfArrows, ShelfHandle, ShelfScrolled, TransportLayout, avatar, avatar_group, chat_bubble, chat_row,
     composer, icon_button, image, image_placeholder, lyrics_view, player_bar, seek_bar, shelf,
 };
-use nd_gpui::gpui::{HeadlessAppContext, Modifiers, PlatformInput, ScrollDelta, ScrollWheelEvent, TouchPhase};
+use nd_gpui::gpui::{HeadlessAppContext, Modifiers, PlatformInput, ScrollDelta, ScrollEvent, ScrollSource, TouchPhase};
 use nd_gpui::gpui::{WindowAppearance, point as gpoint, px as gpx};
 use nd_theme::{OsTheme, Preset, Scheme, ThemeRegistry};
 use nd_ui::prelude::*;
@@ -502,22 +502,23 @@ impl Rig {
         self.input(inputs);
     }
 
-    fn keys(&mut self, keys: &[&str]) {
-        let inputs = keys.iter().map(|k| SyntheticInput::Key(Keystroke::parse(k).expect("keystroke"))).collect();
+    fn keys(&mut self, keys: &[&'static str]) {
+        let inputs = keys.iter().map(|k| SyntheticInput::Key(Keystroke::parse(*k).expect("keystroke"))).collect();
         self.input(inputs);
     }
 
     fn wheel(&mut self, at: Point, dx: f32, dy: f32) {
         let handle = self.host.window_handle(self.window).expect("gpui window");
-        let event = ScrollWheelEvent {
+        let event = ScrollEvent {
             position: gpoint(gpx(at.x), gpx(at.y)),
             delta: ScrollDelta::Pixels(gpoint(gpx(dx), gpx(dy))),
             modifiers: Modifiers::default(),
             touch_phase: TouchPhase::Moved,
+            source: ScrollSource::Pointer,
         };
         self.cx.update(|cx| {
             let _ = handle.update(cx, |_, window, cx| {
-                window.dispatch_event(PlatformInput::ScrollWheel(event), cx);
+                window.dispatch_event(PlatformInput::Scroll(event), cx);
             });
         });
         self.settle();

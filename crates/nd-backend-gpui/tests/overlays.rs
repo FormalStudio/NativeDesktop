@@ -12,7 +12,7 @@ use nd_backend_gpui::{GpuiBackend, GpuiChrome, GpuiHost};
 use nd_components::{Chrome, Menu, MenuItem, SubtreeOverrides};
 use nd_gpui::gpui::{
     self, HeadlessAppContext, Modifiers, MouseButton as GpuiButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    PlatformInput, ScrollDelta, ScrollWheelEvent, TouchPhase, point,
+    PlatformInput, ScrollDelta, ScrollEvent, ScrollSource, TouchPhase, point,
 };
 use nd_ui::backend::Backend;
 use nd_ui::prelude::*;
@@ -225,7 +225,7 @@ fn rest(o: &mut Opened) {
     settle(&mut o.cx, &o.host);
 }
 
-fn key(o: &mut Opened, name: &str) {
+fn key(o: &mut Opened, name: &'static str) {
     let key = Keystroke::parse(name).expect("keystroke");
     o.cx.update(|cx| o.host.update(cx, |app| app.synthesize(o.window, &nd_ui::semantics::SyntheticInput::Key(key))))
         .expect("posted");
@@ -250,11 +250,12 @@ fn wiggle_and_scroll(at: nd_ui::Point) -> Vec<PlatformInput> {
             PlatformInput::MouseMove(MouseMoveEvent { position, pressed_button: None, modifiers })
         })
         .collect();
-    events.push(PlatformInput::ScrollWheel(ScrollWheelEvent {
+    events.push(PlatformInput::Scroll(ScrollEvent {
         position: point(px(at.x), px(at.y)),
         delta: ScrollDelta::Pixels(point(px(0.), px(-40.))),
         modifiers,
         touch_phase: TouchPhase::Moved,
+        source: ScrollSource::Pointer,
     }));
     events
 }
@@ -519,7 +520,6 @@ mod gate_m4_overlays {
         post(&mut o, wiggle(deeper));
         rest(&mut o);
         assert!(drawn(&o, "Deeper"), "the pointer is in the submenu");
-
     }
 
     /// WinUI's MenuFlyoutSubItem under the Fluent look: a click opens the submenu, another row

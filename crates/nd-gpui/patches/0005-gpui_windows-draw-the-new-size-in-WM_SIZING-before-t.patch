@@ -1,18 +1,18 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FormalSnake <kyaniserni@gmail.com>
 Date: Wed, 14 Oct 2026 18:19:05 +0100
-Subject: [PATCH 5/6] gpui_windows: draw the new size in WM_SIZING, before the
- window takes it
+Subject: [PATCH 05/19] gpui_windows: draw the new size in WM_SIZING, before
+ the window takes it
 
 ---
  crates/gpui_windows/src/events.rs | 51 +++++++++++++++++++++++++++++++
  1 file changed, 51 insertions(+)
 
 diff --git a/crates/gpui_windows/src/events.rs b/crates/gpui_windows/src/events.rs
-index c0e2cd4..a12c0a1 100644
+index 4dd0c38..a029189 100644
 --- a/crates/gpui_windows/src/events.rs
 +++ b/crates/gpui_windows/src/events.rs
-@@ -98,6 +98,7 @@ impl WindowsWindowInner {
+@@ -97,6 +97,7 @@ impl WindowsWindowInner {
              WM_CREATE => self.handle_create_msg(handle),
              WM_MOVE => self.handle_move_msg(handle, lparam),
              WM_SIZE => self.handle_size_msg(wparam, lparam),
@@ -20,7 +20,7 @@ index c0e2cd4..a12c0a1 100644
              WM_GETMINMAXINFO => self.handle_get_min_max_info_msg(lparam),
              WM_ENTERSIZEMOVE | WM_ENTERMENULOOP => self.handle_size_move_loop(handle),
              WM_EXITSIZEMOVE | WM_EXITMENULOOP => self.handle_size_move_loop_exit(handle),
-@@ -253,6 +254,27 @@ impl WindowsWindowInner {
+@@ -251,6 +252,27 @@ impl WindowsWindowInner {
          Some(0)
      }
  
@@ -48,7 +48,7 @@ index c0e2cd4..a12c0a1 100644
      fn handle_size_change(
          &self,
          device_size: Size<DevicePixels>,
-@@ -1802,3 +1824,32 @@ fn notify_frame_changed(handle: HWND) {
+@@ -1834,3 +1856,32 @@ fn notify_frame_changed(handle: HWND) {
          .log_err();
      }
  }

@@ -467,16 +467,15 @@ pub fn app() -> Application {
 }
 
 fn bind_keys(cx: &mut App) {
-    let m = if cfg!(target_os = "macos") { "cmd" } else { "ctrl" };
     cx.bind_keys([
-        KeyBinding::new(&format!("{m}-t"), NewTab, Some("Browser")),
-        KeyBinding::new(&format!("{m}-w"), CloseTab, Some("Browser")),
-        KeyBinding::new(&format!("{m}-r"), Reload, Some("Browser")),
-        KeyBinding::new(&format!("{m}-["), Back, Some("Browser")),
-        KeyBinding::new(&format!("{m}-]"), Forward, Some("Browser")),
-        KeyBinding::new(&format!("{m}-alt-i"), DevTools, Some("Browser")),
+        KeyBinding::new("secondary-t", NewTab, Some("Browser")),
+        KeyBinding::new("secondary-w", CloseTab, Some("Browser")),
+        KeyBinding::new("secondary-r", Reload, Some("Browser")),
+        KeyBinding::new("secondary-[", Back, Some("Browser")),
+        KeyBinding::new("secondary-]", Forward, Some("Browser")),
+        KeyBinding::new("secondary-alt-i", DevTools, Some("Browser")),
         KeyBinding::new("ctrl-tab", NextTab, Some("Browser")),
-        KeyBinding::new(&format!("{m}-p"), Print, Some("Browser")),
+        KeyBinding::new("secondary-p", Print, Some("Browser")),
     ]);
 }
 

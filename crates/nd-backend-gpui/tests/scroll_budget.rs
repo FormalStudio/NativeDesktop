@@ -8,7 +8,9 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use nd_backend_gpui::GpuiHost;
-use nd_gpui::gpui::{self, HeadlessAppContext, Modifiers, PlatformInput, ScrollDelta, ScrollWheelEvent, TouchPhase};
+use nd_gpui::gpui::{
+    self, HeadlessAppContext, Modifiers, PlatformInput, ScrollDelta, ScrollEvent, ScrollSource, TouchPhase,
+};
 use nd_ui::prelude::*;
 use nd_virtual::{ListState, list};
 
@@ -70,15 +72,16 @@ fn run() {
     let mut work = Vec::with_capacity(frames);
     for _ in 0..frames {
         let started = Instant::now();
-        let event = ScrollWheelEvent {
+        let event = ScrollEvent {
             position: gpui::point(px(200.), px(300.)),
             delta: ScrollDelta::Lines(gpui::point(0., -step / 20.)),
             modifiers: Modifiers::default(),
             touch_phase: TouchPhase::Moved,
+            source: ScrollSource::Pointer,
         };
         cx.update(|cx| {
             let _ = handle.update(cx, |_, window, cx| {
-                window.dispatch_event(PlatformInput::ScrollWheel(event), cx);
+                window.dispatch_event(PlatformInput::Scroll(event), cx);
             });
             host.pump(cx);
             host.draw(cx);

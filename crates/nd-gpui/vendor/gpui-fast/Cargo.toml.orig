@@ -1,7 +1,7 @@
 # Modified by Longbridge for gpui-fast publication.
 [package]
 name = "gpui-fast"
-version = "0.1.7"
+version = "0.1.13"
 edition = "2024"
 authors = ["Nathan Sobo <nathan@zed.dev>", "Longbridge"]
 description = "gpui: GPUI with gpui-fast rendering and layout optimizations"
@@ -12,15 +12,15 @@ homepage = "https://github.com/longbridge/gpui-fast"
 readme = "README.md"
 keywords = ["desktop", "gui", "immediate"]
 categories = ["gui"]
-documentation = "https://docs.rs/gpui-fast/0.1.7/gpui/"
-autoexamples = false
 autobenches = false
+documentation = "https://docs.rs/gpui-fast/0.1.13/gpui/"
+autoexamples = false
 autotests = false
 include = ["/src/**", "/resources/**", "/build.rs", "/Cargo.toml", "/README.md", "/LICENSE", "/NOTICE"]
 
 [features]
 default = ["font-kit", "wayland", "x11", "windows-manifest"]
-test-support = ["collections/test-support", "http_client/test-support", "wayland", "x11", "proptest", "dep:futures-concurrency", "dep:postage", "dep:web-time"]
+test-support = ["bench_metrics?/test-support", "collections/test-support", "http_client/test-support", "wayland", "x11", "proptest", "dep:futures-concurrency", "dep:postage", "dep:web-time"]
 bench-support = ["profiler", "dep:criterion", "dep:bench_metrics"]
 bench = ["bench-support"]
 inspector = ["gpui_macros/inspector"]
@@ -33,6 +33,7 @@ windows-manifest = ["dep:embed-resource"]
 windows-manifest-provided-by-host = []
 profiler = ["dep:hdrhistogram"]
 stacker = ["dep:stacksafe"]
+hot-reload = ["dep:async-tungstenite", "dep:dioxus-cli-config", "dep:dioxus-devtools-types", "dep:smol", "dep:subsecond"]
 
 [lib]
 path = "src/gpui.rs"
@@ -64,21 +65,18 @@ version = "0.3"
 version = "2.6.0"
 
 [dependencies.collections]
-version = "=0.3.9"
+version = "=0.3.11"
 package = "gpui-pre-collections"
 
 [dependencies.bench_metrics]
 optional = true
 package = "gpui-pre-bench-metrics"
-version = "=0.3.9"
+version = "=0.3.11"
 
 [dependencies.criterion]
 version = "0.8.2"
 features = ["html_reports"]
 optional = true
-
-[dependencies.ctor]
-version = "1.0.12"
 
 [dependencies.derive_more]
 version = "2.1"
@@ -96,16 +94,21 @@ optional = true
 
 [dependencies.gpui_macros]
 package = "gpui-fast-macros"
-version = "^0.1.7"
+version = "^0.1.13"
 path = "../gpui_macros"
 
 [dependencies.gpui_shared_string]
 package = "gpui-pre-shared-string"
-version = "=0.3.9"
+version = "=0.3.11"
 
 [dependencies.http_client]
 package = "gpui-pre-http-client"
-version = "=0.3.9"
+version = "=0.3.11"
+
+[dependencies.icu_segmenter]
+version = "2.3.0"
+default-features = false
+features = ["compiled_data"]
 
 [dependencies.image]
 version = "0.25.1"
@@ -133,9 +136,9 @@ optional = true
 features = ["blocking"]
 
 [dependencies.proptest]
+version = "1.12.0"
 features = ["attr-macro"]
 optional = true
-version = "1"
 
 [dependencies.chrono]
 version = "0.4"
@@ -160,11 +163,11 @@ features = ["std", "perf"]
 
 [dependencies.refineable]
 package = "gpui-pre-refineable"
-version = "=0.3.9"
+version = "=0.3.11"
 
 [dependencies.scheduler]
 package = "gpui-pre-scheduler"
-version = "=0.3.9"
+version = "=0.3.11"
 
 [dependencies.resvg]
 version = "0.46.0"
@@ -205,19 +208,22 @@ features = ["derive"]
 
 [dependencies.sum_tree]
 package = "gpui-pre-sum-tree"
-version = "=0.3.9"
+version = "=0.3.11"
 
 [dependencies.taffy]
-version = "=0.14.0"
+version = "=0.15.0"
 default-features = false
 features = ["std", "taffy_tree", "flexbox", "grid", "block_layout", "float_layout", "content_size"]
 
 [dependencies.thiserror]
 version = "2.0.12"
 
+[dependencies.unicode-segmentation]
+version = "1.10"
+
 [dependencies.gpui_util]
 package = "gpui-pre-util"
-version = "=0.3.9"
+version = "=0.3.11"
 
 [dependencies.hdrhistogram]
 version = "7"
@@ -254,6 +260,26 @@ features = ["std"]
 
 [target."cfg(not(target_family = \"wasm\"))".dependencies.pollster]
 version = "0.4.0"
+
+[target."cfg(any(target_os = \"macos\", target_os = \"linux\", target_os = \"windows\", target_os = \"ios\"))".dependencies.async-tungstenite]
+version = "0.33"
+optional = true
+
+[target."cfg(any(target_os = \"macos\", target_os = \"linux\", target_os = \"windows\", target_os = \"ios\"))".dependencies.dioxus-cli-config]
+version = "=0.7.10"
+optional = true
+
+[target."cfg(any(target_os = \"macos\", target_os = \"linux\", target_os = \"windows\", target_os = \"ios\"))".dependencies.dioxus-devtools-types]
+version = "=0.7.10"
+optional = true
+
+[target."cfg(any(target_os = \"macos\", target_os = \"linux\", target_os = \"windows\", target_os = \"ios\"))".dependencies.smol]
+version = "2.0"
+optional = true
+
+[target."cfg(any(target_os = \"macos\", target_os = \"linux\", target_os = \"windows\", target_os = \"ios\"))".dependencies.subsecond]
+version = "=0.7.10"
+optional = true
 
 [target."cfg(target_family = \"wasm\")".dependencies.getrandom]
 version = "0.3.4"

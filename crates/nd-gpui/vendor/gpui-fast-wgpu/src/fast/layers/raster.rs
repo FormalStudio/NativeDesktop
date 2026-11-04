@@ -12,7 +12,8 @@
 use gpui::{Rgba, Scene, SceneLayers, TileCoord};
 
 use crate::fast::frame::{
-    FrameState, FrameTarget, PathBatch, PathTargets, PathUpload, SceneDraw, SceneUpload, draw_scene,
+    DrawGraph, FrameState, FrameTarget, PathBatch, PathTargets, PathUpload, SceneDraw, SceneUpload,
+    draw_scene,
 };
 
 /// A tile to rasterize this frame, with the part of its layer's content
@@ -59,6 +60,7 @@ pub(crate) fn rasterize(
     upload: &SceneUpload,
     paths: &PathUpload,
     path_batches: &[PathBatch],
+    graph: &DrawGraph,
 ) {
     let layer = &layers.frames[tile.layer];
     let cache = &state.layers;
@@ -80,7 +82,7 @@ pub(crate) fn rasterize(
             paths,
             path_batches,
             view,
-            clear: clear_color(layer.background),
+            clear: Some(clear_color(layer.background)),
             label: "layer_tile_pass",
             globals: &globals.globals,
             path_targets: PathTargets {
@@ -88,6 +90,7 @@ pub(crate) fn rasterize(
                 intermediate: Some(&tile_paths.intermediate),
                 msaa: tile_paths.msaa.as_ref(),
             },
+            graph,
         },
     );
 }

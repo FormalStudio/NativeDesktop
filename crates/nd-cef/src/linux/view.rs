@@ -25,8 +25,8 @@ use nd_gpui::gpui::{
     self, AnyElement, AnyWindowHandle, App, AppContext, AsyncApp, Bounds, ContentMask, Corners, CursorStyle,
     DispatchPhase, Element, ElementId, FocusHandle, GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId,
     IntoElement, KeyDownEvent, KeyUpEvent, Keystroke, LayoutId, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, Pixels, Point, RenderImage, ScrollWheelEvent, Style, StyleRefinement, UTF16Selection, Window, fill,
-    point, px, size,
+    MouseUpEvent, Pixels, Point, RenderImage, ScrollEvent, Style, StyleRefinement, UTF16Selection, Window, fill, point,
+    px, size,
 };
 use nd_webview::WebViewProps;
 use nd_webview::menu::Entry;
@@ -686,7 +686,7 @@ impl OsrView {
     /// through to here (under a light-dismiss overlay's backdrop).
     fn listen_wheel(self: &Rc<Self>, hitbox: &Hitbox, window: &mut Window) {
         let (view, hit) = (Rc::downgrade(self), hitbox.clone());
-        window.on_mouse_event(move |e: &ScrollWheelEvent, phase, window, cx| {
+        window.on_mouse_event(move |e: &ScrollEvent, phase, window, cx| {
             let Some(view) = view.upgrade() else { return };
             if phase != DispatchPhase::Bubble || !hit.should_handle_scroll(window) {
                 return;

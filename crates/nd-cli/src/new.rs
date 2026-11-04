@@ -232,8 +232,7 @@ mod tests {
     #[test]
     fn the_patch_block_names_every_vendored_gpui_crate_standalone_or_not() {
         let crates = gpui_patch_crates();
-        for krate in ["gpui-pre", "gpui-fast", "gpui-pre-linux", "gpui-pre-wgpu", "gpui-pre-windows", "gpui-pre-apple"]
-        {
+        for krate in ["gpui-pre", "gpui-fast", "gpui-pre-linux", "gpui-pre-wgpu", "gpui-pre-windows"] {
             assert!(crates.contains(&krate), "{krate} in {crates:?}");
         }
         let nd = plain_path(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../nd")).unwrap();

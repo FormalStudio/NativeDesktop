@@ -79,11 +79,12 @@ pub(crate) fn platform_inputs(input: &SyntheticInput) -> Vec<PlatformInput> {
 
 /// A wheel turn at `p` that scrolls the content under it by `dx`, `dy` (down and right positive).
 pub(crate) fn wheel(p: nd_core::Point, dx: f32, dy: f32) -> PlatformInput {
-    PlatformInput::ScrollWheel(gpui::ScrollWheelEvent {
+    PlatformInput::Scroll(gpui::ScrollEvent {
         position: at(p),
         delta: gpui::ScrollDelta::Pixels(point(px(-dx), px(-dy))),
         modifiers: Modifiers::default(),
         touch_phase: gpui::TouchPhase::Moved,
+        source: gpui::ScrollSource::Pointer,
     })
 }
 

@@ -18,8 +18,8 @@ use nd_core::NodeId;
 use nd_core::time::{Duration, Instant};
 use nd_gpui::gpui::{
     self, AnyElement, App, ElementId, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement, Pixels,
-    ScrollWheelEvent, SharedString, StatefulInteractiveElement, Styled, Window, canvas, div, prelude::FluentBuilder,
-    px, relative,
+    ScrollEvent, SharedString, StatefulInteractiveElement, Styled, Window, canvas, div, prelude::FluentBuilder, px,
+    relative,
 };
 use nd_theme::color::with_alpha;
 
@@ -372,7 +372,7 @@ pub(super) fn lyrics(
 
     let wheel = {
         let (sink, state) = (ctl.sink.clone(), state.clone());
-        move |event: &ScrollWheelEvent, window: &mut Window, cx: &mut App| {
+        move |event: &ScrollEvent, window: &mut Window, cx: &mut App| {
             let delta = event.delta.pixel_delta(px(20.)).y.as_f32();
             if delta == 0. {
                 return;
@@ -386,7 +386,7 @@ pub(super) fn lyrics(
             window.refresh();
         }
     };
-    root = root.child(column).on_scroll_wheel(wheel);
+    root = root.child(column).on_scroll(wheel);
     if synced && !following {
         let fill = theme.surface.overlay;
         marks.fill("lyrics resync", fill, &[]);

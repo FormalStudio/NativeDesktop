@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use nd_core::semantic::{SemanticNode, SemanticTree, SemanticWindow};
 use nd_core::{NodeId, Point, WindowId};
 use nd_ui::semantics::{ActionError, MouseButton, PointerPhase, SemanticAction, SyntheticInput};
-use nd_ui::{App, Keystroke};
+use nd_ui::{App, Keystroke, OperatingSystem};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -121,7 +121,10 @@ fn perform(
 /// A space-separated keystroke sequence in GPUI's syntax: `cmd-a`, `shift-tab`, `enter`.
 pub fn parse_keys(keys: &str) -> Result<Vec<Keystroke>, RpcError> {
     keys.split_whitespace()
-        .map(|k| Keystroke::parse(k).map_err(|e| RpcError::invalid_params(format!("keystroke \"{k}\": {e}"))))
+        .map(|k| {
+            Keystroke::parse_with_os(k, OperatingSystem::built_for())
+                .map_err(|e| RpcError::invalid_params(format!("keystroke \"{k}\": {e}")))
+        })
         .collect()
 }
 

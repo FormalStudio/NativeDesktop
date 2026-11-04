@@ -7,7 +7,7 @@ exclude = ["crates/nd-gpui/vendor", "crates/nd-terminal/vendor"]
 [workspace.package]
 version = "0.6.1"
 edition = "2024"
-rust-version = "1.95"
+rust-version = "1.98"
 license = "MIT OR Apache-2.0"
 publish = false
 
@@ -40,17 +40,15 @@ nd-cef = { path = "crates/nd-cef" }
 nd-docs = { path = "crates/nd-docs" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
-# The pinned GPUI snapshot (zed@93d7456). Bumped by `scripts/gpui-fork bump`; only nd-gpui names these.
-gpui = { package = "gpui-pre", version = "=0.3.9", default-features = false }
-gpui_platform = { package = "gpui-pre-platform", version = "=0.3.9", default-features = false }
-gpui_fast = { package = "gpui-fast", version = "=0.1.7", default-features = false }
-gpui_fast_platform = { package = "gpui-fast-platform", version = "=0.1.7", default-features = false }
-gpui_linux = { package = "gpui-pre-linux", version = "=0.3.9", default-features = false }
-gpui_fast_linux = { package = "gpui-fast-linux", version = "=0.1.7", default-features = false }
-# Same version and features as gpui-pre, so its style enums convert into these types.
-taffy = { version = "0.13.0", default-features = false, features = ["std", "taffy_tree", "flexbox", "block_layout", "content_size"] }
-# What gpui-fast pins, for `nd-gpui/fast`.
-taffy_fast = { package = "taffy", version = "=0.14.0", default-features = false, features = ["std", "taffy_tree", "flexbox", "block_layout", "content_size"] }
+# The pinned GPUI snapshot (zed@f816e1f). Bumped by `scripts/gpui-fork bump`; only nd-gpui names these.
+gpui = { package = "gpui-pre", version = "=0.3.11", default-features = false }
+gpui_platform = { package = "gpui-pre-platform", version = "=0.3.11", default-features = false }
+gpui_fast = { package = "gpui-fast", version = "=0.1.13", default-features = false }
+gpui_fast_platform = { package = "gpui-fast-platform", version = "=0.1.13", default-features = false }
+gpui_linux = { package = "gpui-pre-linux", version = "=0.3.11", default-features = false }
+gpui_fast_linux = { package = "gpui-fast-linux", version = "=0.1.13", default-features = false }
+# Same version and features as gpui-pre and gpui-fast, so their style enums convert into these types.
+taffy = { version = "0.15.0", default-features = false, features = ["std", "taffy_tree", "flexbox", "grid", "block_layout", "float_layout", "content_size"] }
 
 [profile.dev]
 split-debuginfo = "unpacked"
@@ -75,12 +73,9 @@ libghostty-vt-sys = { path = "crates/nd-terminal/vendor/libghostty-vt-sys" }
 [patch.crates-io]
 gpui-pre = { path = "crates/nd-gpui/vendor/gpui-pre" }
 gpui-fast = { path = "crates/nd-gpui/vendor/gpui-fast" }
-gpui-pre-apple = { path = "crates/nd-gpui/vendor/gpui-pre-apple" }
-gpui-fast-apple = { path = "crates/nd-gpui/vendor/gpui-fast-apple" }
 gpui-pre-linux = { path = "crates/nd-gpui/vendor/gpui-pre-linux" }
 gpui-fast-linux = { path = "crates/nd-gpui/vendor/gpui-fast-linux" }
 gpui-pre-wgpu = { path = "crates/nd-gpui/vendor/gpui-pre-wgpu" }
 gpui-fast-wgpu = { path = "crates/nd-gpui/vendor/gpui-fast-wgpu" }
 gpui-pre-windows = { path = "crates/nd-gpui/vendor/gpui-pre-windows" }
-gpui-fast-windows = { path = "crates/nd-gpui/vendor/gpui-fast-windows" }
 # gpui-fork: end

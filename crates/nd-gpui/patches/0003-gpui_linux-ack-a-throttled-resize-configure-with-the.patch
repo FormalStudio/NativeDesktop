@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FormalSnake <kyaniserni@gmail.com>
 Date: Tue, 13 Oct 2026 20:50:52 +0100
-Subject: [PATCH 3/4] gpui_linux: ack a throttled resize configure with the
+Subject: [PATCH 03/19] gpui_linux: ack a throttled resize configure with the
  frame that applies it
 
 ---
@@ -9,10 +9,10 @@ Subject: [PATCH 3/4] gpui_linux: ack a throttled resize configure with the
  1 file changed, 14 insertions(+), 3 deletions(-)
 
 diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/src/linux/wayland/window.rs
-index 8d92234..01af6c8 100644
+index 6647a8e..9ef0e36 100644
 --- a/crates/gpui_linux/src/linux/wayland/window.rs
 +++ b/crates/gpui_linux/src/linux/wayland/window.rs
-@@ -136,6 +136,11 @@ pub struct WaylandWindowState {
+@@ -138,6 +138,11 @@ pub struct WaylandWindowState {
      pending_frame_callback: Option<wl_callback::WlCallback>,
      in_progress_configure: Option<InProgressConfigure>,
      resize_throttle: bool,
@@ -24,7 +24,7 @@ index 8d92234..01af6c8 100644
      in_progress_window_controls: Option<WindowControls>,
      window_controls: WindowControls,
      client_inset: Option<Pixels>,
-@@ -628,6 +633,7 @@ impl WaylandWindowState {
+@@ -632,6 +637,7 @@ impl WaylandWindowState {
              window_bounds: options.bounds,
              in_progress_configure: None,
              resize_throttle: false,
@@ -32,7 +32,7 @@ index 8d92234..01af6c8 100644
              client,
              appearance,
              handle,
-@@ -939,6 +945,12 @@ impl WaylandWindowStatePtr {
+@@ -949,6 +955,12 @@ impl WaylandWindowStatePtr {
          self.frame_loop.set(FrameLoop::Ticking);
          let mut state = self.state.borrow_mut();
          state.resize_throttle = false;
@@ -45,7 +45,7 @@ index 8d92234..01af6c8 100644
          // GPUI may throttle this tick without calling draw, so leave the request
          // latched until a draw actually reaches the renderer.
          let force_render = state.redraw_requested;
-@@ -1111,9 +1123,7 @@ impl WaylandWindowStatePtr {
+@@ -1121,9 +1133,7 @@ impl WaylandWindowStatePtr {
                      state.visibility = configure.visibility;
                      // Limit interactive resizes to once per vblank
                      let throttled = configure.resizing && state.resize_throttle;
@@ -56,7 +56,7 @@ index 8d92234..01af6c8 100644
                          if configure.resizing {
                              state.resize_throttle = true;
                          }
-@@ -1136,6 +1146,7 @@ impl WaylandWindowStatePtr {
+@@ -1146,6 +1156,7 @@ impl WaylandWindowStatePtr {
                          self.report_visibility(configure.visibility);
                      }
                      if throttled {

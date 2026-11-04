@@ -47,7 +47,7 @@ native widget's macOS module (checked by `nd check`, 15.4).
 | `nd` | Facade: `Application`, prelude, features, backend selection by target | all below that ship in apps |
 | `nd-macros` | `#[derive(Settings)]`, `nd::manifest!()`, `#[nd::test]`, `#[derive(IntoElement)]` re-export | syn, quote |
 | `nd-core` | GPUI-free basics: paths (`ND_APP_DATA_DIR` root), clock trait, semantic tree schema, error policy, ids | std, serde, tracing |
-| `nd-gpui` | Only GPUI dependency. Pins `gpui-pre =0.3.9` (matches `gpui-kit`), feature `fast` selects `gpui-fast`, carries the patch queue (2.1) | gpui-pre or gpui-fast, gpui-base |
+| `nd-gpui` | Only GPUI dependency. Pins `gpui-pre =0.3.11` (matches `gpui-kit`), feature `fast` selects `gpui-fast`, carries the patch queue (2.1) | gpui-pre or gpui-fast, gpui-base |
 | `nd-ui` | The app vocabulary: `App`, `Entity`, `Context`, `Window`, `Render`, elements, styling, actions, focus, gestures API, `Painter`, retained tree, reconciler, Taffy layout for retained backends, semantic tree, `NativeWidget` trait | nd-core, nd-gpui, taffy |
 | `nd-theme` | Tokens, presets, skins, matugen watcher, appearance and accent | nd-core, nd-ui |
 | `nd-platform` | Traits for OS services each backend provides: display clock, chrome, materials, haptics, dialogs, menus | nd-core, nd-ui |
@@ -87,7 +87,7 @@ with `[patch.crates-io]` on the `gpui-pre-*` crates, with a rebase gate: each we
 the queue and must pass tiers 1-2 before it merges. `nd-os-*` crates consume the patched APIs; they
 own no protocol objects, and plug into `nd-backend-gpui` through its `OsHooks` trait (window
 options before open, setup after open, titlebar insets, drawn controls, measured frame times).
-The queue is applied to the matching gpui-fast crates too, so `nd-gpui/fast` carries it. nd semantics reach AccessKit through GPUI's own integration (element
+The queue is applied to the matching gpui-fast crates too, so `nd-gpui/fast` carries it, except where gpui-fast rewrote the same code: gpui-fast-windows 0.1.13 has its own vsync loop, which 0006 changes, so `scripts/gpui-fork vendor` leaves it unpatched and says so. nd semantics reach AccessKit through GPUI's own integration (element
 roles and labels from the semantic tree), never a second adapter.
 
 | Patch | Lane | Upstream |

@@ -17,9 +17,9 @@ use nd_gpui::gpui::prelude::FluentBuilder as _;
 use nd_gpui::gpui::{
     self, App, Bounds, ClipboardItem, CursorStyle, ElementId, FocusHandle, GlobalElementId, InspectorElementId,
     InteractiveElement, IntoElement, KeyDownEvent, Keystroke, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent,
-    ParentElement, Pixels, Point, ScrollWheelEvent, ShapedLine, SharedString, StatefulInteractiveElement, Style,
-    Styled, TextRun, UTF16Selection, UnderlineStyle, Window, WrappedLine, anchored, deferred, div, fill, point, px,
-    relative, size,
+    ParentElement, Pixels, Point, ScrollEvent, ShapedLine, SharedString, StatefulInteractiveElement, Style, Styled,
+    TextRun, UTF16Selection, UnderlineStyle, Window, WrappedLine, anchored, deferred, div, fill, point, px, relative,
+    size,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -1006,7 +1006,7 @@ pub(crate) fn chrome(ctl: &Ctl, editor: &Rc<std::cell::RefCell<Editor>>, f: &Fie
     };
     let scrolled = {
         let editor = editor.clone();
-        move |event: &ScrollWheelEvent, window: &mut Window, _: &mut App| {
+        move |event: &ScrollEvent, window: &mut Window, _: &mut App| {
             let delta = event.delta.pixel_delta(px(20.));
             editor.borrow_mut().scroll.y -= delta.y;
             window.refresh();
@@ -1020,7 +1020,7 @@ pub(crate) fn chrome(ctl: &Ctl, editor: &Rc<std::cell::RefCell<Editor>>, f: &Fie
         .on_mouse_up(MouseButton::Left, up.clone())
         .on_mouse_up_out(MouseButton::Left, up);
     if f.multiline {
-        chrome = chrome.on_scroll_wheel(scrolled);
+        chrome = chrome.on_scroll(scrolled);
     }
     chrome
 }

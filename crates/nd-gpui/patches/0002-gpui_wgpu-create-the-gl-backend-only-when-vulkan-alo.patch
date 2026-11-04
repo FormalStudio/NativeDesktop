@@ -1,19 +1,19 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FormalSnake <kyaniserni@gmail.com>
 Date: Tue, 13 Oct 2026 19:24:54 +0100
-Subject: [PATCH 2/2] gpui_wgpu: create the gl backend only when vulkan alone
+Subject: [PATCH 02/19] gpui_wgpu: create the gl backend only when vulkan alone
  fails
 
 ---
- crates/gpui_wgpu/src/wgpu_context.rs  | 67 ++++++++++++++++++++++++++-
- crates/gpui_wgpu/src/wgpu_renderer.rs | 47 ++++++++-----------
- 2 files changed, 85 insertions(+), 29 deletions(-)
+ crates/gpui_wgpu/src/wgpu_context.rs  | 73 ++++++++++++++++++++++++++-
+ crates/gpui_wgpu/src/wgpu_renderer.rs | 52 +++++++------------
+ 2 files changed, 90 insertions(+), 35 deletions(-)
 
 diff --git a/crates/gpui_wgpu/src/wgpu_context.rs b/crates/gpui_wgpu/src/wgpu_context.rs
-index 4c55ef1..7979c81 100644
+index 5563a76..8e03552 100644
 --- a/crates/gpui_wgpu/src/wgpu_context.rs
 +++ b/crates/gpui_wgpu/src/wgpu_context.rs
-@@ -120,6 +120,17 @@ impl raw_window_handle::HasDisplayHandle for WebDisplaySource {
+@@ -122,6 +122,17 @@ impl raw_window_handle::HasDisplayHandle for WebDisplaySource {
      }
  }
  
@@ -31,7 +31,7 @@ index 4c55ef1..7979c81 100644
  #[derive(Clone, Copy)]
  pub struct CompositorGpuHint {
      pub vendor_id: u32,
-@@ -470,8 +481,16 @@ impl WgpuContext {
+@@ -478,8 +489,16 @@ impl WgpuContext {
  
      #[cfg(not(target_family = "wasm"))]
      pub fn instance(display: Option<Box<dyn wgpu::wgt::WgpuHasDisplayHandle>>) -> wgpu::Instance {
@@ -49,7 +49,7 @@ index 4c55ef1..7979c81 100644
              flags: wgpu::InstanceFlags::default(),
              backend_options: wgpu::BackendOptions::default(),
              memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
-@@ -479,6 +498,36 @@ impl WgpuContext {
+@@ -487,6 +506,42 @@ impl WgpuContext {
          })
      }
  
@@ -60,6 +60,7 @@ index 4c55ef1..7979c81 100644
 +    pub fn new_with_surface(
 +        mut display: impl FnMut() -> Box<dyn wgpu::wgt::WgpuHasDisplayHandle>,
 +        mut create_surface: impl FnMut(&wgpu::Instance) -> anyhow::Result<wgpu::Surface<'static>>,
++        config: &WgpuSurfaceConfig,
 +        compositor_gpu: Option<CompositorGpuHint>,
 +        reject_software: bool,
 +    ) -> anyhow::Result<(Self, wgpu::Surface<'static>)> {
@@ -68,8 +69,13 @@ index 4c55ef1..7979c81 100644
 +            let instance = Self::instance_with_backends(Some(display()), backends);
 +            let reject_software = reject_software || always_reject_software;
 +            let attempt = create_surface(&instance).and_then(|surface| {
-+                let context =
-+                    Self::new_with_options(instance, &surface, compositor_gpu, reject_software)?;
++                let context = Self::new_with_options(
++                    instance,
++                    &surface,
++                    config,
++                    compositor_gpu,
++                    reject_software,
++                )?;
 +                Ok((context, surface))
 +            });
 +            match attempt {
@@ -86,7 +92,7 @@ index 4c55ef1..7979c81 100644
      pub fn check_compatible_with_surface(&self, surface: &wgpu::Surface<'_>) -> anyhow::Result<()> {
          let caps = surface.get_capabilities(&self.adapter);
          if caps.formats.is_empty() {
-@@ -768,6 +817,22 @@ fn parse_pci_id(id: &str) -> anyhow::Result<u32> {
+@@ -771,6 +826,22 @@ fn parse_pci_id(id: &str) -> anyhow::Result<u32> {
  mod tests {
      use super::{DeviceErrorState, parse_pci_id};
  
@@ -110,10 +116,10 @@ index 4c55ef1..7979c81 100644
      fn device_errors_are_observed_independently() {
          let errors = DeviceErrorState::default();
 diff --git a/crates/gpui_wgpu/src/wgpu_renderer.rs b/crates/gpui_wgpu/src/wgpu_renderer.rs
-index 8387528..088f73b 100644
+index 46f9ffd..5d7f7bf 100644
 --- a/crates/gpui_wgpu/src/wgpu_renderer.rs
 +++ b/crates/gpui_wgpu/src/wgpu_renderer.rs
-@@ -302,37 +302,26 @@ impl WgpuRenderer {
+@@ -302,43 +302,28 @@ impl WgpuRenderer {
              .window_handle()
              .map_err(|e| anyhow::anyhow!("Failed to get window handle: {e}"))?;
  
@@ -142,6 +148,7 @@ index 8387528..088f73b 100644
 -        };
 -
          let mut ctx_ref = gpu_context.borrow_mut();
+         let surface_configured = ctx_ref.is_none();
 -        let context = match ctx_ref.as_mut() {
 +        let (context, surface) = match ctx_ref.as_mut() {
              Some(context) => {
@@ -155,29 +162,36 @@ index 8387528..088f73b 100644
 +                let (context, surface) = WgpuContext::new_with_surface(
 +                    || Box::new(window.clone()),
 +                    |instance| create_surface(instance, window_handle.as_raw()),
++                    &config,
 +                    compositor_gpu,
 +                    false,
 +                )?;
 +                (ctx_ref.insert(context), surface)
              }
--            None => ctx_ref.insert(WgpuContext::new(instance, &surface, compositor_gpu)?),
+-            None => ctx_ref.insert(WgpuContext::new(
+-                instance,
+-                &surface,
+-                &config,
+-                compositor_gpu,
+-            )?),
          };
  
          let atlas = Arc::new(WgpuAtlas::from_context(context));
-@@ -2237,10 +2226,12 @@ impl WgpuRenderer {
+@@ -2270,13 +2255,12 @@ impl WgpuRenderer {
              // may need more time to come back (e.g. after suspend/resume).
              std::thread::sleep(std::time::Duration::from_millis(350));
  
 -            let instance = WgpuContext::instance(Some(Box::new(window.clone())));
 -            let surface = create_surface(&instance, window_handle.as_raw())?;
--            let new_context =
--                WgpuContext::new_rejecting_software(instance, &surface, self.compositor_gpu)?;
+-            let new_context = WgpuContext::new_rejecting_software(
+-                instance,
+-                &surface,
 +            let (new_context, surface) = WgpuContext::new_with_surface(
 +                || Box::new(window.clone()),
 +                |instance| create_surface(instance, window_handle.as_raw()),
-+                self.compositor_gpu,
+                 &config,
+                 self.compositor_gpu,
 +                true,
-+            )?;
+             )?;
              *gpu_context.borrow_mut() = Some(new_context);
              surface
-         } else {

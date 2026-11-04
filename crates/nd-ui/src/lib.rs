@@ -45,7 +45,9 @@ pub use nd_gesture::{
     TapEvent,
 };
 pub use nd_gpui::gpui::prelude::FluentBuilder;
-pub use nd_gpui::gpui::{Action, KeyBinding, KeyContext, Keystroke, Modifiers, StyleRefinement, Styled};
+pub use nd_gpui::gpui::{
+    Action, KeyBinding, KeyContext, Keystroke, Modifiers, OperatingSystem, StyleRefinement, Styled,
+};
 pub use overlay::{
     DismissCause, Dismissed, Modality, OverlayElement, OverlayKind, OverlayProps, Placement, cover, panel, popover,
     tooltip,

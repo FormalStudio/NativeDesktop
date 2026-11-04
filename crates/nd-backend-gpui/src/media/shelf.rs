@@ -8,7 +8,7 @@ use nd_core::time::{Duration, Instant};
 use nd_core::{NodeId, Rect};
 use nd_gpui::gpui::{
     self, AnyElement, App, DispatchPhase, ElementId, InteractiveElement, IntoElement, MouseMoveEvent, ParentElement,
-    ScrollHandle, ScrollWheelEvent, StatefulInteractiveElement, Styled, Window, canvas, div, point, px,
+    ScrollEvent, ScrollHandle, StatefulInteractiveElement, Styled, Window, canvas, div, point, px,
 };
 
 use crate::forms::glyph::{Glyph, glyph};
@@ -116,7 +116,7 @@ pub(super) fn shelf(
     scroller.style().restrict_scroll_to_axis = Some(true);
     let wheel = {
         let state = state.clone();
-        move |event: &ScrollWheelEvent, window: &mut Window, _: &mut App| {
+        move |event: &ScrollEvent, window: &mut Window, _: &mut App| {
             if event.delta.pixel_delta(px(20.)).x != px(0.) {
                 let mut s = state.borrow_mut();
                 s.wheeled = Some(Instant::now());
@@ -125,7 +125,7 @@ pub(super) fn shelf(
             }
         }
     };
-    let scroller = scroller.on_scroll_wheel(wheel).children(children);
+    let scroller = scroller.on_scroll(wheel).children(children);
 
     let fill = theme.surface.overlay;
     let ink = theme.text.primary;

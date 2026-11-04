@@ -19,7 +19,7 @@ const LIST: NodeId = NodeId(3);
 const EDITOR: NodeId = NodeId(4);
 const TOOLBAR_SEARCH: NodeId = NodeId(5);
 
-fn key(source: &str) -> Keystroke {
+fn key(source: &'static str) -> Keystroke {
     Keystroke::parse(source).expect("valid keystroke")
 }
 
@@ -353,7 +353,7 @@ mod elements {
         cx.open_window(WINDOW, |_, cx| cx.new(|_| Rows { second_first: false, show_last: true, log: Vec::new() }))
     }
 
-    fn press(cx: &mut TestApp, window: &WindowHandle<Rows>, keystroke: &str) -> KeyDispatch {
+    fn press(cx: &mut TestApp, window: &WindowHandle<Rows>, keystroke: &'static str) -> KeyDispatch {
         let result = cx.dispatch_keystroke(window.id(), &key(keystroke));
         cx.run_until_idle();
         result

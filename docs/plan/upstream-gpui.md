@@ -1,6 +1,6 @@
 # Upstreaming the gpui patches
 
-nd carries nine patches on zed (`crates/nd-gpui/patches`, applied to zed@93d7456 by
+nd carries nine patches on zed (`crates/nd-gpui/patches`, applied to zed@f816e1f by
 `scripts/gpui-fork`). This is where each one went in zed-industries/zed, what was measured, and
 what is left. Branches live on [FormalSnake/zed](https://github.com/FormalSnake/zed), rebased on
 zed main 2d4c483 (2026-10-16); the local worktree is
@@ -26,19 +26,19 @@ From `CONTRIBUTING.md` and `.github/pull_request_template.md` on main:
 
 | PR | Branch | Commits (patch) |
 | --- | --- | --- |
-| [#65728](https://github.com/zed-industries/zed/pull/65728) macOS | `gpui-apple-ligature-nudge` | font size nudge only for a run continuing the same font (0008) |
+| [#65728](https://github.com/zed-industries/zed/pull/65728) macOS, merged 2026-10-28 (44ec569, in gpui-pre 0.3.11) | `gpui-apple-ligature-nudge` | font size nudge only for a run continuing the same font (was 0008, dropped from the queue) |
 | [#65729](https://github.com/zed-industries/zed/pull/65729) Windows | `gpui-windows-monitor-vblank` | per-monitor vblank (0006), draw in `WM_SIZING` (0005), grayscale text (0007) |
-| [#65730](https://github.com/zed-industries/zed/pull/65730) Linux | `gpui-wayland-configure-ack` | configure ack with the frame (0003), drop a superseded deferred configure (fix for Codex's review), X11 per-CRTC refresh (0001), live resize surface in gpui_wgpu and its Wayland use (0009, split in two) |
+| [#65730](https://github.com/zed-industries/zed/pull/65730) Linux | `gpui-wayland-configure-ack` | configure ack with the frame (0003), drop a superseded deferred configure (fix for Codex's review), X11 per-CRTC refresh (0001), live resize surface in gpui_wgpu and its Wayland use (0008, split in two) |
 | [discussion #65731](https://github.com/zed-industries/zed/discussions/65731) | `gpui-wayland-presentation-time` | `Window::last_presentation` (0004), a new API, so discussion first |
 | zed [#63313](https://github.com/zed-industries/zed/pull/63313) (not ours) | none | GL only when Vulkan fails (0002) is that PR; drop 0002 when it merges |
 
-0009 changed on the way up: `ND_DEBUG_SWAPCHAIN` is gone, the viewport crop is clamped to the
+0008 changed on the way up: `ND_DEBUG_SWAPCHAIN` is gone, the viewport crop is clamped to the
 attached buffer (wp_viewport rejects a source outside it), and the edge pass is documented as
 what it is: protection against compositors that sample past the crop.
 
 ## Measurements
 
-### Linux interactive resize (0003 and 0009)
+### Linux interactive resize (0003 and 0008)
 
 `crates/nd-os-linux/tests/zed_resize.rs` (Hyprland, labwc) and `scripts/zed-resize-mutter.py`
 (mutter) drag the right border out 240 px and the bottom border 144 px, 120 steps 16 ms apart,
@@ -46,7 +46,7 @@ on a GPUI example built from the zed branch that fills its window with one colou
 every frame (`ZED_PROBE_BIN`), and capture every presented frame. g815, Core Ultra 9 275HX,
 2026-10-17, three runs each, frames rendered per second during the drag:
 
-| Compositor | GPU | main + 0003 | + 0009 |
+| Compositor | GPU | main + 0003 | + 0008 |
 | --- | --- | --- | --- |
 | Hyprland 0.56 | Intel iGPU | 47 to 50 | 59 to 60 |
 | Hyprland 0.56 | lavapipe | 60 | 59 to 60 |
@@ -96,7 +96,6 @@ with `VK_ICD_FILENAMES` at the dev shell's `lvp_icd` or `intel_icd`; for mutter
 
 ## Left
 
-- Codex review comments still open: #65728 (a BOM run, identical fonts under two ids),
-  #65729 (an `unwrap` on the vblank thread spawn, monitor handoff between two caches).
+- Codex review comments still open: #65729 (an `unwrap` on the vblank thread spawn, monitor handoff between two caches).
 - GPUI never drawing under headless mutter with the Intel Vulkan driver, on main too.
 - 0004 waits on a staff reply in #65731 and on #65013 (which also binds `wp_presentation`).

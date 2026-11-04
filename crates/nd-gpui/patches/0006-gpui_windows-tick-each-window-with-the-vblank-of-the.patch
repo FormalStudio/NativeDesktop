@@ -1,8 +1,8 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FormalSnake <kyaniserni@gmail.com>
 Date: Wed, 14 Oct 2026 18:19:53 +0100
-Subject: [PATCH] gpui_windows: tick each window with the vblank of the fastest
- monitor it is on
+Subject: [PATCH 06/19] gpui_windows: tick each window with the vblank of the
+ fastest monitor it is on
 
 ---
  crates/gpui_windows/src/display.rs  |  23 ++++++
@@ -52,7 +52,7 @@ index ea95303..f1afbfa 100644
      let mut monitors: SmallVec<[HMONITOR; 4]> = SmallVec::new();
      unsafe {
 diff --git a/crates/gpui_windows/src/platform.rs b/crates/gpui_windows/src/platform.rs
-index 98009bf..6aa85c3 100644
+index 72731ec..788b553 100644
 --- a/crates/gpui_windows/src/platform.rs
 +++ b/crates/gpui_windows/src/platform.rs
 @@ -1,5 +1,6 @@
@@ -62,7 +62,7 @@ index 98009bf..6aa85c3 100644
      ffi::{OsStr, OsString},
      os::windows::ffi::{OsStrExt as _, OsStringExt as _},
      path::{Path, PathBuf},
-@@ -450,10 +451,40 @@ impl WindowsPlatform {
+@@ -459,10 +460,40 @@ impl WindowsPlatform {
          let text_system = Arc::downgrade(direct_write_text_system);
          let invalidate_devices = self.invalidate_devices.clone();
  
@@ -103,7 +103,7 @@ index 98009bf..6aa85c3 100644
                  loop {
                      let signal_source = vsync_provider.wait_for_vsync();
                      let signal_at = PlatformFrameSignal::capture(scheduler::Instant::now);
-@@ -476,22 +507,14 @@ impl WindowsPlatform {
+@@ -485,22 +516,14 @@ impl WindowsPlatform {
                      let Some(all_windows) = all_windows.upgrade() else {
                          break;
                      };
@@ -133,7 +133,7 @@ index 98009bf..6aa85c3 100644
                      }
                  }
              })
-@@ -499,6 +522,27 @@ impl WindowsPlatform {
+@@ -508,6 +531,27 @@ impl WindowsPlatform {
      }
  }
  
@@ -158,9 +158,9 @@ index 98009bf..6aa85c3 100644
 +    }
 +}
 +
- fn translate_accelerator(msg: &MSG) -> Option<()> {
-     if msg.message != WM_KEYDOWN && msg.message != WM_SYSKEYDOWN {
-         return None;
+ fn encode_restart_arguments(arguments: &[OsString]) -> OsString {
+     // `Start-Process` accepts a single native command line, so quote each argument according to
+     // the Windows argv parsing rules before passing the complete string through the environment.
 diff --git a/crates/gpui_windows/src/vsync.rs b/crates/gpui_windows/src/vsync.rs
 index 5121c41..41f208a 100644
 --- a/crates/gpui_windows/src/vsync.rs

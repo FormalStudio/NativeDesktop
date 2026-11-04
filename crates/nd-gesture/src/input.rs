@@ -69,7 +69,7 @@ pub struct ScrollInput {
     pub modifiers: crate::KeyModifiers,
 }
 
-/// Turns a stream that carries only finger phases (GPUI's `ScrollWheelEvent.touch_phase`, which
+/// Turns a stream that carries only finger phases (GPUI's `ScrollEvent.touch_phase`, which
 /// never reads `momentumPhase`) into one that marks OS momentum: deltas arriving after the
 /// fingers lifted, before the next touch, are the OS's inertia. Where none arrive (Wayland) the
 /// framework's own momentum runs.

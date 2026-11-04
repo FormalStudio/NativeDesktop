@@ -29,7 +29,7 @@ use nd_components::{
 use nd_core::{NodeId, Point, Rect, WindowId};
 use nd_gpui::gpui::{
     self, Anchor, AnyElement, Bounds, DispatchPhase, ElementId, HitboxBehavior, InteractiveElement, IntoElement,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Refineable, ScrollWheelEvent, SharedString,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Refineable, ScrollEvent, SharedString,
     StatefulInteractiveElement, Styled, anchored, canvas, deferred, div, fill, hsla, point, px,
 };
 use nd_theme::color::with_alpha;
@@ -420,7 +420,7 @@ impl Build<'_> {
                 })
                 // The root's wheel handler cannot see through the occluding surface either, so a
                 // scroll view inside the overlay is fed from here.
-                .on_scroll_wheel({
+                .on_scroll({
                     let (backend, wake, window_id) = (self.backend.clone(), self.wake.clone(), self.window_id);
                     move |event, window, cx| {
                         cx.stop_propagation();
@@ -618,7 +618,7 @@ impl Build<'_> {
                     }
                 });
                 let (h, wheel) = (hitbox, count(|c| c.wheel += 1));
-                window.on_mouse_event(move |_: &ScrollWheelEvent, phase, window, cx| {
+                window.on_mouse_event(move |_: &ScrollEvent, phase, window, cx| {
                     if phase == DispatchPhase::Bubble && h.should_handle_scroll(window) {
                         wheel(window, cx);
                     }
@@ -1557,7 +1557,7 @@ mod tests {
 
     #[test]
     fn accelerators_read_as_the_platform_writes_them() {
-        let keys = |binding: &str| {
+        let keys = |binding: &'static str| {
             let k = nd_gpui::gpui::Keystroke::parse(binding).expect("keystroke");
             super::accelerator_text(&k.modifiers, &k.key).to_string()
         };

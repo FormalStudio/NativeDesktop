@@ -1002,7 +1002,7 @@ impl Pick {
             let core = self.handle.0.borrow();
             (core.ids().to_vec(), core.lanes())
         };
-        if k.key == "a" && m.secondary() && !m.shift && !m.alt {
+        if k.key == "a" && m.secondary(cx) && !m.shift && !m.alt {
             if self.selection != Selection::Multiple {
                 return false;
             }
@@ -1010,7 +1010,7 @@ impl Pick {
             self.report(rows, cursor, cx);
             return true;
         }
-        if m.secondary() || m.alt {
+        if m.secondary(cx) || m.alt {
             return false;
         }
         let at = cursor.and_then(|c| ids.iter().position(|r| *r == c));

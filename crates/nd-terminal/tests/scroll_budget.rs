@@ -136,7 +136,7 @@ mod gate_m9_terminal {
 
         use nd_backend_gpui::GpuiHost;
         use nd_gpui::gpui::{
-            self, HeadlessAppContext, Modifiers, PlatformInput, ScrollDelta, ScrollWheelEvent, TouchPhase,
+            self, HeadlessAppContext, Modifiers, PlatformInput, ScrollDelta, ScrollEvent, ScrollSource, TouchPhase,
         };
         use nd_terminal::terminal;
         use nd_ui::prelude::*;
@@ -178,16 +178,17 @@ mod gate_m9_terminal {
             session.scroll_to_bottom();
             let mut work = Vec::with_capacity(frames);
             for _ in 0..frames {
-                let event = ScrollWheelEvent {
+                let event = ScrollEvent {
                     position: gpui::point(px(400.), px(300.)),
                     delta: ScrollDelta::Lines(gpui::point(0., step as f32)),
                     modifiers: Modifiers::default(),
                     touch_phase: TouchPhase::Moved,
+                    source: ScrollSource::Pointer,
                 };
                 work.push(timed(|| {
                     cx.update(|cx| {
                         let _ = handle.update(cx, |_, window, cx| {
-                            window.dispatch_event(PlatformInput::ScrollWheel(event), cx);
+                            window.dispatch_event(PlatformInput::Scroll(event), cx);
                         });
                         host.pump(cx);
                         host.draw(cx);

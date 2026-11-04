@@ -31,10 +31,12 @@ impl Render for Counter {
             .focusable()
             .on_action(move |_: &Bump, _, _| bumps.set(bumps.get() + 1))
             .child(text(self.count.to_string()).id("count").tabular_nums())
-            .child(button("add", "Add one").access_key("A").on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
-                this.count += 1;
-                cx.notify();
-            })))
+            .child(button("add", "Add one").access_key("A").on_click(cx.listener(
+                |this, _: &ClickEvent, _window, cx| {
+                    this.count += 1;
+                    cx.notify();
+                },
+            )))
             .child(div().id("box").w(px(120.)).h(px(40.)).rounded(px(8.)).bg(rgb(0x3366ff)))
     }
 }
@@ -226,7 +228,7 @@ mod gate_m2 {
             });
             settle(cx, &host);
         };
-        let key = |k: &str| Keystroke::parse(k).expect("keystroke");
+        let key = |k: &'static str| Keystroke::parse(k).expect("keystroke");
         send(&mut cx, &[key("alt-a")]);
         assert_eq!(count_text(&host, window), "0", "access keys are the Fluent look's");
 
@@ -367,7 +369,7 @@ mod gate_m4 {
     use std::cell::RefCell;
     use std::time::Duration;
 
-    use nd_gpui::gpui::{PlatformInput, ScrollDelta, ScrollWheelEvent, TouchPhase, point};
+    use nd_gpui::gpui::{PlatformInput, ScrollDelta, ScrollEvent, ScrollSource, TouchPhase, point};
 
     use super::*;
 
@@ -431,18 +433,19 @@ mod gate_m4 {
     }
 
     fn scroll(cx: &mut HeadlessAppContext, host: &GpuiHost, window: WindowId, dy: f32, phase: TouchPhase) {
-        let event = ScrollWheelEvent {
+        let event = ScrollEvent {
             position: point(px(100.), px(100.)),
             delta: ScrollDelta::Pixels(point(px(0.), px(dy))),
             modifiers: Default::default(),
             touch_phase: phase,
+            source: ScrollSource::Pointer,
         };
         // Moves come 8 ms apart, and an end right after the last move: a slow CI runner can
         // oversleep, and a gap of 40 ms before the end would read as a pause with no fling.
         if phase == TouchPhase::Moved {
             std::thread::sleep(Duration::from_millis(8));
         }
-        send(cx, host, window, PlatformInput::ScrollWheel(event));
+        send(cx, host, window, PlatformInput::Scroll(event));
     }
 
     /// Draws frames in real time for `ms`, as the display link would while something animates.
@@ -523,13 +526,14 @@ mod gate_m4 {
         let top = row_top(&host, window);
         let mac = cfg!(target_os = "macos");
         let wheel = |cx: &mut HeadlessAppContext, lines: f32, modifiers: gpui::Modifiers| {
-            let event = ScrollWheelEvent {
+            let event = ScrollEvent {
                 position: point(px(100.), px(100.)),
                 delta: ScrollDelta::Lines(point(0., lines)),
                 modifiers,
                 touch_phase: TouchPhase::Moved,
+                source: ScrollSource::Pointer,
             };
-            send(cx, &host, window, PlatformInput::ScrollWheel(event));
+            send(cx, &host, window, PlatformInput::Scroll(event));
         };
         let held = gpui::Modifiers { control: !mac, platform: mac, ..Default::default() };
         wheel(&mut cx, 2., held);

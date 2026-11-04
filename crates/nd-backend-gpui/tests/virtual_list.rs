@@ -1,6 +1,6 @@
 //! The `nd-virtual` conformance suite on the GPUI presenter (M5 gate), in GPUI's headless app
 //! with the platform's real text system and renderer. Rows are real `nd-ui` views reconciled into
-//! the backend's tree, laid out and painted by GPUI; user scrolls go in as `ScrollWheelEvent`s
+//! the backend's tree, laid out and painted by GPUI; user scrolls go in as `ScrollEvent`s
 //! through the window's input path, and every position is read back from GPUI's own layout.
 
 use std::cell::RefCell;
@@ -9,7 +9,9 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use nd_backend_gpui::GpuiHost;
-use nd_gpui::gpui::{self, HeadlessAppContext, Modifiers, PlatformInput, ScrollDelta, ScrollWheelEvent, TouchPhase};
+use nd_gpui::gpui::{
+    self, HeadlessAppContext, Modifiers, PlatformInput, ScrollDelta, ScrollEvent, ScrollSource, TouchPhase,
+};
 use nd_ui::prelude::*;
 use nd_ui::{NodeId, WindowId};
 use nd_virtual::conformance::{Harness, Painted, Setup};
@@ -131,16 +133,17 @@ impl Harness for Gpui {
         let (viewport, _) = self.painted_rows();
         let at = gpui::point(px(viewport.origin.x + 10.), px(viewport.origin.y + 10.));
         let handle = self.host.window_handle(self.window).expect("gpui window");
-        let event = ScrollWheelEvent {
+        let event = ScrollEvent {
             position: at,
             // A notched wheel: offsets move by exactly the delta, clamped, no momentum or rubber band.
             delta: ScrollDelta::Lines(gpui::point(0., -dy as f32 / 20.)),
             modifiers: Modifiers::default(),
             touch_phase: TouchPhase::Moved,
+            source: ScrollSource::Pointer,
         };
         self.cx.update(|cx| {
             let _ = handle.update(cx, |_, window, cx| {
-                window.dispatch_event(PlatformInput::ScrollWheel(event), cx);
+                window.dispatch_event(PlatformInput::Scroll(event), cx);
             });
         });
         // Windows eases a notch over real time (`GestureConfig::wheel_glide`); the checks read

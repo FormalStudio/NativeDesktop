@@ -74,6 +74,14 @@ pub(crate) fn split(
     if !painted_path {
         return None;
     }
+    // A lifted primitive cannot carry scope markers. Keep scoped paths in
+    // their recorded scene and use the retained paint replay path instead.
+    if operations
+        .iter()
+        .any(|operation| matches!(operation, PaintOperation::FastRoundedClip(_)))
+    {
+        return None;
+    }
     // Every primitive in the order the renderer draws them: by draw order,
     // then by kind, then as inserted.
     let mut sequence: Vec<((u32, u8, usize), &Primitive)> = operations
@@ -111,6 +119,7 @@ pub(crate) fn split(
             PaintOperation::Primitive(primitive) => PaintOperation::Primitive(primitive.clone()),
             PaintOperation::StartLayer(bounds) => PaintOperation::StartLayer(*bounds),
             PaintOperation::EndLayer => PaintOperation::EndLayer,
+            PaintOperation::FastRoundedClip(clip) => PaintOperation::FastRoundedClip(*clip),
         })
         .collect();
     Some((tiles, overlay))
@@ -128,6 +137,9 @@ pub(crate) fn lift(content: Scene) -> (Scene, Rc<[Primitive]>) {
             PaintOperation::Primitive(primitive) => rest.insert_primitive(primitive),
             PaintOperation::StartLayer(bounds) => rest.push_layer(bounds),
             PaintOperation::EndLayer => rest.pop_layer(),
+            PaintOperation::FastRoundedClip(clip) => {
+                crate::fast::rounded_clip::record(&mut rest, clip)
+            }
         }
     }
     rest.finish();

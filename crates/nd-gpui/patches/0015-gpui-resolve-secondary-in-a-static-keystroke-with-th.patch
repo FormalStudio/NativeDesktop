@@ -1,0 +1,91 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: FormalSnake <kyaniserni@gmail.com>
+Date: Wed, 4 Nov 2026 12:25:10 +0000
+Subject: [PATCH 15/19] gpui: resolve secondary- in a static keystroke with the
+ os it was built for
+
+---
+ crates/gpui/src/keymap/binding.rs         |  3 ++-
+ crates/gpui/src/platform/keystroke.rs     | 19 +++++++++++++++++--
+ crates/gpui/src/platform/platform_info.rs | 22 ++++++++++++++++++++++
+ 3 files changed, 41 insertions(+), 3 deletions(-)
+
+diff --git a/crates/gpui/src/keymap/binding.rs b/crates/gpui/src/keymap/binding.rs
+index 1ca888b..c3a77c1 100644
+--- a/crates/gpui/src/keymap/binding.rs
++++ b/crates/gpui/src/keymap/binding.rs
+@@ -31,7 +31,8 @@ impl Clone for KeyBinding {
+ impl KeyBinding {
+     /// Constructs a static keybinding with explicit modifiers. Panics on parse error.
+     ///
+-    /// Use [`Self::load`] for dynamic input or to resolve `secondary-` using the host OS.
++    /// `secondary-` resolves with the OS the binary was built for; use [`Self::load`] for dynamic
++    /// input or to resolve it with the host the application runs on.
+     pub fn new<A: Action>(keystrokes: &'static str, action: A, context: Option<&str>) -> Self {
+         let context_predicate =
+             context.map(|context| KeyBindingContextPredicate::parse(context).unwrap().into());
+diff --git a/crates/gpui/src/platform/keystroke.rs b/crates/gpui/src/platform/keystroke.rs
+index b995508..85d61df 100644
+--- a/crates/gpui/src/platform/keystroke.rs
++++ b/crates/gpui/src/platform/keystroke.rs
+@@ -116,9 +116,10 @@ impl Keystroke {
+     ///
+     /// Syntax: `[ctrl-][alt-][shift-][cmd-][fn-]key[->key_char]`.
+     /// The `key_char` suffix is used for generating test events.
+-    /// Use [`Self::parse_with_os`] for dynamic input or the `secondary-` alias.
++    /// `secondary-` resolves with the OS the binary was built for; use [`Self::parse_with_os`]
++    /// for dynamic input or to resolve it with the host the application runs on.
+     pub fn parse(source: &'static str) -> std::result::Result<Self, InvalidKeystrokeError> {
+-        Self::parse_internal(source, None)
++        Self::parse_internal(source, Some(OperatingSystem::built_for()))
+     }
+ 
+     /// Parses a keystroke, resolving `secondary-` using the supplied host OS.
+@@ -811,3 +812,17 @@ fn unparse(modifiers: &Modifiers, key: &str, os: OperatingSystem) -> String {
+     result.push_str(&key);
+     result
+ }
++
++#[cfg(test)]
++mod tests {
++    use super::{Keystroke, OperatingSystem};
++
++    #[test]
++    fn a_static_secondary_keystroke_resolves_with_the_os_it_was_built_for() {
++        let keystroke = Keystroke::parse("secondary-k").unwrap();
++        let mac = OperatingSystem::built_for() == OperatingSystem::Mac;
++        assert_eq!(keystroke.modifiers.platform, mac);
++        assert_eq!(keystroke.modifiers.control, !mac);
++        assert_eq!(keystroke.key, "k");
++    }
++}
+diff --git a/crates/gpui/src/platform/platform_info.rs b/crates/gpui/src/platform/platform_info.rs
+index e71b787..9b9b8dd 100644
+--- a/crates/gpui/src/platform/platform_info.rs
++++ b/crates/gpui/src/platform/platform_info.rs
+@@ -47,3 +47,25 @@ impl PlatformInfo {
+         self.os == OperatingSystem::Mac
+     }
+ }
++
++impl OperatingSystem {
++    /// The operating system this binary was compiled for. A browser host can differ from it;
++    /// [`crate::App::platform_info`] reports the one the application runs on.
++    pub const fn built_for() -> Self {
++        if cfg!(target_os = "macos") {
++            Self::Mac
++        } else if cfg!(target_os = "windows") {
++            Self::Windows
++        } else if cfg!(target_os = "linux") {
++            Self::Linux
++        } else if cfg!(target_os = "freebsd") {
++            Self::FreeBsd
++        } else if cfg!(target_os = "ios") {
++            Self::Ios
++        } else if cfg!(target_os = "android") {
++            Self::Android
++        } else {
++            Self::Unknown
++        }
++    }
++}

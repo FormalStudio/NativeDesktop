@@ -1,0 +1,36 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: FormalSnake <kyaniserni@gmail.com>
+Date: Wed, 4 Nov 2026 11:41:22 +0000
+Subject: [PATCH 19/19] gpui_linux: give a wayland window that is not resizable
+ a fixed size hint
+
+---
+ crates/gpui_linux/src/linux/wayland/window.rs | 15 ++++++++++++---
+ 1 file changed, 12 insertions(+), 3 deletions(-)
+
+diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/src/linux/wayland/window.rs
+index 7c9bd42..8926e64 100644
+--- a/crates/gpui_linux/src/linux/wayland/window.rs
++++ b/crates/gpui_linux/src/linux/wayland/window.rs
+@@ -650,9 +650,18 @@ impl WaylandWindowState {
+             // Set max window size based on the GPU's maximum texture dimension.
+             // This prevents the window from being resized larger than what the GPU can render.
+             let max_texture_size = renderer.max_texture_size() as i32;
+-            xdg_state
+-                .toplevel
+-                .set_max_size(max_texture_size, max_texture_size);
++            if options.is_resizable {
++                xdg_state
++                    .toplevel
++                    .set_max_size(max_texture_size, max_texture_size);
++            } else {
++                // A fixed size hint (min == max) is how a client asks a tiling compositor
++                // for exactly this size; Hyprland maps such windows floating.
++                let w = f32::from(options.bounds.size.width) as i32;
++                let h = f32::from(options.bounds.size.height) as i32;
++                xdg_state.toplevel.set_min_size(w, h);
++                xdg_state.toplevel.set_max_size(w, h);
++            }
+         }
+ 
+         Ok(Self {

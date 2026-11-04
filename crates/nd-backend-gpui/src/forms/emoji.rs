@@ -772,11 +772,11 @@ mod tests {
         assert_eq!(junk.emoji, ["\u{1f389}"]);
     }
 
-    fn key(k: &str) -> Keystroke {
+    fn key(k: &'static str) -> Keystroke {
         Keystroke::parse(k).unwrap()
     }
 
-    fn typed(c: &str) -> Keystroke {
+    fn typed(c: &'static str) -> Keystroke {
         let mut ks = key(c);
         ks.key_char = Some(c.to_owned());
         ks

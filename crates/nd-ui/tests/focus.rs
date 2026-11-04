@@ -11,7 +11,7 @@ mod gate_m4 {
 
     const WINDOW: Size = Size { width: 400., height: 300. };
 
-    fn key(source: &str) -> Keystroke {
+    fn key(source: &'static str) -> Keystroke {
         Keystroke::parse(source).expect("keystroke")
     }
 
@@ -83,7 +83,7 @@ mod gate_m4 {
         (cx, handle.id(), handle.root().clone(), log)
     }
 
-    fn press(cx: &mut TestApp, window: WindowId, keys: &str) -> dispatch::KeyDispatch {
+    fn press(cx: &mut TestApp, window: WindowId, keys: &'static str) -> dispatch::KeyDispatch {
         let result = cx.dispatch_keystroke(window, &key(keys));
         cx.run_until_idle();
         result

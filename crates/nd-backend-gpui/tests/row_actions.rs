@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use nd_backend_gpui::GpuiHost;
 use nd_gpui::gpui::{
-    HeadlessAppContext, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, PlatformInput, ScrollDelta,
-    ScrollWheelEvent, TouchPhase, point,
+    HeadlessAppContext, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, PlatformInput, ScrollDelta, ScrollEvent,
+    ScrollSource, TouchPhase, point,
 };
 use nd_ui::WindowId;
 use nd_ui::prelude::*;
@@ -78,11 +78,12 @@ fn run() {
     // Row 2 sits at y 88..132; swipe left over it.
     let at = point(px(160.), px(110.));
     let wheel = |dx: f32, phase: TouchPhase| {
-        PlatformInput::ScrollWheel(ScrollWheelEvent {
+        PlatformInput::Scroll(ScrollEvent {
             position: at,
             delta: ScrollDelta::Pixels(point(px(dx), px(0.))),
             modifiers: Modifiers::default(),
             touch_phase: phase,
+            source: ScrollSource::Pointer,
         })
     };
     send(&mut cx, &host, window, wheel(0., TouchPhase::Started));

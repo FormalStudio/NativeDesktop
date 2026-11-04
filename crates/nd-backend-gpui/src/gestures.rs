@@ -263,7 +263,7 @@ impl Gestures {
         })
     }
 
-    pub fn scroll(&self, window: WindowId, event: &gpui::ScrollWheelEvent, tree: Tree<'_>) -> Vec<Output> {
+    pub fn scroll(&self, window: WindowId, event: &gpui::ScrollEvent, tree: Tree<'_>) -> Vec<Output> {
         let at = Point { x: event.position.x.as_f32(), y: event.position.y.as_f32() };
         let (delta, finger) = match event.delta {
             ScrollDelta::Pixels(d) => {

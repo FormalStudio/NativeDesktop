@@ -1070,7 +1070,7 @@ mod tests {
 
     #[test]
     fn keys_map_to_dialog_keys() {
-        let key = |k: &str| dialog_key(&Keystroke::parse(k).expect("keystroke"));
+        let key = |k: &'static str| dialog_key(&Keystroke::parse(k).expect("keystroke"));
         assert_eq!(key("tab"), Some(DialogKey::Next));
         assert_eq!(key("shift-tab"), Some(DialogKey::Previous));
         assert_eq!(key("enter"), Some(DialogKey::Activate));

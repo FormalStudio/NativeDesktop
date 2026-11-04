@@ -401,8 +401,8 @@ impl Rig {
         self.click_at(id, 0.5, 0.5);
     }
 
-    fn keys(&mut self, keys: &[&str]) {
-        let inputs = keys.iter().map(|k| SyntheticInput::Key(Keystroke::parse(k).expect("keystroke"))).collect();
+    fn keys(&mut self, keys: &[&'static str]) {
+        let inputs = keys.iter().map(|k| SyntheticInput::Key(Keystroke::parse(*k).expect("keystroke"))).collect();
         self.input(inputs);
     }
 

@@ -1,3 +1,4 @@
+// Modified by Longbridge for gpui-fast.
 mod anchored;
 mod animation;
 mod canvas;
@@ -17,6 +18,7 @@ pub use animation::*;
 pub use canvas::*;
 pub use container_query::*;
 pub use deferred::*;
+pub use div::ScrollAnchor;
 pub use div::*;
 pub use image_cache::*;
 pub use img::*;

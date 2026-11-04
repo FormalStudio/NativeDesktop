@@ -1,0 +1,316 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: FormalSnake <kyaniserni@gmail.com>
+Date: Tue, 3 Nov 2026 12:22:55 +0000
+Subject: [PATCH 14/19] gpui: open a window as the child of another client's
+ window
+
+---
+ crates/gpui/src/platform.rs                   | 54 +++++++++++++++++++
+ crates/gpui/src/window.rs                     |  2 +
+ crates/gpui_linux/src/linux/wayland/client.rs |  9 ++++
+ crates/gpui_linux/src/linux/wayland/window.rs | 28 ++++++++--
+ crates/gpui_linux/src/linux/x11/client.rs     |  2 +
+ crates/gpui_linux/src/linux/x11/window.rs     | 20 ++++---
+ 6 files changed, 104 insertions(+), 11 deletions(-)
+
+diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
+index bb092ad..e1da9e8 100644
+--- a/crates/gpui/src/platform.rs
++++ b/crates/gpui/src/platform.rs
+@@ -2633,6 +2633,11 @@ pub struct WindowOptions {
+     /// The kind of window to create
+     pub kind: WindowKind,
+ 
++    /// A window of another process to open this one as a child of, in place of the parent
++    /// [`WindowKind::Floating`] and [`WindowKind::Dialog`] otherwise take from the app's own
++    /// windows: a file chooser over the app that asked for it.
++    pub foreign_parent: Option<ForeignParent>,
++
+     /// Whether the window can be moved by the user. When `false`, the user cannot drag
+     /// the window (on macOS this sets `NSWindow.isMovable`, which also disables the
+     /// Window-menu tiling items); programmatic moves are still allowed.
+@@ -2723,6 +2728,9 @@ pub struct WindowParams {
+     #[cfg_attr(any(target_os = "linux", target_os = "freebsd"), allow(dead_code))]
+     pub kind: WindowKind,
+ 
++    #[cfg_attr(not(any(target_os = "linux", target_os = "freebsd")), allow(dead_code))]
++    pub foreign_parent: Option<ForeignParent>,
++
+     /// Whether the window should be movable by the user
+     #[cfg_attr(any(target_os = "linux", target_os = "freebsd"), allow(dead_code))]
+     pub is_movable: bool,
+@@ -2817,6 +2825,7 @@ impl Default for WindowOptions {
+             focus: true,
+             show: true,
+             kind: WindowKind::Normal,
++            foreign_parent: None,
+             is_movable: true,
+             app_owns_titlebar_drag: false,
+             inactive_frame_interval: Some(Duration::from_micros(33_333)),
+@@ -2850,6 +2859,32 @@ pub struct TitlebarOptions {
+     pub traffic_light_position: Option<Point<Pixels>>,
+ }
+ 
++/// A window of another process, by the handle that process exported for it. Only Linux reads
++/// it; a handle of the other display protocol than the one the app runs on is ignored.
++#[derive(Clone, Debug, PartialEq, Eq, Hash)]
++pub enum ForeignParent {
++    /// An xdg-foreign v2 handle, as `zxdg_exported_v2.handle` gave it to the exporting client.
++    Wayland(String),
++    /// An X11 window id.
++    X11(u32),
++}
++
++impl ForeignParent {
++    /// Reads the `wayland:<handle>` and `x11:<hex window id>` form xdg-desktop-portal hands its
++    /// backends as `parent_window`. An empty or unknown string is no parent.
++    pub fn from_portal(parent_window: &str) -> Option<Self> {
++        if let Some(handle) = parent_window.strip_prefix("wayland:") {
++            return (!handle.is_empty()).then(|| Self::Wayland(handle.to_owned()));
++        }
++        let xid = parent_window.strip_prefix("x11:")?;
++        let xid = xid.strip_prefix("0x").unwrap_or(xid);
++        u32::from_str_radix(xid, 16)
++            .ok()
++            .filter(|id| *id != 0)
++            .map(Self::X11)
++    }
++}
++
+ /// The kind of window to create
+ #[derive(Clone, Debug, PartialEq, Eq)]
+ pub enum WindowKind {
+@@ -3980,4 +4015,23 @@ mod tests {
+     fn test_window_button_layout_parse_all_invalid() {
+         assert!(WindowButtonLayout::parse("asdfghjkl").is_err());
+     }
++
++    #[test]
++    fn test_foreign_parent_from_portal() {
++        assert_eq!(
++            ForeignParent::from_portal("wayland:5f1e-aa"),
++            Some(ForeignParent::Wayland("5f1e-aa".into()))
++        );
++        assert_eq!(
++            ForeignParent::from_portal("x11:3c00007"),
++            Some(ForeignParent::X11(0x3c00007))
++        );
++        assert_eq!(
++            ForeignParent::from_portal("x11:0x3c00007"),
++            Some(ForeignParent::X11(0x3c00007))
++        );
++        for none in ["", "wayland:", "x11:", "x11:0", "x11:zz", "mir:1"] {
++            assert_eq!(ForeignParent::from_portal(none), None, "{none:?}");
++        }
++    }
+ }
+diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
+index 9cfaec8..779b7f6 100644
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -1643,6 +1643,7 @@ impl Window {
+             focus,
+             show,
+             kind,
++            foreign_parent,
+             is_movable,
+             app_owns_titlebar_drag,
+             inactive_frame_interval,
+@@ -1677,6 +1678,7 @@ impl Window {
+                 bounds: window_bounds.get_bounds(),
+                 titlebar,
+                 kind,
++                foreign_parent,
+                 is_movable,
+                 app_owns_titlebar_drag,
+                 is_resizable,
+diff --git a/crates/gpui_linux/src/linux/wayland/client.rs b/crates/gpui_linux/src/linux/wayland/client.rs
+index 53539ab..321c004 100644
+--- a/crates/gpui_linux/src/linux/wayland/client.rs
++++ b/crates/gpui_linux/src/linux/wayland/client.rs
+@@ -66,6 +66,7 @@ use wayland_protocols::xdg::activation::v1::client::{xdg_activation_token_v1, xd
+ use wayland_protocols::xdg::decoration::zv1::client::{
+     zxdg_decoration_manager_v1, zxdg_toplevel_decoration_v1,
+ };
++use wayland_protocols::xdg::foreign::zv2::client::{zxdg_imported_v2, zxdg_importer_v2};
+ use wayland_protocols::xdg::shell::client::{
+     xdg_popup, xdg_positioner, xdg_surface, xdg_toplevel, xdg_wm_base,
+ };
+@@ -263,6 +264,7 @@ pub struct Globals {
+     pub text_input_manager: Option<zwp_text_input_manager_v3::ZwpTextInputManagerV3>,
+     pub gesture_manager: Option<zwp_pointer_gestures_v1::ZwpPointerGesturesV1>,
+     pub dialog: Option<xdg_wm_dialog_v1::XdgWmDialogV1>,
++    pub foreign_importer: Option<zxdg_importer_v2::ZxdgImporterV2>,
+     pub system_bell: Option<xdg_system_bell_v1::XdgSystemBellV1>,
+     pub presentation: Option<wp_presentation::WpPresentation>,
+     pub executor: ForegroundExecutor,
+@@ -315,6 +317,7 @@ impl Globals {
+             text_input_manager: globals.bind(&qh, 1..=1, ()).ok(),
+             gesture_manager: globals.bind(&qh, 1..=3, ()).ok(),
+             dialog: globals.bind(&qh, dialog_v..=dialog_v, ()).ok(),
++            foreign_importer: globals.bind(&qh, 1..=1, ()).ok(),
+             system_bell: globals.bind(&qh, 1..=1, ()).ok(),
+             presentation: globals.bind(&qh, 1..=1, ()).ok(),
+             executor,
+@@ -1325,6 +1328,8 @@ impl WaylandConnection {
+                 });
+                 (Some(parent), popup_grab.flatten())
+             }
++            // A window of another client takes the place of the app's own.
++            _ if params.foreign_parent.is_some() => (None, None),
+             _ => (state.keyboard_focused_window.clone(), None),
+         };
+ 
+@@ -1689,6 +1694,10 @@ delegate_noop!(WaylandClientStatePtr: ignore zwp_text_input_manager_v3::ZwpTextI
+ delegate_noop!(WaylandClientStatePtr: ignore org_kde_kwin_blur::OrgKdeKwinBlur);
+ delegate_noop!(WaylandClientStatePtr: ignore wp_viewporter::WpViewporter);
+ delegate_noop!(WaylandClientStatePtr: ignore wp_viewport::WpViewport);
++delegate_noop!(WaylandClientStatePtr: ignore zxdg_importer_v2::ZxdgImporterV2);
++// `destroyed` (the parent went away) needs no answer: the compositor has already dropped the
++// relationship, and the child is left a toplevel of its own.
++delegate_noop!(WaylandClientStatePtr: ignore zxdg_imported_v2::ZxdgImportedV2);
+ 
+ impl Dispatch<WlCallback, ObjectId> for WaylandClientStatePtr {
+     fn event(
+diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/src/linux/wayland/window.rs
+index 811fe2b..4d56ac2 100644
+--- a/crates/gpui_linux/src/linux/wayland/window.rs
++++ b/crates/gpui_linux/src/linux/wayland/window.rs
+@@ -21,6 +21,7 @@ use wayland_client::{
+ use wayland_protocols::ext::background_effect::v1::client::ext_background_effect_surface_v1;
+ use wayland_protocols::wp::viewporter::client::wp_viewport;
+ use wayland_protocols::xdg::decoration::zv1::client::zxdg_toplevel_decoration_v1;
++use wayland_protocols::xdg::foreign::zv2::client::zxdg_imported_v2;
+ use wayland_protocols::xdg::shell::client::xdg_popup;
+ use wayland_protocols::xdg::shell::client::xdg_positioner;
+ use wayland_protocols::xdg::shell::client::xdg_surface;
+@@ -36,7 +37,7 @@ use crate::linux::wayland::{display::WaylandDisplay, serial::SerialKind};
+ use crate::linux::{Globals, Output, PendingActivation, WaylandClientStatePtr, get_window};
+ use gpui::{
+     AnyWindowHandle, Bounds, Capslock, Corners, Decorations, DevicePixels, ExternalDragPayload,
+-    FrameRequestSource, GpuSpecs, Modifiers, Pixels, PlatformAtlas, PlatformDisplay,
++    ForeignParent, FrameRequestSource, GpuSpecs, Modifiers, Pixels, PlatformAtlas, PlatformDisplay,
+     PlatformFrameSignal, PlatformInput, PlatformInputHandler, PlatformWindow, Point, PromptButton,
+     PromptLevel, RequestFrameOptions, ResizeEdge, Scene, Size, Tiling, WindowAppearance,
+     WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowControls, WindowDecorations,
+@@ -283,10 +284,23 @@ impl WaylandSurfaceState {
+         let toplevel = xdg_surface.get_toplevel(&globals.qh, surface.id());
+         let xdg_parent = parent.as_ref().and_then(|w| w.toplevel());
+ 
+-        if params.kind == WindowKind::Floating || params.kind == WindowKind::Dialog {
++        let child = params.kind == WindowKind::Floating || params.kind == WindowKind::Dialog;
++        if child {
+             toplevel.set_parent(xdg_parent.as_ref());
+         }
+ 
++        // Before the first commit, so the compositor maps the window as the child it is (Hyprland
++        // floats it centred over the parent). The import lives as long as the window: destroying
++        // it ends the relationship.
++        let imported = match (&params.foreign_parent, &globals.foreign_importer) {
++            (Some(ForeignParent::Wayland(handle)), Some(importer)) if child => {
++                let imported = importer.import_toplevel(handle.clone(), &globals.qh, ());
++                imported.set_parent_of(surface);
++                Some(imported)
++            }
++            _ => None,
++        };
++
+         let dialog = if params.kind == WindowKind::Dialog {
+             let dialog = globals.dialog.as_ref().map(|dialog| {
+                 let xdg_dialog = dialog.get_xdg_dialog(&toplevel, &globals.qh, ());
+@@ -320,6 +334,7 @@ impl WaylandSurfaceState {
+             toplevel,
+             decoration,
+             dialog,
++            imported,
+         }))
+     }
+ }
+@@ -329,6 +344,7 @@ pub struct WaylandXdgSurfaceState {
+     toplevel: xdg_toplevel::XdgToplevel,
+     decoration: Option<zxdg_toplevel_decoration_v1::ZxdgToplevelDecorationV1>,
+     dialog: Option<XdgDialogV1>,
++    imported: Option<zxdg_imported_v2::ZxdgImportedV2>,
+ }
+ 
+ pub struct WaylandLayerSurfaceState {
+@@ -538,11 +554,15 @@ impl WaylandSurfaceState {
+                 toplevel,
+                 decoration: _decoration,
+                 dialog,
++                imported,
+             }) => {
+                 // drop the dialog before toplevel so compositor can explicitly unapply it's effects
+                 if let Some(dialog) = dialog {
+                     dialog.destroy();
+                 }
++                if let Some(imported) = imported {
++                    imported.destroy();
++                }
+ 
+                 // The role object (toplevel) must always be destroyed before the xdg_surface.
+                 // See https://wayland.app/protocols/xdg-shell#xdg_surface:request:destroy
+@@ -2116,8 +2136,8 @@ impl PlatformWindow for WaylandWindow {
+         if let Some(presentation) = &state.globals.presentation {
+             presentation.feedback(&state.surface, &state.globals.qh, state.surface.id());
+         }
+-        let source = (renderer.surface_size() != renderer.drawable_size())
+-            .then(|| renderer.drawable_size());
++        let source =
++            (renderer.surface_size() != renderer.drawable_size()).then(|| renderer.drawable_size());
+         let previous_source = state.viewport_source;
+         if source != previous_source
+             && let Some(viewport) = &state.viewport
+diff --git a/crates/gpui_linux/src/linux/x11/client.rs b/crates/gpui_linux/src/linux/x11/client.rs
+index d5bb6da..f2ae756 100644
+--- a/crates/gpui_linux/src/linux/x11/client.rs
++++ b/crates/gpui_linux/src/linux/x11/client.rs
+@@ -1695,8 +1695,10 @@ impl X11Client {
+         params: WindowParams,
+     ) -> anyhow::Result<Box<dyn PlatformWindow>> {
+         let mut state = self.0.borrow_mut();
++        // A window of another client takes the place of the app's own.
+         let parent_window = state
+             .keyboard_focused_window
++            .filter(|_| params.foreign_parent.is_none())
+             .and_then(|focused_window| state.windows.get(&focused_window))
+             .map(|w| w.window.clone());
+         let x_window = state
+diff --git a/crates/gpui_linux/src/linux/x11/window.rs b/crates/gpui_linux/src/linux/x11/window.rs
+index f6ee76a..95f31fe 100644
+--- a/crates/gpui_linux/src/linux/x11/window.rs
++++ b/crates/gpui_linux/src/linux/x11/window.rs
+@@ -3,12 +3,12 @@ use x11rb::connection::RequestConnection;
+ 
+ use crate::linux::X11ClientStatePtr;
+ use gpui::{
+-    AnyWindowHandle, Bounds, Decorations, DevicePixels, ForegroundExecutor, GpuSpecs, Modifiers,
+-    Pixels, PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow,
+-    Point, PromptButton, PromptLevel, RequestFrameOptions, ResizeEdge, ScaledPixels, Scene, Size,
+-    Tiling, WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControlArea,
+-    WindowDecorations, WindowKind, WindowParams, WindowVisibility, popup::PopupNotSupportedError,
+-    px,
++    AnyWindowHandle, Bounds, Decorations, DevicePixels, ForegroundExecutor, ForeignParent,
++    GpuSpecs, Modifiers, Pixels, PlatformAtlas, PlatformDisplay, PlatformInput,
++    PlatformInputHandler, PlatformWindow, Point, PromptButton, PromptLevel, RequestFrameOptions,
++    ResizeEdge, ScaledPixels, Scene, Size, Tiling, WindowAppearance, WindowBackgroundAppearance,
++    WindowBounds, WindowControlArea, WindowDecorations, WindowKind, WindowParams, WindowVisibility,
++    popup::PopupNotSupportedError, px,
+ };
+ use gpui_wgpu::{CompositorGpuHint, WgpuRenderer, WgpuSurfaceConfig};
+ 
+@@ -627,7 +627,13 @@ impl X11WindowState {
+             }
+ 
+             if params.kind == WindowKind::Floating || params.kind == WindowKind::Dialog {
+-                if let Some(parent_window) = parent_window.as_ref().map(|w| w.x_window) {
++                let foreign = match params.foreign_parent {
++                    Some(ForeignParent::X11(xid)) => Some(xid),
++                    _ => None,
++                };
++                if let Some(parent_window) =
++                    foreign.or_else(|| parent_window.as_ref().map(|w| w.x_window))
++                {
+                     // WM_TRANSIENT_FOR hint indicating the main application window. For floating windows, we set
+                     // a parent window (WM_TRANSIENT_FOR) such that the window manager knows where to
+                     // place the floating window in relation to the main window.

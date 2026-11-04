@@ -72,7 +72,8 @@ fn main() {
             host.pump(cx);
             host.draw(cx);
         });
-        std::thread::sleep(std::time::Duration::from_millis(16));
+        // GPUI's animations run on the executor's clock, which only moves here when advanced.
+        cx.advance_clock(std::time::Duration::from_millis(16));
     }
     let files = host.read(|app| find(&app.semantic_window(window).expect("window").root, "files").cloned());
     let bounds = files.and_then(|n| n.bounds).expect("the menu's first item is laid out");

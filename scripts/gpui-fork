@@ -114,6 +114,12 @@ $pkg = { path = \"crates/nd-gpui/vendor/$pkg\" }"
       pkg=$(fast_package_for "$dir")
       src=$(ls -d "${CARGO_HOME:-$HOME/.cargo}"/registry/src/*/"$pkg-$fast_version" 2>/dev/null | head -1)
       [ -n "$src" ] || continue
+      # gpui-fast rewrites some of what the queue changes (gpui-fast-windows 0.1.13: the vsync
+      # loop 0006 changes). Such a crate stays unpatched: nd-gpui/fast is opt-in and no app ships it.
+      if ! git -C "$tmp/zed" diff --cached "$(get zed_rev)" -- "crates/$dir" | patch -s -p3 --dry-run -d "$src" >/dev/null 2>&1; then
+        say "the queue's change to crates/$dir does not apply to $pkg $fast_version; nd-gpui/fast builds it unpatched" >&2
+        continue
+      fi
       cp -R "$src" "$out/crates/nd-gpui/vendor/$pkg"
       git -C "$tmp/zed" diff --cached "$(get zed_rev)" -- "crates/$dir" |
         patch -s -p3 --no-backup-if-mismatch -d "$out/crates/nd-gpui/vendor/$pkg" || die "the queue's change to crates/$dir does not apply to $pkg $fast_version"
@@ -186,8 +192,8 @@ cmd_bump() {
   set_conf crate_version "$version"
   set_conf zed_rev "$rev"
   set_conf branch "$branch"
-  OLD=$old_version NEW=$version perl -pi -e 's/(package = "gpui-pre(-platform)?", version = ")=\Q$ENV{OLD}\E"/$1=$ENV{NEW}"/' "$workspace"
-  NEW=$fast perl -pi -e 's/(package = "gpui-fast(-platform)?", version = ")=[^"]*"/$1=$ENV{NEW}"/' "$workspace"
+  OLD=$old_version NEW=$version perl -pi -e 's/(package = "gpui-pre(-[a-z]+)?", version = ")=\Q$ENV{OLD}\E"/$1=$ENV{NEW}"/' "$workspace"
+  NEW=$fast perl -pi -e 's/(package = "gpui-fast(-[a-z]+)?", version = ")=[^"]*"/$1=$ENV{NEW}"/' "$workspace"
   [ -z "$(queue)" ] || cmd_export
   cmd_vendor
   say "gpui-pre $old_version (zed@${old_rev:0:7}) -> $version (zed@${rev:0:7}); running the gate"

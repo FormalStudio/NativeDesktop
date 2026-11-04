@@ -221,7 +221,8 @@ impl HostBuilder {
         });
         inner.backend.attach_app(cx.to_async(), wake);
         if inner.debug.diag {
-            let keys = cx.observe_keystrokes(|event, _, _| eprintln!("nd: key {}", event.keystroke.unparse()));
+            let os = cx.platform_info().os;
+            let keys = cx.observe_keystrokes(move |event, _, _| eprintln!("nd: key {}", event.keystroke.unparse(os)));
             inner.subscriptions.borrow_mut().push(keys);
         }
         inner.listen(cx, rx);
@@ -1336,7 +1337,7 @@ impl Inner {
                     });
                 }
             })
-            .on_scroll_wheel(move |event, window, cx| {
+            .on_scroll(move |event, window, cx| {
                 let Some(inner) = wheel.upgrade() else { return };
                 inner.gesture_input(id, window, cx, |g, tree| g.scroll(id, event, tree));
             })

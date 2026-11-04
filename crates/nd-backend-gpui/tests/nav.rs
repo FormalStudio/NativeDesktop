@@ -143,7 +143,7 @@ fn open(nav: impl FnOnce(Rc<RefCell<Log>>) -> Nav + 'static) -> Opened {
     Opened { cx, host, window, log, view: Some(view) }
 }
 
-fn press(o: &mut Opened, key: &str) {
+fn press(o: &mut Opened, key: &'static str) {
     let keystroke = Keystroke::parse(key).expect("keystroke");
     let window = o.window;
     o.cx.update(|cx| o.host.update(cx, |app| app.synthesize(window, &SyntheticInput::Key(keystroke)))).expect("posted");

@@ -344,9 +344,9 @@ impl Opened {
         settle(&mut self.cx, &self.host);
     }
 
-    fn keys(&mut self, keys: &[&str]) {
+    fn keys(&mut self, keys: &[&'static str]) {
         for key in keys {
-            self.input(vec![SyntheticInput::Key(Keystroke::parse(key).expect("keystroke"))]);
+            self.input(vec![SyntheticInput::Key(Keystroke::parse(*key).expect("keystroke"))]);
         }
     }
 

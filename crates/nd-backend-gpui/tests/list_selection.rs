@@ -62,7 +62,7 @@ fn moved(x: f32, y: f32) -> PlatformInput {
     })
 }
 
-fn key(k: &str) -> Vec<PlatformInput> {
+fn key(k: &'static str) -> Vec<PlatformInput> {
     let keystroke = Keystroke::parse(k).expect("keystroke");
     vec![PlatformInput::KeyDown(KeyDownEvent { keystroke, is_held: false, prefer_character_input: false })]
 }
@@ -70,7 +70,7 @@ fn key(k: &str) -> Vec<PlatformInput> {
 const SHIFT: Modifiers = Modifiers { shift: true, control: false, alt: false, platform: false, function: false };
 
 fn secondary() -> Modifiers {
-    Modifiers::secondary_key()
+    if cfg!(target_os = "macos") { Modifiers::command() } else { Modifiers::control() }
 }
 
 fn open<V: Render>(
@@ -337,11 +337,11 @@ impl Render for Rename {
     }
 }
 
-fn keys(cx: &mut HeadlessAppContext, host: &GpuiHost, window: WindowId, keys: &[&str]) {
+fn keys(cx: &mut HeadlessAppContext, host: &GpuiHost, window: WindowId, keys: &[&'static str]) {
     cx.update(|cx| {
         host.update(cx, |app| {
             for k in keys {
-                let key = nd_ui::semantics::SyntheticInput::Key(Keystroke::parse(k).expect("keystroke"));
+                let key = nd_ui::semantics::SyntheticInput::Key(Keystroke::parse(*k).expect("keystroke"));
                 app.synthesize(window, &key).expect("posted");
             }
         })

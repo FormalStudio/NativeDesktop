@@ -12,7 +12,7 @@ use std::time::Duration;
 use nd_backend_gpui::GpuiHost;
 use nd_gpui::gpui::{
     HeadlessAppContext, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, PlatformInput,
-    ScrollDelta, ScrollWheelEvent, TouchPhase, point,
+    ScrollDelta, ScrollEvent, ScrollSource, TouchPhase, point,
 };
 use nd_ui::WindowId;
 use nd_ui::prelude::*;
@@ -396,15 +396,16 @@ impl Render for Columns {
 
 fn wheel(cx: &mut HeadlessAppContext, host: &GpuiHost, window: WindowId, at: (f32, f32), dx: f32, dy: f32) {
     let handle = host.window_handle(window).expect("gpui window");
-    let event = ScrollWheelEvent {
+    let event = ScrollEvent {
         position: point(px(at.0), px(at.1)),
         // A notched wheel, so each call is a gesture of its own rather than one trackpad session.
         delta: ScrollDelta::Lines(point(-dx / 20., -dy / 20.)),
         modifiers: Modifiers::default(),
         touch_phase: TouchPhase::Moved,
+        source: ScrollSource::Pointer,
     };
     cx.update(|cx| {
-        let _ = handle.update(cx, |_, window, cx| window.dispatch_event(PlatformInput::ScrollWheel(event), cx));
+        let _ = handle.update(cx, |_, window, cx| window.dispatch_event(PlatformInput::Scroll(event), cx));
     });
     let glide = Duration::from_secs_f64(nd_gesture::GestureConfig::default().wheel_glide);
     let until = std::time::Instant::now() + glide + Duration::from_millis(50);

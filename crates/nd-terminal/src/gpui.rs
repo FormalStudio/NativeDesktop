@@ -18,8 +18,8 @@ use nd_gpui::gpui::{
     self, AnyElement, App, Bounds, ClipboardItem, CursorStyle, DispatchPhase, Element, ElementId, FocusHandle, Font,
     FontFallbacks, FontStyle, FontWeight, GlobalElementId, Hitbox, HitboxBehavior, Hsla, InspectorElementId,
     IntoElement, KeyDownEvent, KeyUpEvent, LayoutId, Modifiers, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
-    Point, RenderImage, ScrollDelta, ScrollWheelEvent, SharedString, Style, TextRun, UTF16Selection, UnderlineStyle,
-    Window, fill, point, px, size,
+    Point, RenderImage, ScrollDelta, ScrollEvent, SharedString, Style, TextRun, UTF16Selection, UnderlineStyle, Window,
+    fill, point, px, size,
 };
 use nd_theme::Theme;
 use nd_theme::color::with_alpha;
@@ -503,7 +503,7 @@ impl TerminalElement {
         let emit = self.emit.clone();
         let wake = self.wake.clone();
         let hit = hitbox.clone();
-        window.on_mouse_event(move |e: &ScrollWheelEvent, phase, window, cx| {
+        window.on_mouse_event(move |e: &ScrollEvent, phase, window, cx| {
             if phase != DispatchPhase::Bubble || !hit.is_hovered(window) {
                 return;
             }

@@ -1,0 +1,29 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: FormalSnake <kyaniserni@gmail.com>
+Date: Wed, 4 Nov 2026 13:56:00 +0000
+Subject: [PATCH 18/19] gpui_windows: leave a caption press to DefWindowProc
+
+A press on a drag area belongs to DefWindowProc: its move loop, Snap, and maximize on double
+click. Dispatched as a mouse down, the element that owns the area takes it, and the window
+never moves.
+---
+ crates/gpui_windows/src/events.rs | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/crates/gpui_windows/src/events.rs b/crates/gpui_windows/src/events.rs
+index 465b6b1..0c8b852 100644
+--- a/crates/gpui_windows/src/events.rs
++++ b/crates/gpui_windows/src/events.rs
+@@ -1083,6 +1083,12 @@ impl WindowsWindowInner {
+         wparam: WPARAM,
+         lparam: LPARAM,
+     ) -> Option<isize> {
++        // A press on a drag area belongs to `DefWindowProc`: its move loop, Snap, and maximize
++        // on double click. Dispatched, the element that owns the area takes it (it starts its
++        // own move on other platforms), and the window never moves.
++        if wparam.0 as u32 == HTCAPTION {
++            return None;
++        }
+         if let Some(mut func) = self.state.callbacks.input.take() {
+             let scale_factor = self.state.scale_factor.get();
+             let mut cursor_point = POINT {
