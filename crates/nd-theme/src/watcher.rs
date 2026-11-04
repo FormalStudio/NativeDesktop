@@ -62,8 +62,11 @@ struct Targets {
     files: Vec<PathBuf>,
 }
 
+/// The directory is canonical because FSEvents names paths by their real location (a temp dir
+/// under `/var` arrives as `/private/var`), and events are matched against these paths.
 fn targets(path: &Path, dir: &Path) -> Targets {
-    let mut t = Targets { dirs: vec![dir.to_path_buf()], files: Vec::new() };
+    let dir = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
+    let mut t = Targets { dirs: vec![dir.clone()], files: Vec::new() };
     if let Some(name) = path.file_name() {
         t.files.push(dir.join(name));
     }
