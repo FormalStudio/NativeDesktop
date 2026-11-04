@@ -282,6 +282,11 @@ impl WaylandSurfaceState {
             .get_xdg_surface(&surface, &globals.qh, surface.id());
 
         let toplevel = xdg_surface.get_toplevel(&globals.qh, surface.id());
+        if let (Some(manager), Some(tag)) =
+            (&globals.toplevel_tag, TOPLEVEL_TAG.lock().unwrap().clone())
+        {
+            manager.set_toplevel_tag(&toplevel, tag);
+        }
         let xdg_parent = parent.as_ref().and_then(|w| w.toplevel());
 
         let child = params.kind == WindowKind::Floating || params.kind == WindowKind::Dialog;
@@ -337,6 +342,14 @@ impl WaylandSurfaceState {
             imported,
         }))
     }
+}
+
+/// xdg-toplevel-tag for every toplevel opened from now on, so compositors can
+/// match the client's windows in their rules.
+static TOPLEVEL_TAG: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+pub fn set_toplevel_tag(tag: Option<String>) {
+    *TOPLEVEL_TAG.lock().unwrap() = tag;
 }
 
 pub struct WaylandXdgSurfaceState {

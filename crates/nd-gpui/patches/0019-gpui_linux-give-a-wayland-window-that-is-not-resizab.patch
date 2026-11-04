@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FormalSnake <kyaniserni@gmail.com>
 Date: Wed, 4 Nov 2026 11:41:22 +0000
-Subject: [PATCH 19/19] gpui_linux: give a wayland window that is not resizable
+Subject: [PATCH 19/20] gpui_linux: give a wayland window that is not resizable
  a fixed size hint
 
 ---

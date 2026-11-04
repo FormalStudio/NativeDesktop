@@ -1,0 +1,115 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: FormalSnake <kyaniserni@gmail.com>
+Date: Wed, 4 Nov 2026 15:22:06 +0000
+Subject: [PATCH 20/20] gpui_linux: tag wayland toplevels with xdg-toplevel-tag
+
+---
+ crates/gpui_linux/src/gpui_linux.rs           |  2 ++
+ crates/gpui_linux/src/linux.rs                |  2 ++
+ crates/gpui_linux/src/linux/wayland.rs        |  1 +
+ crates/gpui_linux/src/linux/wayland/client.rs |  4 ++++
+ crates/gpui_linux/src/linux/wayland/window.rs | 13 +++++++++++++
+ 5 files changed, 22 insertions(+)
+
+diff --git a/crates/gpui_linux/src/gpui_linux.rs b/crates/gpui_linux/src/gpui_linux.rs
+index a5390e7..23d735e 100644
+--- a/crates/gpui_linux/src/gpui_linux.rs
++++ b/crates/gpui_linux/src/gpui_linux.rs
+@@ -2,3 +2,5 @@
+ mod linux;
+ 
+ pub use linux::{current_platform, linux_platform};
++#[cfg(feature = "wayland")]
++pub use linux::set_toplevel_tag;
+diff --git a/crates/gpui_linux/src/linux.rs b/crates/gpui_linux/src/linux.rs
+index c5afc4a..8e4036f 100644
+--- a/crates/gpui_linux/src/linux.rs
++++ b/crates/gpui_linux/src/linux.rs
+@@ -25,6 +25,8 @@ pub(crate) use platform::*;
+ pub(crate) use text_system::*;
+ #[cfg(feature = "wayland")]
+ pub(crate) use wayland::*;
++#[cfg(feature = "wayland")]
++pub use wayland::set_toplevel_tag;
+ #[cfg(feature = "x11")]
+ pub(crate) use x11::*;
+ 
+diff --git a/crates/gpui_linux/src/linux/wayland.rs b/crates/gpui_linux/src/linux/wayland.rs
+index cbc962b..6d929e0 100644
+--- a/crates/gpui_linux/src/linux/wayland.rs
++++ b/crates/gpui_linux/src/linux/wayland.rs
+@@ -10,6 +10,7 @@ mod window;
+ pub mod layer_shell;
+ 
+ pub(crate) use client::*;
++pub use window::set_toplevel_tag;
+ 
+ use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape;
+ 
+diff --git a/crates/gpui_linux/src/linux/wayland/client.rs b/crates/gpui_linux/src/linux/wayland/client.rs
+index 321c004..daeb923 100644
+--- a/crates/gpui_linux/src/linux/wayland/client.rs
++++ b/crates/gpui_linux/src/linux/wayland/client.rs
+@@ -71,6 +71,7 @@ use wayland_protocols::xdg::shell::client::{
+     xdg_popup, xdg_positioner, xdg_surface, xdg_toplevel, xdg_wm_base,
+ };
+ use wayland_protocols::xdg::system_bell::v1::client::xdg_system_bell_v1;
++use wayland_protocols::xdg::toplevel_tag::v1::client::xdg_toplevel_tag_manager_v1;
+ use wayland_protocols::{
+     wp::cursor_shape::v1::client::{wp_cursor_shape_device_v1, wp_cursor_shape_manager_v1},
+     xdg::dialog::v1::client::xdg_wm_dialog_v1::{self, XdgWmDialogV1},
+@@ -266,6 +267,7 @@ pub struct Globals {
+     pub dialog: Option<xdg_wm_dialog_v1::XdgWmDialogV1>,
+     pub foreign_importer: Option<zxdg_importer_v2::ZxdgImporterV2>,
+     pub system_bell: Option<xdg_system_bell_v1::XdgSystemBellV1>,
++    pub toplevel_tag: Option<xdg_toplevel_tag_manager_v1::XdgToplevelTagManagerV1>,
+     pub presentation: Option<wp_presentation::WpPresentation>,
+     pub executor: ForegroundExecutor,
+     pub frame_ping: Ping,
+@@ -319,6 +321,7 @@ impl Globals {
+             dialog: globals.bind(&qh, dialog_v..=dialog_v, ()).ok(),
+             foreign_importer: globals.bind(&qh, 1..=1, ()).ok(),
+             system_bell: globals.bind(&qh, 1..=1, ()).ok(),
++            toplevel_tag: globals.bind(&qh, 1..=1, ()).ok(),
+             presentation: globals.bind(&qh, 1..=1, ()).ok(),
+             executor,
+             qh,
+@@ -1674,6 +1677,7 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for WaylandClientStat
+ 
+ delegate_noop!(WaylandClientStatePtr: ignore xdg_activation_v1::XdgActivationV1);
+ delegate_noop!(WaylandClientStatePtr: ignore xdg_system_bell_v1::XdgSystemBellV1);
++delegate_noop!(WaylandClientStatePtr: ignore xdg_toplevel_tag_manager_v1::XdgToplevelTagManagerV1);
+ delegate_noop!(WaylandClientStatePtr: ignore wl_compositor::WlCompositor);
+ delegate_noop!(WaylandClientStatePtr: ignore wp_cursor_shape_device_v1::WpCursorShapeDeviceV1);
+ delegate_noop!(WaylandClientStatePtr: ignore wp_cursor_shape_manager_v1::WpCursorShapeManagerV1);
+diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/src/linux/wayland/window.rs
+index 8926e64..9beebea 100644
+--- a/crates/gpui_linux/src/linux/wayland/window.rs
++++ b/crates/gpui_linux/src/linux/wayland/window.rs
+@@ -282,6 +282,11 @@ impl WaylandSurfaceState {
+             .get_xdg_surface(&surface, &globals.qh, surface.id());
+ 
+         let toplevel = xdg_surface.get_toplevel(&globals.qh, surface.id());
++        if let (Some(manager), Some(tag)) =
++            (&globals.toplevel_tag, TOPLEVEL_TAG.lock().unwrap().clone())
++        {
++            manager.set_toplevel_tag(&toplevel, tag);
++        }
+         let xdg_parent = parent.as_ref().and_then(|w| w.toplevel());
+ 
+         let child = params.kind == WindowKind::Floating || params.kind == WindowKind::Dialog;
+@@ -339,6 +344,14 @@ impl WaylandSurfaceState {
+     }
+ }
+ 
++/// xdg-toplevel-tag for every toplevel opened from now on, so compositors can
++/// match the client's windows in their rules.
++static TOPLEVEL_TAG: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
++
++pub fn set_toplevel_tag(tag: Option<String>) {
++    *TOPLEVEL_TAG.lock().unwrap() = tag;
++}
++
+ pub struct WaylandXdgSurfaceState {
+     xdg_surface: xdg_surface::XdgSurface,
+     toplevel: xdg_toplevel::XdgToplevel,

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FormalSnake <kyaniserni@gmail.com>
 Date: Sat, 17 Oct 2026 14:32:33 +0100
-Subject: [PATCH 09/19] gpui_linux: phase a touchpad's wayland scroll from
+Subject: [PATCH 09/20] gpui_linux: phase a touchpad's wayland scroll from
  axis_source(finger) to axis_stop, one to one
 
 ---

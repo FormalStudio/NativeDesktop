@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FormalSnake <kyaniserni@gmail.com>
 Date: Thu, 22 Oct 2026 08:42:09 +0100
-Subject: [PATCH 13/19] gpui: repaint a hover style on an element without an id
+Subject: [PATCH 13/20] gpui: repaint a hover style on an element without an id
  when the pointer crosses it
 
 ---

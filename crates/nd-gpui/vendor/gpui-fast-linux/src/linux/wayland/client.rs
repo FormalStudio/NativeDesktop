@@ -72,6 +72,7 @@ use wayland_protocols::xdg::shell::client::{
     xdg_popup, xdg_positioner, xdg_surface, xdg_toplevel, xdg_wm_base,
 };
 use wayland_protocols::xdg::system_bell::v1::client::xdg_system_bell_v1;
+use wayland_protocols::xdg::toplevel_tag::v1::client::xdg_toplevel_tag_manager_v1;
 use wayland_protocols::{
     wp::cursor_shape::v1::client::{wp_cursor_shape_device_v1, wp_cursor_shape_manager_v1},
     xdg::dialog::v1::client::xdg_wm_dialog_v1::{self, XdgWmDialogV1},
@@ -268,6 +269,7 @@ pub struct Globals {
     pub dialog: Option<xdg_wm_dialog_v1::XdgWmDialogV1>,
     pub foreign_importer: Option<zxdg_importer_v2::ZxdgImporterV2>,
     pub system_bell: Option<xdg_system_bell_v1::XdgSystemBellV1>,
+    pub toplevel_tag: Option<xdg_toplevel_tag_manager_v1::XdgToplevelTagManagerV1>,
     pub presentation: Option<wp_presentation::WpPresentation>,
     pub executor: ForegroundExecutor,
     pub frame_ping: Ping,
@@ -322,6 +324,7 @@ impl Globals {
             dialog: globals.bind(&qh, dialog_v..=dialog_v, ()).ok(),
             foreign_importer: globals.bind(&qh, 1..=1, ()).ok(),
             system_bell: globals.bind(&qh, 1..=1, ()).ok(),
+            toplevel_tag: globals.bind(&qh, 1..=1, ()).ok(),
             presentation: globals.bind(&qh, 1..=1, ()).ok(),
             executor,
             qh,
@@ -1681,6 +1684,7 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for WaylandClientStat
 
 delegate_noop!(WaylandClientStatePtr: ignore xdg_activation_v1::XdgActivationV1);
 delegate_noop!(WaylandClientStatePtr: ignore xdg_system_bell_v1::XdgSystemBellV1);
+delegate_noop!(WaylandClientStatePtr: ignore xdg_toplevel_tag_manager_v1::XdgToplevelTagManagerV1);
 delegate_noop!(WaylandClientStatePtr: ignore wl_compositor::WlCompositor);
 delegate_noop!(WaylandClientStatePtr: ignore wp_cursor_shape_device_v1::WpCursorShapeDeviceV1);
 delegate_noop!(WaylandClientStatePtr: ignore wp_cursor_shape_manager_v1::WpCursorShapeManagerV1);

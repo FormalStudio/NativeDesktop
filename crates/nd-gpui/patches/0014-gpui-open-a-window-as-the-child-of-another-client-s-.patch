@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FormalSnake <kyaniserni@gmail.com>
 Date: Tue, 3 Nov 2026 12:22:55 +0000
-Subject: [PATCH 14/19] gpui: open a window as the child of another client's
+Subject: [PATCH 14/20] gpui: open a window as the child of another client's
  window
 
 ---
