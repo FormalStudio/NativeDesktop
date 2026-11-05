@@ -114,6 +114,7 @@ impl NdRootView {
         std::ptr::eq(ptr, (self as *const Self).cast())
             || content.is_some_and(|c| std::ptr::eq(ptr, c))
             || self.ivars().pass_views.borrow().iter().any(|v| std::ptr::eq(ptr, Retained::as_ptr(v)))
+            || view.downcast_ref::<NdLayerView>().is_some_and(|l| l.ivars().passes.get())
     }
 
     pub(crate) fn set_full_size(&self, full: bool) {
@@ -148,6 +149,9 @@ pub struct LayerIvars {
     radius_scale: Cell<f32>,
     /// A press on the view's own area moves the window (a title bar).
     drag: Cell<bool>,
+    /// A press on the view's own area falls through the root to the panes below (the
+    /// scaffold's overlay pane, which covers the whole window).
+    passes: Cell<bool>,
     /// Right clicks report a context menu request to the node.
     menu: RefCell<Option<(nd_ui::events::Emit, crate::events::Wake)>>,
     /// Painted when the style sets no background: the window background, under a subtree
@@ -179,6 +183,7 @@ impl Default for LayerIvars {
             focusable: Cell::new(false),
             radius_scale: Cell::new(1.),
             drag: Cell::new(false),
+            passes: Cell::new(false),
             menu: RefCell::new(None),
             surface: Cell::new(None),
             gestures: RefCell::new(None),
@@ -446,6 +451,10 @@ impl NdLayerView {
         self.ivars().drag.set(drag);
     }
 
+    pub(crate) fn set_passes_clicks(&self) {
+        self.ivars().passes.set(true);
+    }
+
     /// Right clicks (and control-clicks) on this view emit [`ContextMenuRequested`] through
     /// `emit`; `None` gives them back to AppKit.
     pub(crate) fn set_menu(&self, menu: Option<(nd_ui::events::Emit, crate::events::Wake)>) {
@@ -508,6 +517,19 @@ impl NdLayerView {
         let x1 = (b.origin.x + b.size.width).min(v.origin.x + v.size.width);
         let y1 = (b.origin.y + b.size.height).min(v.origin.y + v.size.height);
         NSRect::new(NSPoint::new(x0, y0), NSSize::new((x1 - x0).max(0.), (y1 - y0).max(0.)))
+    }
+
+    /// Drops the hover look when the pointer is no longer over the view, for a moment AppKit sent
+    /// no `mouseExited:` (a drag session suppresses them).
+    pub(crate) fn settle_hover(&self) {
+        if !self.ivars().hovered.get() {
+            return;
+        }
+        let Some(window) = self.window() else { return };
+        let at = self.convertPoint_fromView(window.mouseLocationOutsideOfEventStream(), None);
+        if !self.mouse_inRect(at, self.hover_rect()) {
+            self.set_hovered(false);
+        }
     }
 
     fn tracks_hover(&self) -> bool {

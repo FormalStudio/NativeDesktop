@@ -16,8 +16,7 @@ use objc2::rc::Retained;
 use objc2::{DefinedClass, MainThreadOnly, define_class, msg_send};
 use objc2_app_kit::NSLayoutConstraint;
 use objc2_app_kit::{
-    NSAutoresizingMaskOptions, NSResponder, NSSplitViewController, NSSplitViewItem, NSView, NSViewController, NSWindow,
-    NSWindowOrderingMode,
+    NSResponder, NSSplitViewController, NSSplitViewItem, NSView, NSViewController, NSWindow, NSWindowOrderingMode,
 };
 use objc2_foundation::{MainThreadMarker, NSArray, NSRect, NSSize};
 
@@ -154,6 +153,9 @@ impl PaneNative {
         reveal: Option<crate::reveal::RevealHooks>,
     ) -> Self {
         let content = NdLayerView::new(mtm, &ViewLook::from_style(&props.style, expose));
+        if props.role == PaneRole::Overlay {
+            content.set_passes_clicks();
+        }
         let host = NdPaneView::new(mtm, &content);
         if props.role == PaneRole::Content && props.edge_on_hover {
             *host.ivars().edge.borrow_mut() = Some(Rc::new(Cell::new(false)));
@@ -393,9 +395,6 @@ impl ScaffoldNative {
         if pane.role == PaneRole::Overlay {
             self.host.addSubview(&pane.content);
             pane.content.setFrame(self.host.bounds());
-            pane.content.setAutoresizingMask(
-                NSAutoresizingMaskOptions::ViewWidthSizable | NSAutoresizingMaskOptions::ViewHeightSizable,
-            );
             self.panes.push((node, pane.role));
             return;
         }

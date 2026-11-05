@@ -319,6 +319,25 @@ define_class!(
     }
 );
 
+/// The rows and row contents under `view` that still look hovered once the pointer has left them:
+/// AppKit sends no `mouseExited:` while a drag session runs, so a dragged row kept its look.
+fn settle_hovers(view: &NSView) {
+    if let Some(row) = view.downcast_ref::<NdHoverRowView>()
+        && let Some(window) = row.window()
+    {
+        let at = row.convertPoint_fromView(window.mouseLocationOutsideOfEventStream(), None);
+        if !row.mouse_inRect(at, row.bounds()) {
+            row.set_hovered(false);
+        }
+    }
+    if let Some(layer) = view.downcast_ref::<NdLayerView>() {
+        layer.settle_hover();
+    }
+    for child in view.subviews() {
+        settle_hovers(&child);
+    }
+}
+
 impl NdHoverRowView {
     fn new(mtm: MainThreadMarker) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(HoverRowIvars::default());
@@ -380,7 +399,8 @@ define_class!(
         }
 
         #[unsafe(method(tableView:draggingSession:endedAtPoint:operation:))]
-        fn drag_ended(&self, _table: &NSTableView, _session: &NSDraggingSession, point: NSPoint, _op: NSDragOperation) {
+        fn drag_ended(&self, table: &NSTableView, _session: &NSDraggingSession, point: NSPoint, _op: NSDragOperation) {
+            settle_hovers(table);
             let shared = &self.ivars().shared;
             let Some(kind) = shared.drag_kind.borrow().clone() else { return };
             shared.report_drag(DragItem::new(kind, ""), GesturePhase::Ended, point);

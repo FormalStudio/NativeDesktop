@@ -1597,14 +1597,12 @@ impl Backend for AppKitBackend {
         }
         let state = self.0.borrow();
         match state.nodes.get(&node) {
-            // The split view places a pane's host; nd frames the content inside it. An overlay
-            // fills the scaffold by its autoresizing.
+            // The split view places a pane's host; nd frames the content inside it, and an
+            // overlay's content in the scaffold's host.
             Some(Native::Pane(p)) => {
-                if p.role != PaneRole::Overlay {
-                    let rect = ns_rect(frame);
-                    if p.content.frame() != rect {
-                        p.content.setFrame(rect);
-                    }
+                let rect = ns_rect(frame);
+                if p.content.frame() != rect {
+                    p.content.setFrame(rect);
                 }
                 return;
             }
