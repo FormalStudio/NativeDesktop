@@ -25,7 +25,6 @@ mod layout {
     use std::rc::Rc;
     use std::time::{Duration, Instant};
 
-    use nd_backend_appkit::AppHost;
     use nd_backend_appkit::objc2::Message;
     use nd_backend_appkit::objc2::rc::Retained;
     use nd_backend_appkit::objc2::runtime::AnyObject;
@@ -35,6 +34,7 @@ mod layout {
         NSToolbarToggleInspectorItemIdentifier, NSView,
     };
     use nd_backend_appkit::objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSSize};
+    use nd_backend_appkit::{AppHost, NdWindow};
     use nd_components::split::Axis;
     use nd_components::*;
     use nd_ui::prelude::*;
@@ -189,6 +189,16 @@ mod layout {
                     app.frame();
                 }
             });
+        }
+    }
+
+    /// AppKit validates a menu item through the key window's responder chain, and another app on
+    /// the machine can take activation, so the menu checks wait for the window to be key again.
+    fn make_key(host: &AppHost, window: &NdWindow) {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !(window.isKeyWindow() && host.platform().app().isActive()) && Instant::now() < deadline {
+            host.platform().show(window);
+            pump(host, Duration::from_millis(150));
         }
     }
 
@@ -460,6 +470,7 @@ mod layout {
             .and_then(|i| i.submenu())
             .expect("the View menu");
         let role = menu.itemAtIndex(0).expect("the sidebar item");
+        make_key(&host, &shell_window);
         menu.update();
         c.check(
             role.title().to_string() == "Hide Sidebar" && role.isEnabled(),
@@ -468,6 +479,7 @@ mod layout {
         host.update(|app| app.dispatch_action(shell, &nd_ui::actions::ToggleSidebar));
         pump(&host, Duration::from_millis(1000));
         c.check(side.isCollapsed(), "nd::ToggleSidebar, unhandled, collapses the sidebar");
+        make_key(&host, &shell_window);
         menu.update();
         c.check(role.title().to_string() == "Show Sidebar", &format!("then the item reads {}", role.title()));
 
