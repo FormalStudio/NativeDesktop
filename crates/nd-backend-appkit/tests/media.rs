@@ -420,9 +420,11 @@ mod media {
             return;
         };
         let at = |s: &NSScrollView| s.contentView().bounds().origin;
-        // Fingers up: the page scrolls down. Over the shelf, as AppKit latches it there.
+        // Fingers up: the page scrolls down. Over the shelf, as AppKit latches it there. The page
+        // starts at minus its top content inset, not at zero.
+        let start = at(&page).y;
         gesture(&inner, rig, 0, -12, 10);
-        let (moved, sideways) = (at(&page).y, at(&inner).x);
+        let (moved, sideways) = (at(&page).y - start, at(&inner).x);
         c.check(moved > 100., &format!("shelf in page: a vertical gesture over a shelf scrolls the page ({moved})"));
         c.check(sideways.abs() < 0.5, &format!("shelf in page: and leaves the shelf alone ({sideways})"));
         let before = at(&page).y;
