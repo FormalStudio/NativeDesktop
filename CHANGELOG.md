@@ -5,6 +5,9 @@ and the one it moves to.
 
 ## Unreleased
 
+- `PlayerBar::without_song()` leaves the artwork and titles out and keeps the seek bar, the
+  transport and the item's controls, in every layout: a bar kept over a now-playing view that
+  shows the song itself. The pill no longer loses its seek line that way.
 - Drawn menus on the GPUI backend (context menus, `menu_button`) show each row's key binding at
   its trailing edge, read from the app's bindings: "Ctrl+Shift+T", with Super for the platform
   key on Linux. Only Fluent showed them before.

@@ -550,6 +550,7 @@ pub struct PlayerBar {
     open_button: Option<AnyElement>,
     before_transport: Vec<AnyElement>,
     after_transport: Vec<AnyElement>,
+    song: bool,
     style: StyleRefinement,
 }
 
@@ -565,6 +566,7 @@ pub fn player_bar(id: impl Into<SharedString>, now: NowPlaying) -> PlayerBar {
         open_button: None,
         before_transport: Vec::new(),
         after_transport: Vec::new(),
+        song: true,
         style: StyleRefinement::default(),
     }
 }
@@ -620,6 +622,12 @@ impl PlayerBar {
     /// A control after next, where Music keeps repeat. Full and pill layouts.
     pub fn after_transport(mut self, element: impl IntoElement) -> Self {
         self.after_transport.push(element.into_any_element());
+        self
+    }
+
+    /// Leaves the artwork and titles out and keeps the seek bar: a bar over a view showing the song.
+    pub fn without_song(mut self) -> Self {
+        self.song = false;
         self
     }
 }
@@ -678,6 +686,7 @@ impl PlayerBar {
             open_button,
             before_transport,
             after_transport,
+            song,
             style,
         } = self;
         let (before_transport, after_transport) =
@@ -739,8 +748,8 @@ impl PlayerBar {
                     h_flex()
                         .w_full()
                         .gap_2()
-                        .child(art(36.))
-                        .child(titles)
+                        .when(song, |row| row.child(art(36.)).child(titles))
+                        .when(!song, |row| row.child(div().flex_1()))
                         .child(play)
                         .child(next.disabled(!now.can_next)),
                 )
@@ -783,19 +792,21 @@ impl PlayerBar {
                             .min_w_0()
                             .gap(px(PILL.art_gap))
                             .items_center()
-                            .child(art(PILL.art).rounded(px(PILL.art_radius)))
+                            .when(song, |row| row.child(art(PILL.art).rounded(px(PILL.art_radius))))
                             .child(
                                 v_flex()
                                     .flex_1()
                                     .min_w_0()
                                     .gap(px(PILL.line_gap))
-                                    .child(
-                                        label(now.title.clone())
-                                            .rich(RichText::new([span(now.title.clone()).semibold()]))
-                                            .text_style(TextStyle::Subheadline)
-                                            .truncate(),
-                                    )
-                                    .when_some(now.subtitle.clone(), |el, s| {
+                                    .when(song, |titles| {
+                                        titles.child(
+                                            label(now.title.clone())
+                                                .rich(RichText::new([span(now.title.clone()).semibold()]))
+                                                .text_style(TextStyle::Subheadline)
+                                                .truncate(),
+                                        )
+                                    })
+                                    .when_some(now.subtitle.clone().filter(|_| song), |el, s| {
                                         el.child(
                                             label(s)
                                                 .text_style(TextStyle::Subheadline)
@@ -804,7 +815,7 @@ impl PlayerBar {
                                         )
                                     }),
                             )
-                            .when_some(on_open, |row, open| {
+                            .when_some(on_open.filter(|_| song), |row, open| {
                                 row.role(Role::Button, format!("{}, open player", now.title))
                                     .on_tap(move |_, w, cx| open(w, cx))
                             })
@@ -904,8 +915,8 @@ impl PlayerBar {
                     .min_w_0()
                     .gap_3()
                     .items_center()
-                    .when(!idle, |row| row.child(art(m.art).rounded(px(m.art_radius))).child(titles))
-                    .when_some(on_open.filter(|_| !idle), |row, open| {
+                    .when(!idle && song, |row| row.child(art(m.art).rounded(px(m.art_radius))).child(titles))
+                    .when_some(on_open.filter(|_| !idle && song), |row, open| {
                         row.role(Role::Button, format!("{}, open player", now.title))
                             .on_tap(move |_, w, cx| open(w, cx))
                     });
@@ -988,8 +999,8 @@ impl PlayerBar {
                     .flex_1()
                     .min_w_0()
                     .gap_2()
-                    .when(!idle, |row| row.child(art(44.)).child(titles))
-                    .when_some(on_open.filter(|_| !idle), |row, open| {
+                    .when(!idle && song, |row| row.child(art(44.)).child(titles))
+                    .when_some(on_open.filter(|_| !idle && song), |row, open| {
                         row.role(Role::Button, format!("{}, open player", now.title))
                             .on_tap(move |_, w, cx| open(w, cx))
                     });

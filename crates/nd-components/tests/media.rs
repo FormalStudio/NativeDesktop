@@ -474,6 +474,34 @@ fn player_bar_disables_what_the_player_cannot_do() {
     assert!(rig.state().commands.is_empty());
 }
 
+fn songless_view(layout: &TransportLayout, _: &mut Context<Host<TransportLayout>>) -> AnyElement {
+    let now = NowPlaying::new("Distinct Title")
+        .subtitle("Distinct Artist")
+        .clock(PlaybackClock::paused(Duration::from_secs(30)))
+        .duration(Duration::from_secs(180));
+    player_bar("player", now).layout(*layout).accessory(div().id("player.heart")).without_song().into_any_element()
+}
+
+#[test]
+fn a_bar_without_the_song_keeps_its_seek_bar_and_the_items_controls() {
+    for layout in [
+        TransportLayout::Full,
+        TransportLayout::Compact,
+        TransportLayout::Pill,
+        TransportLayout::Centered,
+        TransportLayout::Toolbar,
+    ] {
+        let rig = Rig::sized(nd_ui::Size { width: 900., ..WINDOW }, |_| layout, songless_view);
+        let tree = rig.cx.semantic_tree();
+        let has = |id: &str| tree.nodes().any(|(_, n)| n.test_id.as_deref() == Some(id));
+        assert!(has("player.seek"), "{layout:?} keeps the seek bar");
+        assert!(has("player.play"), "{layout:?} keeps the transport");
+        assert!(!has("player.art"), "{layout:?} leaves the artwork out");
+        let snapshot = tree.snapshot();
+        assert!(!snapshot.contains("Distinct"), "{layout:?} leaves the titles out:\n{snapshot}");
+    }
+}
+
 #[test]
 fn seek_bar_set_value_commits_and_feeding_the_clock_back_sets_nothing_new() {
     let mut rig = Rig::new(Player::default(), player_view);
