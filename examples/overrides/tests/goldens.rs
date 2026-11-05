@@ -110,7 +110,18 @@ mod goldens {
             .arg(&path)
             .status()
             .map_err(|e| format!("screencapture: {e}"))?;
-        let png = std::fs::read(&path).map_err(|e| format!("screencapture wrote nothing ({status}): {e}"))?;
+        std::fs::metadata(&path).map_err(|e| format!("screencapture wrote nothing ({status}): {e}"))?;
+        // screencapture writes the main display's colour space (P3 on the built-in panel, near
+        // sRGB on a headless display), so each capture is matched to sRGB before it is compared.
+        let sips = std::process::Command::new("/usr/bin/sips")
+            .args(["--matchTo", "/System/Library/ColorSync/Profiles/sRGB Profile.icc"])
+            .arg(&path)
+            .output()
+            .map_err(|e| format!("sips: {e}"))?;
+        if !sips.status.success() {
+            return Err(format!("sips: {}", String::from_utf8_lossy(&sips.stderr)));
+        }
+        let png = std::fs::read(&path).map_err(|e| e.to_string())?;
         let _ = std::fs::remove_file(&path);
         Ok(png)
     }
