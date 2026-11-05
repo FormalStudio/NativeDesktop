@@ -299,6 +299,7 @@ mod gate_m6 {
         let host = cx.update(|cx| {
             GpuiHost::builder().quit_when_empty(false).start(cx, move |app| {
                 let backend = app.backend_as::<nd_backend_gpui::GpuiBackend>().expect("GPUI backend").clone();
+                backend.set_theme(nd_theme::ThemeRegistry::new(nd_theme::Preset::Adwaita));
                 app.set_global(Chrome(nd_backend_gpui::GpuiChrome::new(backend)));
                 let handle = app.open_window(WindowOptions::main("sources").size(size(px(300.), px(300.))), |_, cx| {
                     cx.new(|_| Sources { log: l, selected: "a".into() })
