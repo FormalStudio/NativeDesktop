@@ -17,7 +17,7 @@ which gpui_linux's test-support turns on, so neither crate's manifest changes.
  4 files changed, 127 insertions(+), 57 deletions(-)
 
 diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
-index e1da9e8..73d0ff4 100644
+index 6851b36..b9b48db 100644
 --- a/crates/gpui/src/platform.rs
 +++ b/crates/gpui/src/platform.rs
 @@ -52,7 +52,7 @@ use async_task::Runnable;

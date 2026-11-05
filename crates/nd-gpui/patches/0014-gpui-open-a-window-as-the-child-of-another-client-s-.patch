@@ -5,16 +5,16 @@ Subject: [PATCH 14/20] gpui: open a window as the child of another client's
  window
 
 ---
- crates/gpui/src/platform.rs                   | 54 +++++++++++++++++++
+ crates/gpui/src/platform.rs                   | 59 +++++++++++++++++++
  crates/gpui/src/window.rs                     |  2 +
- crates/gpui_linux/src/linux/wayland/client.rs |  9 ++++
- crates/gpui_linux/src/linux/wayland/window.rs | 28 ++++++++--
+ crates/gpui_linux/src/linux/wayland/client.rs |  9 +++
+ crates/gpui_linux/src/linux/wayland/window.rs | 28 +++++++--
  crates/gpui_linux/src/linux/x11/client.rs     |  2 +
  crates/gpui_linux/src/linux/x11/window.rs     | 20 ++++---
- 6 files changed, 104 insertions(+), 11 deletions(-)
+ 6 files changed, 109 insertions(+), 11 deletions(-)
 
 diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
-index bb092ad..e1da9e8 100644
+index bb092ad..6851b36 100644
 --- a/crates/gpui/src/platform.rs
 +++ b/crates/gpui/src/platform.rs
 @@ -2633,6 +2633,11 @@ pub struct WindowOptions {
@@ -47,7 +47,7 @@ index bb092ad..e1da9e8 100644
              is_movable: true,
              app_owns_titlebar_drag: false,
              inactive_frame_interval: Some(Duration::from_micros(33_333)),
-@@ -2850,6 +2859,32 @@ pub struct TitlebarOptions {
+@@ -2850,6 +2859,56 @@ pub struct TitlebarOptions {
      pub traffic_light_position: Option<Point<Pixels>>,
  }
  
@@ -77,13 +77,9 @@ index bb092ad..e1da9e8 100644
 +    }
 +}
 +
- /// The kind of window to create
- #[derive(Clone, Debug, PartialEq, Eq)]
- pub enum WindowKind {
-@@ -3980,4 +4015,23 @@ mod tests {
-     fn test_window_button_layout_parse_all_invalid() {
-         assert!(WindowButtonLayout::parse("asdfghjkl").is_err());
-     }
++#[cfg(test)]
++mod foreign_parent_tests {
++    use super::ForeignParent;
 +
 +    #[test]
 +    fn test_foreign_parent_from_portal() {
@@ -103,7 +99,11 @@ index bb092ad..e1da9e8 100644
 +            assert_eq!(ForeignParent::from_portal(none), None, "{none:?}");
 +        }
 +    }
- }
++}
++
+ /// The kind of window to create
+ #[derive(Clone, Debug, PartialEq, Eq)]
+ pub enum WindowKind {
 diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
 index 9cfaec8..779b7f6 100644
 --- a/crates/gpui/src/window.rs

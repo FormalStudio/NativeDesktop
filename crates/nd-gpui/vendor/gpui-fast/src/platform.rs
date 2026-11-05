@@ -2903,6 +2903,30 @@ impl ForeignParent {
     }
 }
 
+#[cfg(test)]
+mod foreign_parent_tests {
+    use super::ForeignParent;
+
+    #[test]
+    fn test_foreign_parent_from_portal() {
+        assert_eq!(
+            ForeignParent::from_portal("wayland:5f1e-aa"),
+            Some(ForeignParent::Wayland("5f1e-aa".into()))
+        );
+        assert_eq!(
+            ForeignParent::from_portal("x11:3c00007"),
+            Some(ForeignParent::X11(0x3c00007))
+        );
+        assert_eq!(
+            ForeignParent::from_portal("x11:0x3c00007"),
+            Some(ForeignParent::X11(0x3c00007))
+        );
+        for none in ["", "wayland:", "x11:", "x11:0", "x11:zz", "mir:1"] {
+            assert_eq!(ForeignParent::from_portal(none), None, "{none:?}");
+        }
+    }
+}
+
 /// The kind of window to create
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WindowKind {
@@ -4032,24 +4056,5 @@ mod tests {
     #[test]
     fn test_window_button_layout_parse_all_invalid() {
         assert!(WindowButtonLayout::parse("asdfghjkl").is_err());
-    }
-
-    #[test]
-    fn test_foreign_parent_from_portal() {
-        assert_eq!(
-            ForeignParent::from_portal("wayland:5f1e-aa"),
-            Some(ForeignParent::Wayland("5f1e-aa".into()))
-        );
-        assert_eq!(
-            ForeignParent::from_portal("x11:3c00007"),
-            Some(ForeignParent::X11(0x3c00007))
-        );
-        assert_eq!(
-            ForeignParent::from_portal("x11:0x3c00007"),
-            Some(ForeignParent::X11(0x3c00007))
-        );
-        for none in ["", "wayland:", "x11:", "x11:0", "x11:zz", "mir:1"] {
-            assert_eq!(ForeignParent::from_portal(none), None, "{none:?}");
-        }
     }
 }
