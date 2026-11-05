@@ -28,7 +28,7 @@ slow-timeout = { period = "60s", terminate-after = 4 }
 # never takes the lock queues for nothing. The matugen recolour timing queues too, since a
 # loaded machine would push it past its 100 ms budget.
 [[profile.default.overrides]]
-filter = "(package(nd-backend-appkit) - binary(native_mappings_lint)) | (binary(/^appearance/) & test(=appearance_audit::appkit)) | binary_id(chrome::settings) | binary_id(nd::chrome) | binary_id(nd::matugen_live) | binary_id(overrides::goldens) | binary_id(/^gallery::(goldens|forms_goldens|media_goldens|audio)$/) | binary_id(tabs::window_tabs) | binary_id(terminal::window) | binary_id(nd-system::mac_native)"
+filter = "(package(nd-backend-appkit) - binary(native_mappings_lint)) | (binary(/^appearance/) & test(=appearance_audit::appkit)) | binary_id(chrome::settings) | binary_id(nd::chrome) | binary_id(nd::frame_hud) | binary_id(nd::matugen_live) | binary_id(nd::native_widget) | binary_id(overrides::goldens) | binary_id(/^gallery::(goldens|forms_goldens|media_goldens|audio)$/) | binary_id(tabs::window_tabs) | binary_id(terminal::window) | binary_id(nd-system::mac_native)"
 test-group = "real-window"
 # Waiting for the machine lock (up to 600 s) counts against the test, so these get room for it.
 slow-timeout = { period = "60s", terminate-after = 15 }
@@ -72,7 +72,7 @@ slow-timeout = { period = "60s", terminate-after = 15 }
 # test activating its own app takes away, so they queue with them.
 [[profile.gate.overrides]]
 platform = 'cfg(not(target_os = "linux"))'
-filter = "test(/(^|::)(real::|real_)/) | (package(nd-backend-appkit) - binary(native_mappings_lint)) | (binary(/^appearance/) & test(=appearance_audit::appkit)) | binary_id(chrome::settings) | binary_id(nd::chrome) | binary_id(nd::matugen_live) | binary_id(overrides::goldens) | binary_id(/^gallery::(goldens|forms_goldens|media_goldens|audio)$/) | binary_id(tabs::window_tabs) | binary_id(terminal::window) | binary_id(nd-system::mac_native)"
+filter = "test(/(^|::)(real::|real_)/) | (package(nd-backend-appkit) - binary(native_mappings_lint)) | (binary(/^appearance/) & test(=appearance_audit::appkit)) | binary_id(chrome::settings) | binary_id(nd::chrome) | binary_id(nd::frame_hud) | binary_id(nd::matugen_live) | binary_id(nd::native_widget) | binary_id(overrides::goldens) | binary_id(/^gallery::(goldens|forms_goldens|media_goldens|audio)$/) | binary_id(tabs::window_tabs) | binary_id(terminal::window) | binary_id(nd-system::mac_native)"
 test-group = "real-window"
 
 # The M10 flow builds and packs an app three times (release profile, one cold), so it gets room.
