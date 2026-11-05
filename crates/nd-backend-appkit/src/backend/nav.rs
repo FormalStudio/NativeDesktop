@@ -64,6 +64,11 @@ impl AppKitBackend {
             (Native::Palette(p), SemanticAction::Click) => p.activate(),
             (Native::Toasts(t), SemanticAction::Click) => t.click(false),
             (Native::Banner(b), SemanticAction::Click) => b.press(),
+            (Native::SourceTree(s), SemanticAction::SetValue(id)) => {
+                if !s.select_row(id) {
+                    return Some(Err(ActionError::NotActionable(format!("no selectable row \"{id}\""))));
+                }
+            }
             (Native::Palette(_) | Native::Toasts(_) | Native::Banner(_), _) => {
                 return Some(Err(ActionError::Unsupported(format!("{action:?} on {node:?}"))));
             }

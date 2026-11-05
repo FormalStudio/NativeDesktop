@@ -511,6 +511,15 @@ mod nav {
             ),
         );
 
+        let picked = env.app.perform(node, &nd_ui::semantics::SemanticAction::SetValue("inbox".into()));
+        env.settle();
+        c.check(
+            picked.is_ok() && log.borrow().selected.last().map(String::as_str) == Some("inbox"),
+            &format!("automation selects a row by id and reports it ({picked:?} {:?})", log.borrow().selected),
+        );
+        let missing = env.app.perform(node, &nd_ui::semantics::SemanticAction::SetValue("nope".into()));
+        c.check(missing.is_err(), "automation refuses a row id the tree does not have");
+
         handle.root().update(&mut env.app, |this, cx| {
             this.nodes.clear();
             cx.notify();

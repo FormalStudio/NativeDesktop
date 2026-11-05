@@ -1067,6 +1067,22 @@ impl SourceTreeNative {
         (!self.empty.isHidden()).then(|| self.empty_title.stringValue().to_string())
     }
 
+    /// Selects row `id` as a click on it would, reporting the selection; false when it takes none.
+    pub fn select_row(&self, id: &str) -> bool {
+        let Some(object) = self.item(id) else { return false };
+        let any: &AnyObject = &object;
+        let selectable = {
+            let data = self.shared().data.borrow();
+            data.node_index(Some(any)).is_some_and(|i| data.nodes[i].selectable && !data.nodes[i].section)
+        };
+        let row = unsafe { self.outline.rowForItem(Some(&object)) };
+        if !selectable || row < 0 {
+            return false;
+        }
+        self.outline.selectRowIndexes_byExtendingSelection(&NSIndexSet::indexSetWithIndex(row as usize), false);
+        true
+    }
+
     /// Clicks action `action` on row `id`'s cell as its button would, for automation.
     pub fn click_action(&self, id: &str, action: &str) -> bool {
         let Some(object) = self.item(id) else { return false };
