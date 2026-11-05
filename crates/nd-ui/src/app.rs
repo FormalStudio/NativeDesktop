@@ -820,13 +820,14 @@ impl App {
             || self.windows.values().any(|w| w.tree.as_ref().is_some_and(|t| t.needs_frame()))
     }
 
-    /// Renders the dirty views of every window and commits one transaction per window, then
-    /// drains native events. Hosts call it once per display frame while [`Self::needs_frame`].
+    /// Renders the dirty views of every hosted window and commits one transaction per window,
+    /// then drains native events. Hosts call it once per display frame while
+    /// [`Self::needs_frame`].
     pub fn frame(&mut self) {
         self.flush_effects();
         self.moved.clear();
         self.frames += 1;
-        let ids: Vec<WindowId> = self.windows.keys().copied().collect();
+        let ids: Vec<WindowId> = self.windows.keys().copied().filter(|id| self.backend.hosts(*id)).collect();
         for id in &ids {
             self.draw(*id);
         }

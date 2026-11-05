@@ -2,7 +2,8 @@
 //! the app's own queue, so they reach `NSApp.sendEvent` like hardware input and travel
 //! `NdWindow` -> `App::dispatch_keystroke` -> the elements' `key_context`/`on_action`. Focus moves
 //! by Tab over `focusable` elements and AppKit's first responder follows. A key whose action
-//! opens a window gets that window its host before the frame that mounts it. Prints
+//! opens a window gets that window its host before the frame that mounts it, and a sheet opened
+//! by the effects a layout pass's frame flushes waits for its host instead of panicking. Prints
 //! `ND_APP_DISPATCH_OK`.
 
 mod harness;
@@ -24,12 +25,13 @@ mod app {
     use nd_backend_appkit::{AppHost, NdAppKitPlatform};
     use nd_gpui::gpui;
     use nd_ui::prelude::*;
-    use nd_ui::{KeyBinding, NodeId, WindowId};
+    use nd_ui::{KeyBinding, NodeId, Subscription, WindowId, WindowKind};
 
     gpui::actions!(app_dispatch, [Ping, OpenSecond]);
 
     struct List {
         log: Vec<&'static str>,
+        _sheet: Subscription,
     }
 
     impl Render for List {
@@ -59,7 +61,7 @@ mod app {
 
     impl Render for Second {
         fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-            v_flex().size_full().child(text("second"))
+            v_flex().id("body").size_full().child(text("second"))
         }
     }
 
@@ -97,6 +99,14 @@ mod app {
         platform.pump(Duration::from_millis(30), Duration::from_secs(2));
     }
 
+    fn body_view(host: &AppHost, window: WindowId) -> Option<Retained<NSView>> {
+        let node = host.update(|app| {
+            let tree = app.semantic_window(window)?;
+            tree.root.iter().find(|n| n.test_id.as_deref() == Some("body")).map(|n| n.id)
+        })?;
+        host.backend().view(node)
+    }
+
     fn responder_is(window: &NSWindow, view: Option<&Retained<NSView>>) -> bool {
         let responder = window.firstResponder();
         match (responder, view) {
@@ -108,11 +118,21 @@ mod app {
     pub fn run() -> ! {
         let mut window_id = WindowId(0);
         let mut root = None;
+        let mut sheet_trigger = None;
         let host = AppHost::new(|cx| {
             cx.bind_keys([KeyBinding::new("cmd-k", Ping, None), KeyBinding::new("cmd-,", OpenSecond, None)]);
-            let handle = cx.open_window(WindowOptions::main("dispatch").title("App dispatch"), |_, cx| {
-                cx.new(|_| List { log: Vec::new() })
+            let trigger = cx.new(|_| ());
+            let handle = cx.open_window(WindowOptions::main("dispatch").title("App dispatch"), |window, cx| {
+                let parent = window.id();
+                cx.new(|cx| {
+                    let sheet = cx.observe(&trigger, move |_, _, cx| {
+                        let options = WindowOptions::main("sheet").title("Sheet").kind(WindowKind::Sheet { parent });
+                        cx.open_window(options, |_, cx| cx.new(|_| Second));
+                    });
+                    List { log: Vec::new(), _sheet: sheet }
+                })
             });
+            sheet_trigger = Some(trigger);
             window_id = handle.id();
             root = Some(handle.root().clone());
         });
@@ -167,6 +187,32 @@ mod app {
         c.check(second_window.is_some(), "a window opened by a key's action gets a host, no panic in its first frame");
         if let Some(second) = second_window {
             second.close();
+        }
+        platform.pump(Duration::from_millis(50), Duration::from_millis(200));
+
+        // The observer runs in the effects the next frame flushes, inside the window's layout
+        // pass, so the sheet exists in the app before AppKit has a window for it.
+        let trigger = sheet_trigger.expect("sheet trigger");
+        host.update(|app| trigger.update(app, |_, cx| cx.notify()));
+        if let Some(content) = window.contentView() {
+            content.setNeedsLayout(true);
+            content.layoutSubtreeIfNeeded();
+        }
+        let sheet = host.update(|app| app.window_ids().find(|id| *id != window_id));
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while sheet.and_then(|id| host.ns_window(id)).is_none() && Instant::now() < deadline {
+            platform.pump(Duration::from_millis(30), Duration::from_millis(100));
+        }
+        let sheet_window = sheet.and_then(|id| host.ns_window(id));
+        c.check(sheet_window.is_some(), "a sheet opened inside a layout pass's frame gets its host on the next turn");
+        while sheet.is_some_and(|id| body_view(&host, id).is_none()) && Instant::now() < deadline {
+            platform.pump(Duration::from_millis(30), Duration::from_millis(100));
+        }
+        let mounted = sheet.and_then(|id| body_view(&host, id)).is_some();
+        c.check(mounted, "the sheet draws once its host is up");
+        if let Some(sheet) = &sheet_window {
+            window.endSheet(sheet);
+            sheet.close();
         }
 
         window.close();

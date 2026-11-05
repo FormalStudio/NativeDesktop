@@ -1808,6 +1808,10 @@ impl Backend for AppKitBackend {
         true
     }
 
+    fn hosts(&self, window: WindowId) -> bool {
+        self.0.borrow().windows.contains_key(&window)
+    }
+
     fn probe(&self, node: NodeId) -> nd_ui::semantics::Probe {
         self.probe_node(node)
     }

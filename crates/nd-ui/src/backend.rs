@@ -241,6 +241,11 @@ pub trait Backend: Any {
     /// True when `nd-ui` lays out with Taffy and pushes frames (AppKit, tests); false when the
     /// backend lays out itself (GPUI runs Taffy inside its own element tree).
     fn retains_frames(&self) -> bool;
+    /// False while `window` has no native window to draw into: AppKit builds one on the run
+    /// loop turn after the frame that opened it. Frames skip the window until then.
+    fn hosts(&self, _window: WindowId) -> bool {
+        true
+    }
 
     // Automation and the semantic tree (ARCHITECTURE.md 10.1): queries and commands, never inside a
     // transaction. Each has a default, so a backend without them still renders.
