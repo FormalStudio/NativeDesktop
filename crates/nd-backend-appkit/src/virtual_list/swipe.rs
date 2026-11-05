@@ -85,6 +85,27 @@ define_class!(
     pub struct NdTableView;
 
     impl NdTableView {
+        // NSTableView selects on the press and runs its own tracking loop until the release or
+        // a drag; a list whose rows drag reports that selection only when no drag began.
+        #[unsafe(method(mouseDown:))]
+        fn mouse_down(&self, event: &NSEvent) {
+            let shared = self.shared();
+            if shared.drag_kind.borrow().is_none() {
+                let _: () = unsafe { msg_send![super(self), mouseDown: event] };
+                return;
+            }
+            let before = self.selectedRowIndexes();
+            *shared.press.borrow_mut() = Some(super::Press { before, selected: None, dragged: false });
+            let _: () = unsafe { msg_send![super(self), mouseDown: event] };
+            let Some(press) = shared.press.take() else { return };
+            if press.dragged {
+                shared.programmatic(|| self.selectRowIndexes_byExtendingSelection(&press.before, false));
+            } else if let Some(selected) = press.selected {
+                shared.emit.emit(selected);
+                shared.wake.wake();
+            }
+        }
+
         #[unsafe(method(scrollWheel:))]
         fn scroll_wheel(&self, event: &NSEvent) {
             if !self.swipe_scroll(event) {

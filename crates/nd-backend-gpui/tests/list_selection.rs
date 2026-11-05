@@ -181,7 +181,7 @@ impl Render for Carrying {
             div().h(px(24.)).child(format!("file-{row}"))
         })
         .selection(Selection::Multiple)
-        .drag_rows("files", |row: &u32| format!("file-{row}").into())
+        .drag_rows("files", |row: &u32| Some(format!("file-{row}").into()))
         .drag_out_files(|row: &u32| Some(std::path::PathBuf::from(format!("/tmp/file-{row}"))))
     }
 }

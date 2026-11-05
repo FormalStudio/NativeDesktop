@@ -656,6 +656,7 @@ impl gpui::Element for VirtualList {
                 *held.borrow_mut() = window.focused(cx);
             }
         });
+        let pressed_ids = drag_ids.clone();
         window.on_mouse_event(move |event: &MouseDownEvent, phase, window, cx| {
             if phase != DispatchPhase::Bubble || !hitbox.is_hovered(window) {
                 return;
@@ -689,10 +690,15 @@ impl gpui::Element for VirtualList {
                     wake(cx);
                 }
                 (MouseButton::Left, Some(row)) if selection != Selection::None => {
-                    if drags && let Some((_, b)) = all.iter().find(|(r, _)| *r == row) {
+                    let dragged = drags && pressed_ids.contains_key(&row);
+                    if dragged && let Some((_, b)) = all.iter().find(|(r, _)| *r == row) {
                         pick.with(|p| p.press = Some((row, at, *b)));
                     }
-                    if selection == Selection::Multiple && extend == Extend::default() && selected.contains(&row) {
+                    // A row that may drag selects on release, so the press that starts a drag
+                    // reports no selection (an app playing on select would play the dragged row).
+                    let collapses =
+                        selection == Selection::Multiple && extend == Extend::default() && selected.contains(&row);
+                    if collapses || (dragged && extend == Extend::default()) {
                         pick.with(|p| p.pending = Some((row, at)));
                         return;
                     }
@@ -941,8 +947,8 @@ impl Pick {
     }
 
     /// A move with the button held: past the slop a press on a row drags the selection (or the
-    /// row alone, selected first when it was not), and later moves carry the drag. True while
-    /// a drag runs.
+    /// row alone, leaving the selection, when it was not selected), and later moves carry the
+    /// drag. True while a drag runs.
     fn drag(
         &self,
         kind: &SharedString,
@@ -965,12 +971,7 @@ impl Pick {
         if (at.x - from.x).abs().as_f32() <= SLOP && (at.y - from.y).abs().as_f32() <= SLOP {
             return false;
         }
-        let rows = if self.selected.contains(&row) {
-            self.selected.clone()
-        } else {
-            self.click(row, Extend::default(), cx);
-            vec![row]
-        };
+        let rows = if self.selected.contains(&row) { self.selected.clone() } else { vec![row] };
         let item = nd_ui::DragItem::many(kind.clone(), rows.iter().filter_map(|r| ids.get(r).cloned()));
         let grab = point(from.x - bounds.origin.x, from.y - bounds.origin.y);
         let size = gpui::size(bounds.size.width.min(px(240.)), bounds.size.height.min(px(120.)));

@@ -20,6 +20,8 @@ use std::rc::Rc;
 
 use nd_core::{NodeId, Rect, Size};
 use nd_ui::events::Emit;
+use nd_ui::prelude::SharedString;
+use nd_ui::{DragItem, DragPoint, DragSource, GesturePhase};
 use nd_virtual::{
     ColumnResized, ListHandle, ListKind, ListProps, RowActivated, RowDisclosed, RowId, RowMeta, RowsSelected,
     Selection, SortChanged, SortDirection, ViewportChanged, diff_rows,
@@ -29,11 +31,12 @@ use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{AnyThread, ClassType, DefinedClass, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
     NSBezierPath, NSCollectionView, NSCollectionViewDataSource, NSCollectionViewDelegate, NSCollectionViewFlowLayout,
-    NSCollectionViewItem, NSColor, NSControlTextEditingDelegate, NSEvent, NSIndexPathNSCollectionViewAdditions,
-    NSOutlineView, NSOutlineViewDataSource, NSOutlineViewDelegate, NSResponder, NSScrollView, NSTableColumn,
-    NSTableColumnResizingOptions, NSTableRowView, NSTableView, NSTableViewAnimationOptions,
-    NSTableViewColumnAutoresizingStyle, NSTableViewDataSource, NSTableViewDelegate, NSTableViewStyle, NSTrackingArea,
-    NSTrackingAreaOptions, NSView, NSViewBoundsDidChangeNotification,
+    NSCollectionViewItem, NSColor, NSControlTextEditingDelegate, NSDragOperation, NSDraggingSession, NSEvent,
+    NSIndexPathNSCollectionViewAdditions, NSOutlineView, NSOutlineViewDataSource, NSOutlineViewDelegate,
+    NSPasteboardItem, NSPasteboardWriting, NSResponder, NSScrollView, NSTableColumn, NSTableColumnResizingOptions,
+    NSTableRowView, NSTableView, NSTableViewAnimationOptions, NSTableViewColumnAutoresizingStyle,
+    NSTableViewDataSource, NSTableViewDelegate, NSTableViewStyle, NSTrackingArea, NSTrackingAreaOptions, NSView,
+    NSViewBoundsDidChangeNotification,
 };
 use objc2_core_foundation::CGFloat;
 use objc2_foundation::{
@@ -134,6 +137,19 @@ pub struct Shared {
     foot: Cell<f64>,
     /// A list without selection never highlights a clicked row.
     selection: Cell<Selection>,
+    /// Rows drag as this kind ([`nd_virtual::List::drag_rows`]), each with its id.
+    drag_kind: RefCell<Option<SharedString>>,
+    drag_ids: RefCell<HashMap<RowId, SharedString>>,
+    /// The press NSTableView is tracking on a list whose rows drag.
+    press: RefCell<Option<Press>>,
+}
+
+/// A press on a list whose rows drag: AppKit selects on the press, nd on the release, so the
+/// selection it made waits here and is reported only when no drag began.
+struct Press {
+    before: Retained<NSIndexSet>,
+    selected: Option<RowsSelected>,
+    dragged: bool,
 }
 
 impl Shared {
@@ -157,7 +173,31 @@ impl Shared {
             bars: Cell::new(0.),
             foot: Cell::new(0.),
             selection: Cell::new(props.selection),
+            drag_kind: RefCell::new(props.drag_kind.clone()),
+            drag_ids: RefCell::new(props.drag_ids.clone()),
+            press: RefCell::default(),
         }
+    }
+
+    /// What row `row` puts on the pasteboard, if the list's rows drag and that one does; asked
+    /// once AppKit's tracking has turned the press into a drag.
+    fn pasteboard_writer(&self, row: NSInteger) -> Option<Retained<ProtocolObject<dyn NSPasteboardWriting>>> {
+        self.drag_kind.borrow().as_ref()?;
+        let id = self.snap.borrow().ids.get(usize::try_from(row).ok()?).copied()?;
+        let dragged = self.drag_ids.borrow().get(&id).cloned()?;
+        if let Some(press) = self.press.borrow_mut().as_mut() {
+            press.dragged = true;
+        }
+        let writer = NSPasteboardItem::new();
+        writer.setString_forType(&NSString::from_str(&dragged), &NSString::from_str(crate::source_list::DRAG_TYPE));
+        Some(ProtocolObject::from_retained(writer))
+    }
+
+    /// A row drag at `point` (screen, bottom-left origin) in `phase`, for nd's drag session.
+    fn report_drag(&self, item: DragItem, phase: GesturePhase, point: NSPoint) {
+        let at = DragPoint::Screen(crate::source_list::screen_point(self.mtm, point));
+        self.emit.emit(DragSource { item, phase, at, native: true, modifiers: Default::default() });
+        self.wake.wake();
     }
 
     fn programmatic<R>(&self, f: impl FnOnce() -> R) -> R {
@@ -311,6 +351,40 @@ define_class!(
         fn number_of_rows(&self, _table: &NSTableView) -> NSInteger {
             self.ivars().shared.snap.borrow().ids.len() as NSInteger
         }
+
+        // The windows are the destinations and nd hit-tests targets, as for a source list's
+        // rows, so the pasteboard carries only nd's type.
+        #[unsafe(method_id(tableView:pasteboardWriterForRow:))]
+        fn pasteboard_writer(
+            &self,
+            _table: &NSTableView,
+            row: NSInteger,
+        ) -> Option<Retained<ProtocolObject<dyn NSPasteboardWriting>>> {
+            self.ivars().shared.pasteboard_writer(row)
+        }
+
+        #[unsafe(method(tableView:draggingSession:willBeginAtPoint:forRowIndexes:))]
+        fn drag_began(&self, _table: &NSTableView, _session: &NSDraggingSession, point: NSPoint, rows: &NSIndexSet) {
+            let shared = &self.ivars().shared;
+            let Some(kind) = shared.drag_kind.borrow().clone() else { return };
+            let ids: Vec<SharedString> = {
+                let (snap, drag_ids) = (shared.snap.borrow(), shared.drag_ids.borrow());
+                (0..snap.ids.len())
+                    .filter(|i| rows.containsIndex(*i))
+                    .filter_map(|i| drag_ids.get(&snap.ids[i]).cloned())
+                    .collect()
+            };
+            if !ids.is_empty() {
+                shared.report_drag(DragItem::many(kind, ids), GesturePhase::Began, point);
+            }
+        }
+
+        #[unsafe(method(tableView:draggingSession:endedAtPoint:operation:))]
+        fn drag_ended(&self, _table: &NSTableView, _session: &NSDraggingSession, point: NSPoint, _op: NSDragOperation) {
+            let shared = &self.ivars().shared;
+            let Some(kind) = shared.drag_kind.borrow().clone() else { return };
+            shared.report_drag(DragItem::new(kind, ""), GesturePhase::Ended, point);
+        }
     }
 
     unsafe impl NSTableViewDelegate for NdListSource {
@@ -356,6 +430,10 @@ define_class!(
             // selectedRow is the row selected last: the one the click or key landed on.
             let cursor = usize::try_from(table.selectedRow()).ok().and_then(|i| snap.ids.get(i).copied());
             drop(snap);
+            if let Some(press) = shared.press.borrow_mut().as_mut() {
+                press.selected = Some(RowsSelected { rows, cursor });
+                return;
+            }
             shared.emit.emit(RowsSelected { rows, cursor });
             shared.wake.wake();
         }
@@ -569,6 +647,8 @@ impl TableNative {
         table.setIntercellSpacing(objc2_foundation::NSSize::new(0., 0.));
         table.setStyle(if props.inset { NSTableViewStyle::SourceList } else { NSTableViewStyle::FullWidth });
         table.setAllowsEmptySelection(true);
+        table.setDraggingSourceOperationMask_forLocal(NSDragOperation::Move | NSDragOperation::Generic, true);
+        table.setDraggingSourceOperationMask_forLocal(NSDragOperation::None, false);
         // Columns of data alternate row backgrounds, as Finder's list view does (HIG, Lists and tables).
         table.setUsesAlternatingRowBackgroundColors(matches!(props.kind, ListKind::Table(_)) && !props.inset);
         table.setColumnAutoresizingStyle(match props.kind {
@@ -700,6 +780,8 @@ impl TableNative {
             });
         }
         self.shared.selection.set(props.selection);
+        *self.shared.drag_kind.borrow_mut() = props.drag_kind.clone();
+        *self.shared.drag_ids.borrow_mut() = props.drag_ids.clone();
         if old.selected != props.selected || old.selection != props.selection {
             self.select();
         }

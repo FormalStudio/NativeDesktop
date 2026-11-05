@@ -14,6 +14,10 @@ and the one it moves to.
   windows carry their files to the app they land in (a browser, a chat app) as a `text/uri-list`,
   on the GPUI backend under Wayland (`Feature::DragFilesOut`). Inside the app the drag is the same
   `drag_rows` drag. `ListProps` gained `drag_files`.
+- `List::drag_rows` takes `|key| Option<SharedString>`, and a row whose id is `None` does not
+  drag. A press on a row that drags selects it on release, so `on_select` never fires for the
+  start of a drag, and an unselected row drags alone without being selected. AppKit tables drag
+  their rows in AppKit's dragging session to nd's targets, as source lists already did.
 - `.on_scroll_zoom(|e: &ScrollZoomEvent, window, cx| ..)`: a wheel or two-finger scroll with the
   secondary key held (Command on macOS, Control elsewhere) over the element zooms it instead of
   scrolling anything. `e.steps` is in wheel notches, positive to zoom in, and `e.modifiers` the

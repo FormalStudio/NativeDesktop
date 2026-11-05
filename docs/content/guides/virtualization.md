@@ -121,9 +121,12 @@ container and leaves the arrows to the list. On GPUI backends the row the keys m
 theme's focus ring while the keyboard moved focus last; a press hides it. A list without a
 selection takes no focus.
 
-`.drag_rows(kind, |key| id)` lets rows drag out. A drag from a selected row carries the whole
-selection in list order, and one from an unselected row selects it and drags it alone. The GPUI
-presenter draws the row under the pointer with a count badge when there are several.
+`.drag_rows(kind, |key| Some(id))` lets rows drag out; a row whose id is `None` stays put. A drag
+from a selected row carries the whole selection in list order, and one from an unselected row
+drags it alone and leaves the selection as it was. A press on a row that drags selects it on
+release, so `on_select` never fires for the start of a drag (an app that plays a song on select
+does not play the one being dragged). The GPUI presenter draws the row under the pointer with a
+count badge when there are several; on AppKit the rows ride AppKit's own dragging session.
 `.accepts_drops([kind])` makes the list a target, with the row under the pointer outlined, and
 `.drop_on(|key| ..)` limits which rows take a drop on themselves, as a file manager's folders do.
 `.on_drop` reports `RowDropped { key, item, modifiers, local }`, where `key` is the row it landed
@@ -135,7 +138,7 @@ drops them on. That works on the GPUI backend under Wayland, where
 
 ```rust
 table("files", &self.files, columns, render_cell)
-    .drag_rows("file", |id: &FileId| id.to_string().into())
+    .drag_rows("file", |id: &FileId| Some(id.to_string().into()))
     .drag_out_files(|id| Some(id.path()))
     .accepts_drops(["file", DragItem::FILES])
     .drop_on(|id| id.is_folder())

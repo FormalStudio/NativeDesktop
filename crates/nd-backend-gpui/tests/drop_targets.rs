@@ -68,7 +68,7 @@ impl Render for Targets {
                             div().h(px(24.)).child(format!("file-{row}"))
                         })
                         .selection(Selection::Multiple)
-                        .drag_rows("file", |k| format!("file-{k}").into())
+                        .drag_rows("file", |k| Some(format!("file-{k}").into()))
                         .drag_out_files(|k| (k % 4 != 3).then(|| PathBuf::from(format!("/tmp/file-{k}"))))
                         .accepts_drops(["file", DragItem::FILES])
                         .drop_on(|k| k % 2 == 0)
@@ -238,7 +238,15 @@ fn rows_drag_out_with_the_selection() {
             PlatformInput::MouseUp(MouseUpEvent { button: MouseButton::Left, position, modifiers, click_count: 1 }),
         ]
     };
-    r.dispatch(press(row_y(table, 1), Modifiers::none()));
+    let (down, up) = {
+        let mut both = press(row_y(table, 1), Modifiers::none());
+        let up = both.pop().expect("release");
+        (both, up)
+    };
+    r.dispatch(down);
+    assert!(r.list.selected().is_empty(), "a press on a row that drags selects nothing yet");
+    r.dispatch(vec![up]);
+    assert_eq!(r.list.selected(), vec![1], "the release selects it");
     r.dispatch(press(row_y(table, 5), Modifiers { shift: true, ..Modifiers::none() }));
     assert_eq!(r.list.selected(), vec![1, 2, 3, 4, 5]);
 
@@ -293,7 +301,7 @@ fn rows_drag_out_with_the_selection() {
         }),
     ]);
     assert_eq!(r.take(), [r#"row Some(0) ["file-7"] alt false"#]);
-    assert_eq!(r.list.selected(), vec![7], "an unselected row is selected and drags alone");
+    assert_eq!(r.list.selected(), vec![1, 2, 3, 4, 5], "an unselected row drags alone and leaves the selection");
 }
 
 /// A row drag that leaves the window offers the rows' files to the platform's drag, which then

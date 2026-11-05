@@ -155,7 +155,7 @@ pub struct ListProps {
     pub inset: bool,
     /// Rows drag as this kind ([`List::drag_rows`]).
     pub drag_kind: Option<SharedString>,
-    /// The drag id of each rendered or selected row.
+    /// The drag id of each rendered or selected row that drags.
     pub drag_ids: HashMap<RowId, SharedString>,
     /// The file each rendered or selected row carries out of the app ([`List::drag_out_files`]).
     pub drag_files: HashMap<RowId, PathBuf>,
@@ -1063,7 +1063,7 @@ pub struct List<K: RowKey> {
     on_drop: Option<Handler<RowDropped<K>>>,
 }
 
-type DragIdFn<K> = Rc<dyn Fn(&K) -> SharedString>;
+type DragIdFn<K> = Rc<dyn Fn(&K) -> Option<SharedString>>;
 type DragFileFn<K> = Rc<dyn Fn(&K) -> Option<PathBuf>>;
 type DropOnFn<K> = Rc<dyn Fn(&K) -> bool>;
 
@@ -1244,11 +1244,17 @@ impl<K: RowKey> List<K> {
         self
     }
 
-    /// Rows drag as `kind`, each carrying `id(key)`. Dragging a selected row drags the whole
-    /// selection in list order; an unselected row is selected and drags alone. Targets anywhere
-    /// in the app's windows take it with `accepts_drops([kind])`; the GPUI presenter draws the
-    /// row under the pointer with a count badge for several.
-    pub fn drag_rows(mut self, kind: impl Into<SharedString>, id: impl Fn(&K) -> SharedString + 'static) -> Self {
+    /// Rows drag as `kind`, each carrying `id(key)`; a row whose id is `None` does not drag.
+    /// Dragging a selected row drags the whole selection in list order; an unselected row drags
+    /// alone and leaves the selection as it was. A press on a row that drags selects it on
+    /// release, so a drag never reports a selection. Targets anywhere in the app's windows take
+    /// it with `accepts_drops([kind])`; the GPUI presenter draws the row under the pointer with a
+    /// count badge for several, AppKit's dragging session the rows' own image.
+    pub fn drag_rows(
+        mut self,
+        kind: impl Into<SharedString>,
+        id: impl Fn(&K) -> Option<SharedString> + 'static,
+    ) -> Self {
         self.drag = Some((kind.into(), Rc::new(id)));
         self
     }
@@ -1308,7 +1314,7 @@ impl<K: RowKey> IntoElement for List<K> {
             let live = state.live_rows();
             if let Some((kind, id)) = &self.drag {
                 props.drag_kind = Some(kind.clone());
-                props.drag_ids = live.iter().map(|(r, k)| (*r, id(k))).collect();
+                props.drag_ids = live.iter().filter_map(|(r, k)| Some((*r, id(k)?))).collect();
                 if let Some(path) = &self.drag_files {
                     props.drag_files = live.iter().filter_map(|(r, k)| Some((*r, path(k)?))).collect();
                 }
