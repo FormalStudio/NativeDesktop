@@ -192,8 +192,8 @@ mod app {
         let second = host.update(|app| app.window_ids().find(|id| *id != window_id));
         let second_window = second.and_then(|id| host.ns_window(id));
         c.check(second_window.is_some(), "a window opened by a key's action gets a host, no panic in its first frame");
-        if let Some(second) = second_window {
-            second.close();
+        if let Some(id) = second {
+            host.update(|app| app.close_window(id));
         }
         platform.pump(Duration::from_millis(50), Duration::from_millis(200));
 
