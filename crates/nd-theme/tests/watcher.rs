@@ -106,7 +106,8 @@ fn a_symlinked_file_is_read_through_writes_and_retargets() {
     std::os::unix::fs::symlink(a.join("one.json"), &path).unwrap();
     let (tx, rx) = mpsc::channel();
     let _watcher = ThemeFileWatcher::spawn(&path, MatugenTheme::parse, move |t| tx.send(accent(&t)).unwrap()).unwrap();
-    let next = || rx.recv_timeout(Duration::from_secs(3)).expect("a theme within 3 s");
+    // Following a retargeted link restarts the FSEvents stream, which takes seconds on a busy Mac.
+    let next = || rx.recv_timeout(Duration::from_secs(10)).expect("a theme within 10 s");
     assert_eq!(next(), "#111111");
 
     std::fs::write(a.join("one.json"), json("#222222")).unwrap();

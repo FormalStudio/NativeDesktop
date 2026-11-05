@@ -133,10 +133,16 @@ impl ThemeFileWatcher {
                 if !force && next == *watching {
                     return true;
                 }
-                for d in &watching.dirs {
+                // Each watch or unwatch restarts the FSEvents stream (hundreds of ms on a busy
+                // Mac), so only the directories that changed are touched, unless forced.
+                for d in watching.dirs.iter().filter(|d| force || !next.dirs.contains(d)) {
                     let _ = watcher.unwatch(d);
                 }
-                let ok = next.dirs.iter().all(|d| watcher.watch(d, RecursiveMode::NonRecursive).is_ok());
+                let ok = next
+                    .dirs
+                    .iter()
+                    .filter(|d| force || !watching.dirs.contains(d))
+                    .all(|d| watcher.watch(d, RecursiveMode::NonRecursive).is_ok());
                 *watching = next;
                 ok
             };
@@ -163,14 +169,20 @@ impl ThemeFileWatcher {
                         if !(rescan || on_dir || on_file) {
                             continue;
                         }
-                        if on_dir || on_file {
-                            broken = !rearm(&mut watching, on_dir);
-                        }
-                        if burst.is_some() {
+                        // A retargeted link or a directory event moves the watch, which restarts
+                        // the FSEvents stream and can take a second, so the new file is read
+                        // first, even inside a burst. A write to a directory that only then gets
+                        // its watch would go unseen, so the burst ends with one more read.
+                        let moved = on_dir || (on_file && targets(&path, &dir) != watching);
+                        if burst.is_some() && !moved {
                             pending = true;
                         } else {
                             read(&mut last_text);
                             burst = Some(Instant::now() + DEBOUNCE);
+                        }
+                        if moved {
+                            broken = !rearm(&mut watching, on_dir);
+                            pending = true;
                         }
                     }
                     Err(mpsc::RecvTimeoutError::Timeout) => {
