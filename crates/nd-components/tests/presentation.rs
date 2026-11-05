@@ -55,3 +55,64 @@ fn reduce_motion_never_draws_the_hero_big_after_close() {
     rig.cx.frame();
     assert!(rig.cx.backend().props(cover).is_none(), "torn down");
 }
+
+/// The view as an app might draw it: the presentation moves into a wrapper as it closes, and
+/// the content may stop drawing its hero.
+struct Moving {
+    expanded: Presentation,
+    hero: bool,
+}
+
+fn moving(s: &Moving, _cx: &mut Context<Host<Moving>>) -> AnyElement {
+    let page = div().size_full().child(div().id("thumb").absolute().left(px(10.)).top(px(580.)).size(px(48.)));
+    let content = div()
+        .size_full()
+        .when(s.hero || s.expanded.is_open(), |c| {
+            c.child(div().id("cover").absolute().size(px(400.)).hero_with(&s.expanded, "thumb"))
+        })
+        .child(div().id("title").h(px(20.)).reveal_with(&s.expanded));
+    let shown = presentation("now-playing", &s.expanded).base(page).content(content).into_any_element();
+    if s.expanded.is_open() { shown } else { div().size_full().child(shown).into_any_element() }
+}
+
+fn closes(rig: &mut Rig<Moving>) {
+    rig.win.root().clone().update(&mut rig.cx, |h, cx| {
+        h.s.expanded.set_open(true);
+        cx.notify();
+    });
+    while rig.cx.needs_frame() {
+        rig.cx.advance_clock(FRAME);
+        rig.cx.frame();
+    }
+    rig.win.root().clone().update(&mut rig.cx, |h, cx| {
+        h.s.expanded.set_open(false);
+        cx.notify();
+    });
+    let mut frames = 0;
+    while rig.state().expanded.is_shown() {
+        rig.cx.frame();
+        rig.cx.advance_clock(FRAME);
+        frames += 1;
+        assert!(frames < 240, "still closing after {frames} frames");
+    }
+}
+
+#[test]
+fn a_presentation_mounted_again_as_it_closes_still_closes() {
+    let mut rig = Rig::sized(
+        Size { width: 480., height: 640. },
+        |_| Moving { expanded: Presentation::new(), hero: true },
+        moving,
+    );
+    closes(&mut rig);
+}
+
+#[test]
+fn a_close_whose_hero_never_heads_back_ends_with_the_fade() {
+    let mut rig = Rig::sized(
+        Size { width: 480., height: 640. },
+        |_| Moving { expanded: Presentation::new(), hero: false },
+        moving,
+    );
+    closes(&mut rig);
+}

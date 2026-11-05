@@ -49,7 +49,8 @@ struct State {
     /// While closing: the backdrop has faded out, and the hero (if one rendered) has landed.
     faded: Cell<bool>,
     landed: Cell<bool>,
-    hero: Cell<bool>,
+    /// A hero was drawn heading back during this close, so a landing will come.
+    leaving: Cell<bool>,
 }
 
 impl Presentation {
@@ -64,6 +65,7 @@ impl Presentation {
             (Phase::Opening | Phase::Open, false) => {
                 self.0.faded.set(false);
                 self.0.landed.set(false);
+                self.0.leaving.set(false);
                 Phase::Closing
             }
             (phase, _) => phase,
@@ -107,7 +109,7 @@ impl Presentation {
     }
 
     fn close_if_done(&self) {
-        if self.0.faded.get() && (self.0.landed.get() || !self.0.hero.get()) {
+        if self.0.faded.get() && (self.0.landed.get() || !self.0.leaving.get()) {
             self.0.phase.set(Phase::Closed);
         }
     }
@@ -180,7 +182,8 @@ impl IntoElement for PresentationView {
             .overflow_hidden()
             .opacity(target)
             .animate(pace)
-            .enter_from(|p| p.opacity(0.))
+            // Mounted mid-close (its parent changed shape), it still fades out and reports it.
+            .enter_from(|p| p.opacity(1. - target))
             .on_animation_end(move |_, _, cx| {
                 state.faded();
                 cx.refresh_windows();
@@ -215,7 +218,9 @@ impl PresentationExt for Div {
     }
 
     fn hero_with(self, state: &Presentation, from: impl Into<SharedString>) -> Self {
-        state.0.hero.set(true);
+        if state.is_closing() {
+            state.0.leaving.set(true);
+        }
         let state = state.clone();
         self.hero_from(from, state.is_closing()).on_animation_end(move |_, _, cx| {
             state.landed();
