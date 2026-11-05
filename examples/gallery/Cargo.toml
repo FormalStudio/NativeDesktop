@@ -26,7 +26,10 @@ nd = { path = "../../crates/nd", features = ["audit"] }
 nd = { path = "../../crates/nd", features = ["test"] }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
+block2 = "0.6.2"
 ndshell = { path = "../../crates/ndshell" }
+objc2-core-graphics = "0.3.2"
+objc2-screen-capture-kit = "0.3.2"
 png = "0.17"
 
 # Tier 2 goldens of the macOS look. AppKit owns the main thread, so libtest's harness is off.

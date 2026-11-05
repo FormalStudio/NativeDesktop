@@ -2542,9 +2542,12 @@ dependencies = [
 name = "gallery"
 version = "0.6.1"
 dependencies = [
+ "block2 0.6.2",
  "image",
  "nd",
  "ndshell",
+ "objc2-core-graphics",
+ "objc2-screen-capture-kit",
  "png 0.17.16",
 ]
 

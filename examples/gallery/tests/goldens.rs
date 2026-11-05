@@ -1,6 +1,7 @@
 //! Tier 2 goldens of the navigation and feedback components in the macOS look, light and
 //! dark: the gallery window on the real AppKit backend, captured as the window server
-//! composites it (`screencapture -l`, so the palette's and toasts' glass is in it) and compared
+//! composites it (`screencapture -l`, or ScreenCaptureKit over the window and its overlay windows
+//! so the palette's and toasts' glass is in it) and compared
 //! with `tests/goldens/macos-<view>-<scheme>@<scale>x.png`. The views: the source list with a
 //! banner and a toast, the command palette open over it, and the tabs, split view and status
 //! page pages. Holds the ndshell machine lock
@@ -122,18 +123,19 @@ mod goldens {
 
     /// The window as the window server composites it (glass included), without its shadow. With
     /// overlay windows over it (the palette and toasts, ARCHITECTURE.md 6.3) the capture is the
-    /// screen region of its frame, since their glass samples the window below and a capture of
-    /// either window alone would not show that.
+    /// window and its overlays composited together over its frame, since their glass samples the
+    /// window below and a capture of either window alone would not show that. Only those windows
+    /// are in it, so an alert another process raises on top stays out.
     fn screenshot(window: &nd::appkit::NdWindow) -> Result<Vec<u8>, String> {
-        if overlays(window).is_empty() {
+        let overlays = overlays(window);
+        if overlays.is_empty() {
             return capture(&format!("-l{}", window.windowNumber()));
         }
-        let mtm = nd::appkit::objc2_foundation::MainThreadMarker::new().expect("main thread");
-        let screens = nd::appkit::objc2_app_kit::NSScreen::screens(mtm);
-        let primary = screens.firstObject().map_or(0., |s| s.frame().size.height);
-        let f = window.frame();
-        let top = primary - (f.origin.y + f.size.height);
-        capture(&format!("-R{},{},{},{}", f.origin.x, top, f.size.width, f.size.height))
+        let mut numbers = vec![window.windowNumber() as u32];
+        numbers.extend(overlays.iter().map(|o| o.windowNumber() as u32));
+        let path = std::env::temp_dir().join(format!("nd-gallery-{}.png", std::process::id()));
+        std::fs::write(&path, sck::capture(&numbers)?).map_err(|e| e.to_string())?;
+        to_srgb(&path)
     }
 
     /// One window as the window server composites it, without its shadow.
@@ -145,19 +147,129 @@ mod goldens {
             .status()
             .map_err(|e| format!("screencapture: {e}"))?;
         std::fs::metadata(&path).map_err(|e| format!("screencapture wrote nothing ({status}): {e}"))?;
-        // screencapture writes the main display's colour space (P3 on the built-in panel, near
-        // sRGB on a headless display), so each capture is matched to sRGB before it is compared.
+        to_srgb(&path)
+    }
+
+    /// Reads the capture at `path` matched to sRGB and removes the file.
+    fn to_srgb(path: &Path) -> Result<Vec<u8>, String> {
+        // Captures come in the main display's colour space (P3 on the built-in panel, near sRGB
+        // on a headless display), so each one is matched to sRGB before it is compared.
         let sips = std::process::Command::new("/usr/bin/sips")
             .args(["--matchTo", "/System/Library/ColorSync/Profiles/sRGB Profile.icc"])
-            .arg(&path)
+            .arg(path)
             .output()
             .map_err(|e| format!("sips: {e}"))?;
         if !sips.status.success() {
             return Err(format!("sips: {}", String::from_utf8_lossy(&sips.stderr)));
         }
-        let png = std::fs::read(&path).map_err(|e| e.to_string())?;
-        let _ = std::fs::remove_file(&path);
+        let png = std::fs::read(path).map_err(|e| e.to_string())?;
+        let _ = std::fs::remove_file(path);
         Ok(png)
+    }
+
+    /// ScreenCaptureKit stills of a set of windows composited together.
+    mod sck {
+        use std::sync::{Arc, Mutex};
+        use std::time::{Duration, Instant};
+
+        use block2::RcBlock;
+        use nd::appkit::objc2::AnyThread;
+        use nd::appkit::objc2::rc::Retained;
+        use nd::appkit::objc2_app_kit::{NSBitmapImageFileType, NSBitmapImageRep};
+        use nd::appkit::objc2_foundation::{NSArray, NSDate, NSDictionary, NSError, NSPoint, NSRect, NSRunLoop};
+        use objc2_core_graphics::CGImage;
+        use objc2_screen_capture_kit::{
+            SCContentFilter, SCScreenshotManager, SCShareableContent, SCStreamConfiguration,
+        };
+
+        struct SendBox<T>(T);
+        // SAFETY: only moves a retained object from a completion handler to the main thread,
+        // which uses it alone afterwards.
+        unsafe impl<T> Send for SendBox<T> {}
+
+        /// Runs the main run loop until `slot` fills, since ScreenCaptureKit completes there.
+        fn wait<T>(slot: &Mutex<Option<T>>, what: &str) -> Result<T, String> {
+            let end = Instant::now() + Duration::from_secs(10);
+            loop {
+                if let Some(value) = slot.lock().unwrap().take() {
+                    return Ok(value);
+                }
+                if Instant::now() > end {
+                    return Err(format!("ScreenCaptureKit gave no {what} (Screen Recording permission?)"));
+                }
+                let until = NSDate::dateWithTimeIntervalSinceNow(0.02);
+                NSRunLoop::currentRunLoop().runUntilDate(&until);
+            }
+        }
+
+        /// The windows `numbers` composited as the window server shows them, cropped to the
+        /// frame of the first, at the display's pixel scale. A PNG in the display's colour space.
+        pub fn capture(numbers: &[u32]) -> Result<Vec<u8>, String> {
+            let found = Arc::new(Mutex::new(None::<Result<SendBox<Retained<SCShareableContent>>, String>>));
+            let done = found.clone();
+            let block = RcBlock::new(move |content: *mut SCShareableContent, error: *mut NSError| {
+                let content = unsafe { Retained::retain(content) };
+                *done.lock().unwrap() = Some(content.map(SendBox).ok_or_else(|| {
+                    unsafe { error.as_ref() }.map_or("no content".into(), |e| e.localizedDescription().to_string())
+                }));
+            });
+            unsafe { SCShareableContent::getShareableContentWithCompletionHandler(&block) };
+            let content = wait(&found, "shareable content")??.0;
+            let all = unsafe { content.windows() };
+            let mut windows = Vec::new();
+            for number in numbers {
+                let w = all.iter().find(|w| unsafe { w.windowID() } == *number);
+                windows.push(w.ok_or_else(|| format!("window {number} is not shareable"))?);
+            }
+            let frame = unsafe { windows[0].frame() };
+            let centre = (frame.origin.x + frame.size.width / 2., frame.origin.y + frame.size.height / 2.);
+            let display = unsafe { content.displays() }
+                .iter()
+                .find(|d| {
+                    let f = unsafe { d.frame() };
+                    (f.origin.x..f.origin.x + f.size.width).contains(&centre.0)
+                        && (f.origin.y..f.origin.y + f.size.height).contains(&centre.1)
+                })
+                .ok_or("the window is on no display")?;
+            let included = NSArray::from_retained_slice(&windows);
+            let filter = unsafe {
+                SCContentFilter::initWithDisplay_includingWindows(SCContentFilter::alloc(), &display, &included)
+            };
+            let scale = unsafe { filter.pointPixelScale() } as f64;
+            let origin = unsafe { display.frame() }.origin;
+            let config = unsafe { SCStreamConfiguration::new() };
+            unsafe {
+                config.setSourceRect(NSRect::new(
+                    NSPoint::new(frame.origin.x - origin.x, frame.origin.y - origin.y),
+                    frame.size,
+                ));
+                config.setWidth((frame.size.width * scale).round() as usize);
+                config.setHeight((frame.size.height * scale).round() as usize);
+                config.setScalesToFit(false);
+                config.setShowsCursor(false);
+            }
+            let shot = Arc::new(Mutex::new(None::<Result<SendBox<Retained<CGImage>>, String>>));
+            let done = shot.clone();
+            let block = RcBlock::new(move |image: *mut CGImage, error: *mut NSError| {
+                let image = unsafe { Retained::retain(image) };
+                *done.lock().unwrap() = Some(image.map(SendBox).ok_or_else(|| {
+                    unsafe { error.as_ref() }.map_or("no image".into(), |e| e.localizedDescription().to_string())
+                }));
+            });
+            unsafe {
+                SCScreenshotManager::captureImageWithFilter_configuration_completionHandler(
+                    &filter,
+                    &config,
+                    Some(&block),
+                )
+            };
+            let image = wait(&shot, "screenshot")??.0;
+            let rep = NSBitmapImageRep::initWithCGImage(NSBitmapImageRep::alloc(), &image);
+            let png =
+                unsafe { rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &NSDictionary::new()) }
+                    .ok_or("PNG encoding failed")?;
+            Ok(png.to_vec())
+        }
     }
 
     fn check(host: &nd::appkit::AppHost, view: &str, appearance: Appearance, scheme: &str) -> Result<(), String> {
