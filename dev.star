@@ -19,10 +19,11 @@ GST = ["gstreamer-1.0", "gstreamer-plugins-base-1.0", "gstreamer-plugins-bad-1.0
 ]
 
 # Goldens draw the Adwaita preset's fonts and the desktop's interface fonts, so every host sees
-# the same few.
+# the same few. Noto Sans CJK draws the terminal golden's wide characters.
 FONTS = [
     pkg("adwaita-fonts", source = url("https://download.gnome.org/sources/adwaita-fonts/51/adwaita-fonts-51.0.tar.xz")),
     pkg("noto-color-emoji", source = url("https://github.com/googlefonts/noto-emoji/raw/v2.051/fonts/NotoColorEmoji.ttf")),
+    pkg("noto-sans-cjk-sc", source = url("https://github.com/notofonts/noto-cjk/raw/Sans2.004/Sans/Variable/OTF/NotoSansCJKsc-VF.otf")),
 ]
 
 linux = platform.is_linux
@@ -64,7 +65,8 @@ export CEF_PATH="${CEF_PATH:-${XDG_CACHE_HOME:-$HOME/.cache}/nd-cef}"
 fonts="${XDG_CACHE_HOME:-$HOME/.cache}/nd-fonts"
 mkdir -p "$fonts"
 printf '%%s\\n' '<?xml version="1.0"?>' '<!DOCTYPE fontconfig SYSTEM "urn:fontconfig:fonts.dtd">' '<fontconfig>' \
-  "<dir>$FSPEC_PKG_ADWAITA_FONTS</dir>" "<dir>$FSPEC_PKG_NOTO_COLOR_EMOJI</dir>" "<cachedir>$fonts/cache</cachedir>" \
+  "<dir>$FSPEC_PKG_ADWAITA_FONTS</dir>" "<dir>$FSPEC_PKG_NOTO_COLOR_EMOJI</dir>" \
+  "<dir>$FSPEC_PKG_NOTO_SANS_CJK_SC</dir>" "<cachedir>$fonts/cache</cachedir>" \
   '<alias><family>sans-serif</family><prefer><family>Adwaita Sans</family></prefer></alias>' \
   '<alias><family>monospace</family><prefer><family>Adwaita Mono</family></prefer></alias>' \
   '</fontconfig>' > "$fonts/fonts.conf"

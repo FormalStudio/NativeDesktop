@@ -192,6 +192,7 @@
                 fontDirectories = [
                   pkgs.adwaita-fonts
                   pkgs.noto-fonts-color-emoji
+                  pkgs.noto-fonts-cjk-sans
                 ];
                 impureFontDirectories = [ ];
                 includes = [

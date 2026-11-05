@@ -118,6 +118,14 @@ url = "https://github.com/googlefonts/noto-emoji/raw/v2.051/fonts/NotoColorEmoji
 hash = "sha256-cqY1yz0vNSTFFiDN3kBrIXIE6KagbGoJb/jtS1/W4ns="
 
 [[pkg]]
+name = "noto-sans-cjk-sc"
+source = "url:https://github.com/notofonts/noto-cjk/raw/Sans2.004/Sans/Variable/OTF/NotoSansCJKsc-VF.otf"
+
+[pkg.any]
+url = "https://github.com/notofonts/noto-cjk/raw/Sans2.004/Sans/Variable/OTF/NotoSansCJKsc-VF.otf"
+hash = "sha256-J0XpaBy52KXIkBtiyeG9mMnHdDZfw7hN1GdiEBO1HNM="
+
+[[pkg]]
 name = "rustup"
 source = "aqua:rustup"
 version = "1.29.2"
