@@ -5,7 +5,8 @@
 //! up under the toolbar and rests clear of it; a press on an avatar or a picture reaches
 //! the tap and double tap of the element around it, and a double click on a bubble's text is its
 //! row's double tap, not a word selection; a context menu that shows its icons keeps them on
-//! macOS 27, which hides menu images by default. Prints
+//! macOS 27, which hides menu images by default; an icon-only toolbar button that changes its
+//! icon or tooltip shows the change on its toolbar item. Prints
 //! `ND_MSG_GAPS_OK`.
 
 mod harness;
@@ -33,7 +34,7 @@ mod gaps {
         BubbleSide, Draft, ImageLoaded, ImageSource, Person, Reaction, VideoProgress, VideoReady, avatar, chat_bubble,
         composer, image, video,
     };
-    use nd_components::{Icon, icon};
+    use nd_components::{ButtonExt, Icon, icon};
     use nd_ui::panel;
     use nd_ui::prelude::*;
 
@@ -54,6 +55,7 @@ mod gaps {
         titlebar(&rig, &mut c);
         glass_shapes(&rig, &mut c);
         under_toolbar(&rig, &mut c);
+        toolbar_icon_patch(&rig, &mut c);
         presses_through_media(&rig, &mut c);
         menu_icons(&mut c);
         if c.0 == 0 {
@@ -382,6 +384,55 @@ mod gaps {
         c.check(radius("panel") == 0., &format!("glass: a large surface stays square ({})", radius("panel")));
         let ring = rig.view(win, "ring").layer().map(|l| l.cornerRadius());
         c.check(ring == Some(30.), &format!("rounded_full(): the radius is half the size, not unbounded ({ring:?})"));
+        rig.close(opened);
+    }
+
+    struct Busy {
+        working: bool,
+    }
+
+    impl Render for Busy {
+        fn render(&mut self, _w: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            use nd_components::{scaffold, toolbar};
+            let (glyph, tip) = if self.working { (Icon::RotateCw, "Working") } else { (Icon::Inbox, "Idle") };
+            scaffold()
+                .toolbar(toolbar().item(nd_components::icon_button("activity", glyph).tooltip(tip)))
+                .content(div().size_full())
+        }
+    }
+
+    /// A Mail-style activity button: an icon-only toolbar button that swaps its icon while work
+    /// runs. AppKit shows it as the toolbar item's own image, so the swap has to reach the item.
+    fn toolbar_icon_patch(rig: &Rig, c: &mut Checks) {
+        let opened = rig.open("busy", |_| Busy { working: false });
+        rig.pump();
+        let item = |opened: &rig::Opened<Busy>| {
+            let toolbar = opened.window.toolbar().expect("a toolbar");
+            toolbar.items().iter().find_map(|i| {
+                let tip = i.toolTip()?.to_string();
+                (tip == "Idle" || tip == "Working").then(|| (tip, i.image()))
+            })
+        };
+        let before = item(&opened);
+        c.check(
+            before.as_ref().is_some_and(|(tip, image)| tip == "Idle" && image.is_some()),
+            "toolbar patch: the icon button shows as its item's image",
+        );
+        rig.update(&opened, |busy, cx| {
+            busy.working = true;
+            cx.notify();
+        });
+        rig.pump();
+        let after = item(&opened);
+        c.check(
+            after.as_ref().is_some_and(|(tip, _)| tip == "Working"),
+            &format!("toolbar patch: a new tooltip reaches the item ({:?})", after.as_ref().map(|a| &a.0)),
+        );
+        let swapped = match (&before, &after) {
+            (Some((_, Some(old))), Some((_, Some(new)))) => !std::ptr::eq(&**old, &**new),
+            _ => false,
+        };
+        c.check(swapped, "toolbar patch: a new icon reaches the item");
         rig.close(opened);
     }
 

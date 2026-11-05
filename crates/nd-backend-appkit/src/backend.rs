@@ -771,17 +771,9 @@ impl State {
                 match child {
                     Native::WindowControls { .. } => item.skip.set(true),
                     Native::Button(button) if button.is_icon_only() => {
-                        let props = button.props();
                         let (target, action) = button.action();
                         item.item.setView(None);
-                        item.item.setImage(props.icon.as_deref().and_then(crate::icons::symbol).as_deref());
-                        let label = item.props.label.clone().or(props.tooltip.clone()).unwrap_or_default();
-                        item.item.setLabel(&objc2_foundation::NSString::from_str(&label));
-                        if item.props.tooltip.is_none() {
-                            item.item.setToolTip(
-                                props.tooltip.as_deref().map(objc2_foundation::NSString::from_str).as_deref(),
-                            );
-                        }
+                        item.mirror(&button.props());
                         unsafe {
                             item.item.setTarget(Some(target));
                             item.item.setAction(Some(action));
@@ -1483,6 +1475,14 @@ impl Backend for AppKitBackend {
             && let Some(Native::Toolbar(t)) = state.parents.get(&node).and_then(|p| state.nodes.get(p))
         {
             t.dirty.set(true);
+        }
+        // An icon-only button shows through its toolbar item, which copied its image at insert;
+        // the button itself is detached, so a change has to reach the item.
+        if let Some(Native::Button(b)) = state.nodes.get(&node)
+            && b.is_icon_only()
+            && let Some(Native::ToolbarItem(item)) = state.parents.get(&node).and_then(|p| state.nodes.get(p))
+        {
+            item.mirror(&b.props());
         }
         if form_changed {
             state.mark_form(node);

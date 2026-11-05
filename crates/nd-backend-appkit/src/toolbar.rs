@@ -252,6 +252,17 @@ impl ToolbarItemNative {
         self.item.setNavigational(props.navigation);
     }
 
+    /// Shows an icon-only button as the item's own image: its icon, and its tooltip where the
+    /// item names none.
+    pub fn mirror(&self, button: &nd_ui::ButtonProps) {
+        self.item.setImage(button.icon.as_deref().and_then(crate::icons::symbol).as_deref());
+        let label = self.props.label.clone().or(button.tooltip.clone()).unwrap_or_default();
+        self.item.setLabel(&NSString::from_str(&label));
+        if self.props.tooltip.is_none() {
+            self.item.setToolTip(button.tooltip.as_deref().map(NSString::from_str).as_deref());
+        }
+    }
+
     /// Shows the child's own view.
     pub fn show_view(&self, view: &NSView) {
         self.host.addSubview(view);
