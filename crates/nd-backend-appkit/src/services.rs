@@ -6,6 +6,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
+use std::ptr::NonNull;
 
 use block2::RcBlock;
 use nd_components::services::{AlertCallback, ChromeServices, OpenCallback, SaveCallback};
@@ -17,12 +18,12 @@ use nd_core::{NodeId, WindowId};
 use nd_ui::{Action, App, KeyBinding};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Sel};
-use objc2::{AnyThread, DefinedClass, MainThreadOnly, define_class, msg_send, sel};
+use objc2::{AnyThread, DefinedClass, MainThreadOnly, Message, define_class, msg_send, sel};
 use objc2_app_kit::{
     NSAboutPanelOptionApplicationName, NSAboutPanelOptionApplicationVersion, NSAboutPanelOptionCredits,
-    NSAboutPanelOptionVersion, NSAlert, NSAlertStyle, NSApplication, NSColor, NSControlStateValueOn,
-    NSEventModifierFlags, NSFont, NSFontAttributeName, NSForegroundColorAttributeName, NSLinkAttributeName, NSMenu,
-    NSMenuItem, NSOpenPanel, NSSavePanel,
+    NSAboutPanelOptionVersion, NSAlert, NSAlertStyle, NSApplication, NSColor, NSControlStateValueOn, NSEvent,
+    NSEventMask, NSEventModifierFlags, NSFont, NSFontAttributeName, NSForegroundColorAttributeName,
+    NSLinkAttributeName, NSMenu, NSMenuItem, NSOpenPanel, NSSavePanel,
 };
 use objc2_foundation::{
     MainThreadMarker, NSArray, NSAttributedStringKey, NSDictionary, NSMutableAttributedString, NSObject,
@@ -344,6 +345,8 @@ pub fn menu_bar(mtm: MainThreadMarker, mut menus: Vec<Menu>, bindings: &[KeyBind
 }
 
 /// Runs `f` once from a block AppKit may only declare as `Fn`.
+const ESCAPE_KEY: u16 = 0x35;
+
 fn once<A>(f: impl FnOnce(A) + 'static) -> impl Fn(A) + 'static {
     let f = Cell::new(Some(f));
     move |a| {
@@ -402,19 +405,43 @@ impl ChromeServices for AppKitChrome {
             AlertStyle::Warning => NSAlertStyle::Warning,
             AlertStyle::Critical => NSAlertStyle::Critical,
         });
-        for b in &alert.buttons {
+        let mut default_cancel = None;
+        for (i, b) in alert.buttons.iter().enumerate() {
             let button = ns.addButtonWithTitle(&NSString::from_str(&b.label));
             match b.role {
                 ButtonRole::Destructive => button.setHasDestructiveAction(true),
+                // NSAlert gives a button titled Cancel Esc even when it is first, the default.
+                ButtonRole::Cancel if i == 0 => {
+                    button.setKeyEquivalent(&NSString::from_str("\r"));
+                    default_cancel = Some(button);
+                }
                 ButtonRole::Cancel => button.setKeyEquivalent(&NSString::from_str("\u{1b}")),
                 ButtonRole::Default => {}
             }
         }
+        // A button holds one key equivalent, so Esc reaches a Cancel that holds Return here.
+        let escape = default_cancel.and_then(|cancel| {
+            let panel = ns.window();
+            let block = RcBlock::new(move |event: NonNull<NSEvent>| -> *mut NSEvent {
+                let event = unsafe { event.as_ref() };
+                let in_panel = event.window(mtm).is_some_and(|w| std::ptr::eq(&*w, &*panel));
+                if in_panel && event.keyCode() == ESCAPE_KEY {
+                    unsafe { cancel.performClick(None) };
+                    return std::ptr::null_mut();
+                }
+                Retained::as_ptr(&event.retain()).cast_mut()
+            });
+            unsafe { NSEvent::addLocalMonitorForEventsMatchingMask_handler(NSEventMask::KeyDown, &block) }
+        });
         let parent = match alert.presentation {
             AlertPresentation::Sheet => ns_window(&self.backend, window),
             AlertPresentation::Modal => None,
         };
         let finish = once(move |code: isize| {
+            if let Some(monitor) = escape {
+                // Never removed from inside its own handler, where the Esc click ends the alert.
+                crate::events::defer(move || unsafe { NSEvent::removeMonitor(&monitor) });
+            }
             // NSAlertFirstButtonReturn is 1000; later buttons count up from it.
             let index = usize::try_from(code - 1000).unwrap_or(0);
             defer_with_app(move |app| done(AlertResponse(index), app));

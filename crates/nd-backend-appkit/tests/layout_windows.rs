@@ -24,8 +24,12 @@ mod windows {
     use block2::RcBlock;
     use nd_backend_appkit::objc2::rc::Retained;
     use nd_backend_appkit::objc2::{msg_send, sel};
-    use nd_backend_appkit::objc2_app_kit::{NSApplication, NSPanel, NSTextField, NSView, NSWindow};
-    use nd_backend_appkit::objc2_foundation::{MainThreadMarker, NSRunLoop, NSRunLoopCommonModes, NSString, NSTimer};
+    use nd_backend_appkit::objc2_app_kit::{
+        NSApplication, NSEvent, NSEventModifierFlags, NSEventType, NSPanel, NSTextField, NSView, NSWindow,
+    };
+    use nd_backend_appkit::objc2_foundation::{
+        MainThreadMarker, NSPoint, NSRunLoop, NSRunLoopCommonModes, NSString, NSTimer,
+    };
     use nd_backend_appkit::{AppHost, AppKitChrome};
     use nd_components::services::{self, Chrome};
     use nd_components::{AboutPanel, Alert};
@@ -125,6 +129,24 @@ mod windows {
             pump(host);
         }
         done(host)
+    }
+
+    fn post_key(window: &NSWindow, chars: &str, code: u16) {
+        let chars = NSString::from_str(chars);
+        let event = NSEvent::keyEventWithType_location_modifierFlags_timestamp_windowNumber_context_characters_charactersIgnoringModifiers_isARepeat_keyCode(
+            NSEventType::KeyDown,
+            NSPoint::new(0., 0.),
+            NSEventModifierFlags::empty(),
+            0.,
+            window.windowNumber(),
+            None,
+            &chars,
+            &chars,
+            false,
+            code,
+        )
+        .expect("key event");
+        NSApplication::sharedApplication(MainThreadMarker::from(window)).postEvent_atStart(&event, false);
     }
 
     fn class_name(view: &NSView) -> String {
@@ -366,6 +388,26 @@ mod windows {
             *answers.borrow() == [("modal", 1), ("first", 0), ("second", 1)],
             &format!("each sheet answered once: {:?}", answers.borrow()),
         );
+
+        // Cancel listed before a destructive action is the default: Return and Esc both cancel.
+        for (key, code, name) in [("\r", 0x24, "return"), ("\u{1b}", 0x35, "escape")] {
+            let alert = Alert::new("Delete?").cancel("Cancel").destructive("Delete");
+            host.update(|app| services::alert(app, a.id(), alert, record(name)));
+            pump_until(&host, 3., |_| ns_a.attachedSheet().is_some());
+            if let Some(sheet) = ns_a.attachedSheet() {
+                post_key(&sheet, key, code);
+            }
+            let answered = pump_until(&host, 2., |_| answers.borrow().iter().any(|(n, _)| *n == name));
+            if !answered && let Some(sheet) = ns_a.attachedSheet() {
+                ns_a.endSheet_returnCode(&sheet, 1001);
+                pump_until(&host, 2., |_| answers.borrow().iter().any(|(n, _)| *n == name));
+            }
+            let answer = answers.borrow().iter().find(|(n, _)| *n == name).map(|(_, i)| *i);
+            c.check(
+                answered && answer == Some(0),
+                &format!("{name} on a cancel-first alert answers Cancel: {answer:?}"),
+            );
+        }
 
         // The about panel.
         let name = "Layout Windows Gate";
