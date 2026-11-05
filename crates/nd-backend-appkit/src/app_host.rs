@@ -14,6 +14,7 @@ use nd_core::{FrameTime, WindowId};
 use nd_diag::{FrameRecord, Watchdog};
 use nd_ui::dispatch::KeyDispatch;
 use nd_ui::{App, Keystroke, WindowKind};
+use objc2::Message;
 use objc2::rc::Retained;
 use objc2_app_kit::{NSApplication, NSWindow, NSWindowOrderingMode, NSWindowTabbingMode};
 use objc2_foundation::{MainThreadMarker, NSString};
@@ -45,13 +46,15 @@ impl Host {
         let Ok(app) = self.app.try_borrow() else { return };
         let ids: Vec<WindowId> = app.window_ids().collect();
         let mut windows = self.windows.borrow_mut();
-        windows.retain(|id, _| {
-            let open = ids.contains(id);
-            if !open && let Some(diag) = nd_diag::global() {
+        let gone: Vec<WindowId> = windows.keys().filter(|id| !ids.contains(id)).copied().collect();
+        let mut closed = Vec::new();
+        for id in gone {
+            if let Some(diag) = nd_diag::global() {
                 diag.close_window(id.0);
             }
-            open
-        });
+            closed.extend(windows.remove(&id));
+        }
+        let mut opened = Vec::new();
         for id in ids {
             if windows.contains_key(&id) {
                 continue;
@@ -87,11 +90,19 @@ impl Host {
             host.clock().on_frame(move |_| tick(&this));
             ns_window.set_router(Some(Rc::new(AppRouter { host: Rc::downgrade(self), window: id })));
             let sheet_parent = match options.kind {
-                WindowKind::Sheet { parent } => windows.get(&parent),
+                WindowKind::Sheet { parent } => windows.get(&parent).map(|p| p.window().retain()),
                 WindowKind::Normal | WindowKind::Settings => None,
             };
+            windows.insert(id, host);
+            opened.push((ns_window, options, sheet_parent));
+        }
+        // AppKit runs display ticks and layout inside beginSheet, endSheet and showing a window,
+        // and those read the hosts.
+        drop(windows);
+        drop(closed);
+        for (ns_window, options, sheet_parent) in opened {
             match (sheet_parent, &options.tab_group) {
-                (Some(parent), _) => parent.window().beginSheet_completionHandler(&ns_window, None),
+                (Some(parent), _) => parent.beginSheet_completionHandler(&ns_window, None),
                 (None, Some(group)) if !matches!(options.kind, WindowKind::Sheet { .. }) => {
                     join_tab_group(&ns_window, group);
                     self.show(&ns_window, &options);
@@ -110,7 +121,6 @@ impl Host {
                     self.show(&ns_window, &options);
                 }
             }
-            windows.insert(id, host);
         }
     }
 
@@ -409,7 +419,6 @@ impl AppHost {
 
     /// The app window's NSWindow, once its host is open.
     pub fn ns_window(&self, id: WindowId) -> Option<Retained<NdWindow>> {
-        use objc2::Message;
         self.0.windows.borrow().get(&id).map(|h| h.window().retain())
     }
 

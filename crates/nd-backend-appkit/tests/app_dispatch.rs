@@ -17,11 +17,18 @@ fn main() {
 
 #[cfg(target_os = "macos")]
 mod app {
+    use std::cell::Cell;
+    use std::ptr::NonNull;
+    use std::rc::Rc;
     use std::time::{Duration, Instant};
 
+    use block2::RcBlock;
+
     use nd_backend_appkit::objc2::rc::Retained;
+    use nd_backend_appkit::objc2::runtime::AnyObject;
+    use nd_backend_appkit::objc2_app_kit::NSWindowWillBeginSheetNotification;
     use nd_backend_appkit::objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType, NSView, NSWindow};
-    use nd_backend_appkit::objc2_foundation::{NSPoint, NSString};
+    use nd_backend_appkit::objc2_foundation::{NSNotification, NSNotificationCenter, NSPoint, NSString};
     use nd_backend_appkit::{AppHost, NdAppKitPlatform};
     use nd_gpui::gpui;
     use nd_ui::prelude::*;
@@ -119,7 +126,7 @@ mod app {
         let mut window_id = WindowId(0);
         let mut root = None;
         let mut sheet_trigger = None;
-        let host = AppHost::new(|cx| {
+        let host = Rc::new(AppHost::new(|cx| {
             cx.bind_keys([KeyBinding::new("cmd-k", Ping, None), KeyBinding::new("cmd-,", OpenSecond, None)]);
             let trigger = cx.new(|_| ());
             let handle = cx.open_window(WindowOptions::main("dispatch").title("App dispatch"), |window, cx| {
@@ -135,7 +142,7 @@ mod app {
             sheet_trigger = Some(trigger);
             window_id = handle.id();
             root = Some(handle.root().clone());
-        });
+        }));
         let root = root.expect("root view");
         let platform = host.platform();
         let window = host.ns_window(window_id).expect("the host opened the window");
@@ -193,6 +200,21 @@ mod app {
         // The observer runs in the effects the next frame flushes, inside the window's layout
         // pass, so the sheet exists in the app before AppKit has a window for it.
         let trigger = sheet_trigger.expect("sheet trigger");
+        // AppKit posts this inside beginSheet, where its display ticks also read the hosts.
+        let hosts_read = Rc::new(Cell::new(false));
+        let attaching = {
+            let (host, read) = (host.clone(), hosts_read.clone());
+            RcBlock::new(move |_: NonNull<NSNotification>| read.set(host.ns_window(window_id).is_some()))
+        };
+        let parent: &AnyObject = &window;
+        let observer = unsafe {
+            NSNotificationCenter::defaultCenter().addObserverForName_object_queue_usingBlock(
+                Some(NSWindowWillBeginSheetNotification),
+                Some(parent),
+                None,
+                &attaching,
+            )
+        };
         host.update(|app| trigger.update(app, |_, cx| cx.notify()));
         if let Some(content) = window.contentView() {
             content.setNeedsLayout(true);
@@ -210,6 +232,8 @@ mod app {
         }
         let mounted = sheet.and_then(|id| body_view(&host, id)).is_some();
         c.check(mounted, "the sheet draws once its host is up");
+        c.check(hosts_read.get(), "the hosts can be read while the sheet attaches");
+        unsafe { NSNotificationCenter::defaultCenter().removeObserver(observer.as_ref()) };
         if let Some(sheet) = &sheet_window {
             window.endSheet(sheet);
             sheet.close();
