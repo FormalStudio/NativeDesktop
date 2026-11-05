@@ -393,7 +393,7 @@ mod windows {
         for (key, code, name) in [("\r", 0x24, "return"), ("\u{1b}", 0x35, "escape")] {
             let alert = Alert::new("Delete?").cancel("Cancel").destructive("Delete");
             host.update(|app| services::alert(app, a.id(), alert, record(name)));
-            pump_until(&host, 3., |_| ns_a.attachedSheet().is_some());
+            pump_until(&host, 3., |_| ns_a.attachedSheet().is_some_and(|s| s.isKeyWindow()));
             if let Some(sheet) = ns_a.attachedSheet() {
                 post_key(&sheet, key, code);
             }
