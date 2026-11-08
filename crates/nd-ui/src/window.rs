@@ -31,6 +31,9 @@ pub enum WindowKind {
     Sheet { parent: WindowId },
     /// The app's settings window (`cmd-,` on macOS).
     Settings,
+    /// A flyout from a tray or menu-bar icon: above other windows, without a title row, window
+    /// controls or taskbar entry, at a fixed size. Place it with `origin`.
+    Popup,
 }
 
 /// What to open. Window frames persist by `id` (5.3).

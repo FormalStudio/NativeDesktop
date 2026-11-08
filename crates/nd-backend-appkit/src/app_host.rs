@@ -91,7 +91,7 @@ impl Host {
             ns_window.set_router(Some(Rc::new(AppRouter { host: Rc::downgrade(self), window: id })));
             let sheet_parent = match options.kind {
                 WindowKind::Sheet { parent } => windows.get(&parent).map(|p| p.window().retain()),
-                WindowKind::Normal | WindowKind::Settings => None,
+                WindowKind::Normal | WindowKind::Settings | WindowKind::Popup => None,
             };
             windows.insert(id, host);
             opened.push((ns_window, options, sheet_parent));

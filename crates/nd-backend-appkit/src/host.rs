@@ -261,6 +261,21 @@ impl WindowHost {
                 let mask = window.styleMask() & !objc2_app_kit::NSWindowStyleMask::Miniaturizable;
                 window.setStyleMask(mask);
             }
+            nd_ui::WindowKind::Popup => {
+                let mask = window.styleMask()
+                    & !(objc2_app_kit::NSWindowStyleMask::Miniaturizable | objc2_app_kit::NSWindowStyleMask::Resizable);
+                window.setStyleMask(mask);
+                window.setLevel(objc2_app_kit::NSFloatingWindowLevel);
+                for button in [
+                    objc2_app_kit::NSWindowButton::CloseButton,
+                    objc2_app_kit::NSWindowButton::MiniaturizeButton,
+                    objc2_app_kit::NSWindowButton::ZoomButton,
+                ] {
+                    if let Some(b) = window.standardWindowButton(button) {
+                        b.setHidden(true);
+                    }
+                }
+            }
             nd_ui::WindowKind::Normal => {}
         }
         if let Some(min) = options.min_size {

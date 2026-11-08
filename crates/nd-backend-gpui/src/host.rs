@@ -784,6 +784,11 @@ impl Inner {
         };
         let opened = self.app.try_borrow().ok().and_then(|app| app.window(id).map(|w| w.options().clone()));
         options.focus = opened.as_ref().is_none_or(|o| o.activate);
+        if opened.as_ref().is_some_and(|o| o.kind == nd_ui::WindowKind::Popup) {
+            options.kind = gpui::WindowKind::PopUp;
+            options.is_resizable = false;
+            options.is_minimizable = false;
+        }
         // Only GPUI's Linux platform reads a foreign parent; elsewhere the window opens on its own.
         if cfg!(any(target_os = "linux", target_os = "freebsd"))
             && let Some(opened) = opened

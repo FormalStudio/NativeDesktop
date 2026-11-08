@@ -3,8 +3,9 @@
 
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Dwm::{
-    DWM_SYSTEMBACKDROP_TYPE, DWMSBT_MAINWINDOW, DWMSBT_NONE, DWMSBT_TABBEDWINDOW, DWMSBT_TRANSIENTWINDOW,
-    DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_USE_IMMERSIVE_DARK_MODE, DwmExtendFrameIntoClientArea, DwmSetWindowAttribute,
+    DWM_SYSTEMBACKDROP_TYPE, DWM_WINDOW_CORNER_PREFERENCE, DWMSBT_MAINWINDOW, DWMSBT_NONE, DWMSBT_TABBEDWINDOW,
+    DWMSBT_TRANSIENTWINDOW, DWMWA_SYSTEMBACKDROP_TYPE, DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_WINDOW_CORNER_PREFERENCE,
+    DWMWCP_ROUND, DwmExtendFrameIntoClientArea, DwmSetWindowAttribute,
 };
 use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
 use windows::Win32::UI::Controls::MARGINS;
@@ -52,6 +53,19 @@ pub fn apply(hwnd: HWND, backdrop: Backdrop, dark: bool) -> windows::core::Resul
             DWMWA_SYSTEMBACKDROP_TYPE,
             (&raw const kind).cast(),
             size_of::<DWM_SYSTEMBACKDROP_TYPE>() as u32,
+        )
+    }
+}
+
+/// Rounds the corners of a window DWM would leave square, as it does a popup. Needs Windows 11.
+pub fn round_corners(hwnd: HWND) -> windows::core::Result<()> {
+    let round = DWMWCP_ROUND;
+    unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_WINDOW_CORNER_PREFERENCE,
+            (&raw const round).cast(),
+            size_of::<DWM_WINDOW_CORNER_PREFERENCE>() as u32,
         )
     }
 }

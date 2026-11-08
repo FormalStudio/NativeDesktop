@@ -7,12 +7,14 @@
 //!   system's: Snap Layouts on the maximize button, the system's move and size loops. A
 //!   `window_controls()` node therefore draws nothing on Windows: the buttons have one place.
 //! - The title row reserves the buttons' width as its trailing inset.
+//! - A `WindowKind::Popup` window is a flyout: Acrylic with rounded corners, and no title row,
+//!   caption buttons or resize band.
 //!
 //! `ND_DEBUG_EXPOSE=1` keeps the root opaque, so the resize gate's magenta stays covered.
 //! `ND_DIAG_WINDOW=1` prints `nd: pen <phase> pressure=<p>` for pen contacts from `WM_POINTER`.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use nd_backend_gpui::{ChromeContext, Look, OsHooks};
@@ -37,6 +39,7 @@ pub struct WindowsHooks {
     chrome: RefCell<HashMap<WindowId, Rc<Chrome>>>,
     /// Whether each window's frame and Mica are set dark.
     dark: RefCell<HashMap<WindowId, bool>>,
+    popups: RefCell<HashSet<WindowId>>,
     colors_changed: RefCell<Option<ColorsChanged>>,
 }
 
@@ -48,6 +51,7 @@ impl Default for WindowsHooks {
             diag: flag("ND_DIAG_WINDOW"),
             chrome: RefCell::default(),
             dark: RefCell::default(),
+            popups: RefCell::default(),
             colors_changed: RefCell::default(),
         }
     }
@@ -67,7 +71,12 @@ impl WindowsHooks {
         if self.dark.borrow().get(&window) == Some(&dark) {
             return;
         }
-        if let Err(e) = backdrop::apply(hwnd, Backdrop::Mica, dark) {
+        let popup = self.popups.borrow().contains(&window);
+        if popup && let Err(e) = backdrop::round_corners(hwnd) {
+            eprintln!("nd: rounded corners unavailable: {e}");
+        }
+        let material = if popup { Backdrop::Acrylic } else { Backdrop::Mica };
+        if let Err(e) = backdrop::apply(hwnd, material, dark) {
             eprintln!("nd: Mica unavailable: {e}");
         }
         self.dark.borrow_mut().insert(window, dark);
@@ -75,8 +84,8 @@ impl WindowsHooks {
 
     /// The title row for the window's current size, its buttons as tall as the app's title rows
     /// (never below the Fluent 32); empty in full screen, where the app gets the whole window.
-    fn layout(gpui_window: &gpui::Window, title_height: f32) -> CaptionLayout {
-        if gpui_window.is_fullscreen() {
+    fn layout(&self, window: WindowId, gpui_window: &gpui::Window, title_height: f32) -> CaptionLayout {
+        if gpui_window.is_fullscreen() || self.popups.borrow().contains(&window) {
             return CaptionLayout::default();
         }
         let height = title_height.max(FLUENT_TITLE_HEIGHT);
@@ -91,7 +100,10 @@ fn dark(gpui_window: &gpui::Window) -> bool {
 }
 
 impl OsHooks for WindowsHooks {
-    fn window_options(&self, _window: WindowId, options: &mut gpui::WindowOptions) {
+    fn window_options(&self, window: WindowId, options: &mut gpui::WindowOptions) {
+        if options.kind == gpui::WindowKind::PopUp {
+            self.popups.borrow_mut().insert(window);
+        }
         let titlebar = options.titlebar.get_or_insert_with(Default::default);
         titlebar.appears_transparent = true;
         // Non-opaque makes GPUI clear to transparent; `window_opened` sets the material itself.
@@ -99,7 +111,7 @@ impl OsHooks for WindowsHooks {
     }
 
     fn window_opened(&self, window: WindowId, gpui_window: &mut gpui::Window, cx: &mut gpui::App) {
-        let chrome = match Chrome::install(gpui_window, Self::layout(gpui_window, 0.)) {
+        let chrome = match Chrome::install(gpui_window, self.layout(window, gpui_window, 0.)) {
             Ok(chrome) => chrome,
             Err(e) => {
                 eprintln!("nd: window {} has no Windows chrome: {e}", window.0);
@@ -140,7 +152,7 @@ impl OsHooks for WindowsHooks {
     fn titlebar_insets(&self, window: WindowId, gpui_window: &gpui::Window) -> Option<TitlebarInsets> {
         let chrome = self.chrome(window);
         let measured = chrome.as_ref().map_or(0., |c| c.layout().title_height);
-        let layout = Self::layout(gpui_window, measured);
+        let layout = self.layout(window, gpui_window, measured);
         let insets = TitlebarInsets { leading: 0., trailing: layout.trailing_inset(), height: FLUENT_TITLE_HEIGHT };
         if let Some(chrome) = chrome {
             chrome.set_layout(layout);
@@ -163,10 +175,10 @@ impl OsHooks for WindowsHooks {
         // The app's theme can override the system appearance, so the frame and Mica follow the
         // background the window draws with, not the system setting.
         self.set_dark(window, chrome.hwnd(), look.background.l < 0.5);
-        if gpui_window.is_fullscreen() {
+        if gpui_window.is_fullscreen() || self.popups.borrow().contains(&window) {
             return None;
         }
-        let layout = Self::layout(gpui_window, title_height);
+        let layout = self.layout(window, gpui_window, title_height);
         let height = layout.title_height;
         chrome.set_layout(layout);
         let state = chrome.caption_state();
@@ -232,6 +244,7 @@ impl OsHooks for WindowsHooks {
     fn window_closed(&self, window: WindowId) {
         self.chrome.borrow_mut().remove(&window);
         self.dark.borrow_mut().remove(&window);
+        self.popups.borrow_mut().remove(&window);
     }
 }
 

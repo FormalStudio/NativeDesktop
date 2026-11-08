@@ -5,6 +5,9 @@ and the one it moves to.
 
 ## Unreleased
 
+- `WindowKind::Popup` opens a flyout for a tray or menu-bar icon: above other windows, without a
+  title row, window controls or taskbar entry, at a fixed size, placed with `origin`. On Windows
+  it is a rounded Acrylic tool window; on macOS a floating window with its buttons hidden.
 - `PlayerBar::without_song()` leaves the artwork and titles out and keeps the seek bar, the
   transport and the item's controls, in every layout: a bar kept over a now-playing view that
   shows the song itself. The pill no longer loses its seek line that way.
