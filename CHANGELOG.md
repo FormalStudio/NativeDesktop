@@ -5,6 +5,8 @@ and the one it moves to.
 
 ## Unreleased
 
+- `BoxShadow` is in the prelude, so an app can pass shadows of its own to `.shadow(vec![..])`
+  instead of only the `shadow_sm()` to `shadow_2xl()` presets.
 - `nd::test` exports `DivProps`, so an app's tier 1 test can read a div's look from the
   recording backend (`cx.backend().props(node)`), as it reads `ButtonProps` and `TextProps`.
 - On AppKit a hero's first frame draws it on its source: AppKit put the view's layer transform

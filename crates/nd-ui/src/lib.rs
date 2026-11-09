@@ -80,7 +80,7 @@ pub mod prelude {
         SwipePageEvent, TapEvent,
     };
     pub use nd_gpui::gpui::{
-        AbsoluteLength, DefiniteLength, FontWeight, Hsla, Length, Pixels, Rems, Rgba, SharedString, hsla, point, px,
-        relative, rems, rgb, rgba, size,
+        AbsoluteLength, BoxShadow, DefiniteLength, FontWeight, Hsla, Length, Pixels, Rems, Rgba, SharedString, hsla,
+        point, px, relative, rems, rgb, rgba, size,
     };
 }
