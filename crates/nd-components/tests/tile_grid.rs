@@ -8,7 +8,9 @@ use std::rc::Rc;
 use nd_components::{TileMoved, tile, tile_grid};
 use nd_ui::prelude::*;
 use nd_ui::test_app::TestApp;
-use nd_ui::{DragEnded, DragEvent, Dropped, GesturePhase, Keystroke, NodeId, Point, Rect, Size, WindowId};
+use nd_ui::{
+    DivProps, DragEnded, DragEvent, Dropped, GesturePhase, Keystroke, NodeId, Point, Rect, Size, WindowHandle, WindowId,
+};
 
 type Log = Rc<RefCell<Vec<String>>>;
 
@@ -100,4 +102,104 @@ fn escape_puts_the_tile_back() {
     settle(&mut cx);
     drag(&mut cx, b, GesturePhase::Ended, start, centre(5));
     assert_eq!(*log.borrow(), ["end Cancelled"]);
+}
+
+struct Pinned {
+    ids: Vec<&'static str>,
+}
+
+impl Render for Pinned {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div().size_full().child(tile_grid("pinned").tiles(self.ids.iter().map(|&id| tile(id, div().size_full()))))
+    }
+}
+
+fn props(cx: &TestApp, id: NodeId) -> DivProps {
+    cx.backend().props(id).and_then(|p| p.downcast_ref::<DivProps>()).cloned().expect("div")
+}
+
+fn open_pinned(ids: &[&'static str]) -> (TestApp, WindowHandle<Pinned>) {
+    let mut cx = TestApp::new();
+    let ids = ids.to_vec();
+    let handle = cx.open_window(Size { width: 480., height: 400. }, move |_, cx| cx.new(|_| Pinned { ids }));
+    settle(&mut cx);
+    (cx, handle)
+}
+
+fn set_tiles(cx: &mut TestApp, handle: &WindowHandle<Pinned>, ids: &[&'static str]) {
+    let ids = ids.to_vec();
+    handle.root().update(cx, |p, cx| {
+        p.ids = ids;
+        cx.notify();
+    });
+    cx.frame();
+}
+
+#[test]
+fn the_first_width_places_tiles_at_once() {
+    let (cx, _) = open_pinned(&["a", "b"]);
+    let b = node(&cx, "b");
+    assert_eq!(props(&cx, b).transform.offset, (122., 0.));
+    assert_eq!(props(&cx, b).style.opacity, None, "no entrance on first show");
+}
+
+#[test]
+fn a_removed_tile_fades_where_it_stood_while_the_rest_slide_over() {
+    let (mut cx, handle) = open_pinned(&["a", "b", "c"]);
+    let (a, b) = (node(&cx, "a"), node(&cx, "b"));
+    set_tiles(&mut cx, &handle, &["b", "c"]);
+    assert!(cx.backend().is_live(a), "held while it fades");
+    assert!(props(&cx, a).inert);
+    assert_eq!(props(&cx, a).transform.offset, (0., 0.), "where it stood");
+    assert!((props(&cx, b).transform.offset.0 - 122.).abs() < 0.5, "slides from its old slot");
+    settle(&mut cx);
+    assert!(!cx.backend().is_live(a), "gone once faded");
+    assert_eq!(props(&cx, b).transform.offset, (0., 0.));
+}
+
+#[test]
+fn an_added_tile_fades_in_and_pushes_the_rest_along() {
+    let (mut cx, handle) = open_pinned(&["b"]);
+    let b = node(&cx, "b");
+    set_tiles(&mut cx, &handle, &["a", "b"]);
+    let a = node(&cx, "a");
+    assert_eq!(props(&cx, a).style.opacity, Some(0.), "comes in from transparent");
+    assert!(props(&cx, a).transform.scale < 1.);
+    assert_eq!(props(&cx, b).transform.offset, (0., 0.), "moves from where it was");
+    settle(&mut cx);
+    assert_eq!(props(&cx, a).style.opacity.unwrap_or(1.), 1.);
+    assert_eq!(props(&cx, b).transform.offset, (122., 0.));
+}
+
+#[test]
+fn a_new_width_reflows_on_the_spring() {
+    let (mut cx, handle) = open_pinned(&["a", "b"]);
+    let b = node(&cx, "b");
+    cx.resize_window(handle.id(), Size { width: 300., height: 400. });
+    for _ in 0..3 {
+        cx.drain_events();
+        cx.frame();
+    }
+    assert!((props(&cx, b).transform.offset.0 - 122.).abs() < 0.5, "no jump: {:?}", props(&cx, b).transform.offset);
+    assert!(cx.needs_frame(), "moving");
+    settle(&mut cx);
+    assert_eq!(props(&cx, b).transform.offset, (77., 0.), "four 69 pt columns");
+}
+
+#[test]
+fn a_released_tile_slides_home_from_the_pointer() {
+    let (mut cx, _, _) = open();
+    let b = node(&cx, "b");
+    let start = centre(1);
+    drag(&mut cx, b, GesturePhase::Began, start, start);
+    drag(&mut cx, b, GesturePhase::Changed, start, Point { x: start.x, y: start.y + 60. });
+    assert_eq!(props(&cx, b).transform.offset, (122., 60.), "on the pointer");
+    let item = nd_ui::DragItem::new("tab", "b");
+    cx.events().emitter(b).emit(DragEnded { item, outcome: nd_ui::DragOutcome::Cancelled });
+    cx.drain_events();
+    cx.frame();
+    let (x, y) = props(&cx, b).transform.offset;
+    assert!(x == 122. && y > 50., "leaves from where it was let go: {y}");
+    settle(&mut cx);
+    assert_eq!(props(&cx, b).transform.offset, (122., 0.));
 }

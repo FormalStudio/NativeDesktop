@@ -71,7 +71,7 @@ pub use tabs::{
     TabAddRequested, TabChanged, TabCloseRequested, TabMenuRequested, TabPage, TabSpec, TabStrip, TabStripKind,
     TabStripProps, TabStyle, TabView, tab_page, tab_strip, tab_view,
 };
-pub use tile_grid::{TILE_SLIDE, Tile, TileGrid, TileMetrics, TileMoved, tile, tile_grid};
+pub use tile_grid::{Tile, TileGrid, TileMetrics, TileMoved, tile, tile_grid};
 pub use titlebar::{InsetEdge, Titlebar, TitlebarInset, TitlebarInsetProps, TitlebarProps, titlebar};
 pub use toast::{
     BANNER, Banner, BannerActionClicked, BannerKind, BannerMetrics, BannerProps, DEFAULT_TIMEOUT, DismissReason, TOAST,

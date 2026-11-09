@@ -1,7 +1,8 @@
 //! Element animation on the window's frame clock (ARCHITECTURE.md 3.7). A `div` with
 //! `.animate(..)` moves to the opacity, offset, scale and size each render gives it instead of
-//! jumping there; `.enter_from(..)` gives a freshly mounted one a pose to come in from. The
-//! retained tree samples every motion at the frame's target time and sends the presented values
+//! jumping there; `.enter_from(..)` gives a freshly mounted one a pose to come in from, and
+//! `.exit_to(..)` one to leave to while the tree keeps it drawn. `.animate_layout(..)` glides
+//! it from where layout had it to where layout puts it now. The retained tree samples every motion at the frame's target time and sends the presented values
 //! to the backend as ordinary props, so both backends animate the same way and a clean window
 //! draws nothing. A new target mid-flight starts from the presented value and, for springs, the
 //! velocity, so motion is interruptible. With reduce motion on, movement (offset, scale, size)
@@ -179,6 +180,14 @@ impl Animation {
         Animation::Spring { response, damping }
     }
 
+    /// A spring from its physical constants with a mass of 1: `stiffness` k and `damping` c, as
+    /// a hand-written integrator takes them (`v += (k * (target - x) - c * v) * dt`). k 420 and
+    /// c 31 settle in about a quarter of a second with a little overshoot.
+    pub fn spring_physics(stiffness: f64, damping: f64) -> Self {
+        let root = stiffness.max(1e-6).sqrt();
+        Animation::Spring { response: std::f64::consts::TAU / root, damping: damping / (2. * root) }
+    }
+
     /// The platform's hover and small state change timing.
     pub fn fast() -> Self {
         Animation::Themed(Pace::Fast)
@@ -199,8 +208,8 @@ impl Animation {
     }
 }
 
-/// Where a freshly mounted element starts before moving to its own values; unset fields start
-/// at them.
+/// Where a freshly mounted element starts before moving to its own values, or where one on its
+/// way out goes; unset fields stay at its own values.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Pose {
     pub opacity: Option<f32>,
@@ -249,11 +258,20 @@ impl Transform {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct AnimationEnded;
 
-/// What `.animate` and `.enter_from` asked of an element.
+/// What `.animate`, `.enter_from`, `.exit_to` and `.animate_layout` asked of an element.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct MotionSpec {
     pub animation: Animation,
     pub enter: Option<Pose>,
+    pub exit: Option<Pose>,
+    /// Moves between layout frames glide on this.
+    pub layout: Option<Animation>,
+}
+
+impl MotionSpec {
+    pub fn new(animation: Animation) -> Self {
+        Self { animation, enter: None, exit: None, layout: None }
+    }
 }
 
 const CHANNELS: usize = 6;
@@ -445,6 +463,39 @@ impl MotionState {
         self.animation
     }
 
+    /// The element's layout frame moved by `by`: its offset starts from where it showed before
+    /// the move, so it travels on from there to its own offset with the velocity it had.
+    pub fn shift(&mut self, animation: Animation, by: (f64, f64), now: f64, reduce: bool) {
+        if reduce {
+            return;
+        }
+        for (c, by) in [(OFFSET_X, by.0), (OFFSET_Y, by.1)] {
+            let Some(to) = self.targets[c].filter(|_| by != 0.) else { continue };
+            let (from, velocity) = self.motions[c].map_or((to, 0.), |m| m.sample(now));
+            self.motions[c] = Some(Motion::start(animation, from + by, to, velocity, now));
+        }
+    }
+
+    /// Starts towards `pose` from where the element is, for one on its way out. Reduce motion
+    /// leaves its offset and scale where they are and only fades it. False when nothing moves.
+    pub fn exit(&mut self, pose: Pose, now: f64, reduce: bool) -> bool {
+        let mut targets = self.targets;
+        if let Some(o) = pose.opacity {
+            targets[OPACITY] = Some(f64::from(o));
+        }
+        if !reduce {
+            if let Some((x, y)) = pose.offset {
+                targets[OFFSET_X] = Some(f64::from(x));
+                targets[OFFSET_Y] = Some(f64::from(y));
+            }
+            if let Some(s) = pose.scale {
+                targets[SCALE] = Some(f64::from(s));
+            }
+        }
+        self.retarget(self.animation, targets, now, reduce);
+        self.is_moving()
+    }
+
     pub fn targets(&self) -> Values {
         self.targets
     }
@@ -498,7 +549,7 @@ mod tests {
     use super::*;
 
     fn spec(animation: Animation) -> MotionSpec {
-        MotionSpec { animation, enter: None }
+        MotionSpec::new(animation)
     }
 
     fn opacity(v: f64) -> Values {
@@ -552,14 +603,51 @@ mod tests {
     fn reduce_motion_jumps_movement_but_still_fades() {
         let anim = Animation::ease_out(Duration::from_millis(300));
         let pose = Pose::default().opacity(0.).offset(px(0.), px(12.)).scale(0.5);
-        let state = MotionState::new(MotionSpec { animation: anim, enter: Some(pose) }, opacity(1.), 0., true);
+        let state = MotionState::new(MotionSpec { enter: Some(pose), ..spec(anim) }, opacity(1.), 0., true);
         let now = state.sample(0.);
         assert!(now[OPACITY].unwrap().abs() < 1e-9, "the fade starts at the pose");
         assert_eq!(now[OFFSET_Y], Some(0.), "the offset does not move");
         assert_eq!(now[SCALE], Some(1.));
-        let moving = MotionState::new(MotionSpec { animation: anim, enter: Some(pose) }, opacity(1.), 0., false);
+        let moving = MotionState::new(MotionSpec { enter: Some(pose), ..spec(anim) }, opacity(1.), 0., false);
         assert_eq!(moving.sample(0.)[OFFSET_Y], Some(12.));
         assert_eq!(moving.sample(0.)[SCALE], Some(0.5));
+    }
+
+    #[test]
+    fn spring_physics_matches_the_integrators_constants() {
+        let Animation::Spring { response, damping } = Animation::spring_physics(420., 31.) else { unreachable!() };
+        assert!((response - 0.3066).abs() < 1e-3, "{response}");
+        assert!((damping - 0.7563).abs() < 1e-3, "{damping}");
+        let Animation::Spring { damping, .. } = Animation::spring_physics(400., 40.) else { unreachable!() };
+        assert!((damping - 1.).abs() < 1e-9, "c = 2 sqrt(k) is critical");
+    }
+
+    #[test]
+    fn a_shift_starts_from_the_old_place_and_keeps_the_velocity() {
+        let anim = Animation::spring(0.3, 1.);
+        let mut state = MotionState::new(spec(anim), opacity(1.), 0., false);
+        state.shift(anim, (0., 40.), 0., false);
+        assert_eq!(state.sample(0.)[OFFSET_Y], Some(40.), "drawn where it was");
+        let (mid, v) = state.motions[OFFSET_Y].unwrap().sample(0.05);
+        state.shift(anim, (0., -10.), 0.05, false);
+        let (again, v2) = state.motions[OFFSET_Y].unwrap().sample(0.05);
+        assert!((again - (mid - 10.)).abs() < 1e-9, "no jump: {mid} then {again}");
+        assert!((v2 - v).abs() < 1e-6);
+        let mut reduced = MotionState::new(spec(anim), opacity(1.), 0., true);
+        reduced.shift(anim, (0., 40.), 0., true);
+        assert!(!reduced.is_moving(), "reduce motion jumps");
+    }
+
+    #[test]
+    fn an_exit_under_reduce_motion_only_fades() {
+        let anim = Animation::linear(Duration::from_millis(100));
+        let pose = Pose::default().opacity(0.).scale(0.5);
+        let mut state = MotionState::new(spec(anim), opacity(1.), 0., true);
+        assert!(state.exit(pose, 0., true));
+        assert_eq!(state.target(OPACITY), Some(0.));
+        assert_eq!(state.target(SCALE), None, "the scale stays");
+        let mut still = MotionState::new(spec(anim), opacity(1.), 0., true);
+        assert!(!still.exit(Pose::default().scale(0.5), 0., true), "nothing left to animate");
     }
 
     #[test]

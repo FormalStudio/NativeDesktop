@@ -92,7 +92,10 @@ impl Tree {
             children: parts
                 .into_iter()
                 .chain(
-                    node.native.iter().map(|c| self.semantic_node(*c, child_origin, viewport, window_visible, backend)),
+                    node.native
+                        .iter()
+                        .filter(|c| !self.retired.contains(c))
+                        .map(|c| self.semantic_node(*c, child_origin, viewport, window_visible, backend)),
                 )
                 .collect(),
         }

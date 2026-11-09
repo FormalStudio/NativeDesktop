@@ -373,3 +373,219 @@ fn reduce_motion_hides_a_hero_going_back_in_the_frame_it_goes() {
     cx.run_until_idle();
     assert_eq!(props(&cx, cover).style.opacity, Some(0.), "stays hidden");
 }
+
+struct Notes {
+    ids: Vec<&'static str>,
+    log: Rc<RefCell<Vec<&'static str>>>,
+}
+
+impl Render for Notes {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        v_flex().children(self.ids.iter().map(|&id| {
+            let log = self.log.clone();
+            div()
+                .id(id)
+                .h(px(20.))
+                .w(px(100.))
+                .animate(Animation::linear(Duration::from_millis(200)))
+                .animate_layout(Animation::linear(Duration::from_millis(200)))
+                .exit_to(|p| p.opacity(0.).scale(0.5))
+                .on_tap(move |_, _, _| log.borrow_mut().push(id))
+        }))
+    }
+}
+
+fn notes(cx: &mut TestApp, ids: &[&'static str]) -> (WindowHandle<Notes>, Rc<RefCell<Vec<&'static str>>>) {
+    let log: Rc<RefCell<Vec<&'static str>>> = Rc::default();
+    let (ids, l) = (ids.to_vec(), log.clone());
+    (cx.open_window(WINDOW, move |_, cx| cx.new(|_| Notes { ids, log: l })), log)
+}
+
+fn set_ids(cx: &mut TestApp, handle: &WindowHandle<Notes>, ids: &[&'static str]) {
+    let ids = ids.to_vec();
+    handle.root().update(cx, |n, cx| {
+        n.ids = ids;
+        cx.notify();
+    });
+    cx.frame();
+}
+
+fn tap(cx: &mut TestApp, node: NodeId) {
+    cx.events().emitter(node).emit(TapEvent::new(Point::default(), 1));
+    cx.drain_events();
+}
+
+/// Where the node shows: its laid-out frame plus its offset.
+fn shown_y(cx: &TestApp, id: NodeId) -> f32 {
+    cx.backend().frame(id).unwrap().origin.y + props(cx, id).transform.offset.1
+}
+
+#[test]
+fn an_exiting_element_stays_drawn_where_it_was_until_its_exit_settles() {
+    let mut cx = TestApp::new();
+    let (handle, log) = notes(&mut cx, &["a", "b", "c"]);
+    let (a, b, c) = (node(&cx, "a"), node(&cx, "b"), node(&cx, "c"));
+    let list = cx.backend().parent(a).unwrap();
+    set_ids(&mut cx, &handle, &["a", "c"]);
+    assert!(cx.backend().is_live(b), "held while it exits");
+    assert_eq!(cx.backend().children(list), [a, b, c], "drawn in its place among the others");
+    assert_eq!(cx.backend().frame(b).unwrap().origin.y, 20., "where it stood");
+    assert!(props(&cx, b).inert, "takes no input");
+    let tree = cx.semantic_tree();
+    assert!(tree.nodes().all(|(_, n)| n.test_id.as_deref() != Some("b")), "out of the accessibility tree");
+    tap(&mut cx, b);
+    assert!(log.borrow().is_empty(), "a tap on it is not heard");
+
+    step(&mut cx, 0.1);
+    let mid = props(&cx, b);
+    assert!((mid.style.opacity.unwrap() - 0.5).abs() < 0.02, "fading: {:?}", mid.style.opacity);
+    assert!((mid.transform.scale - 0.75).abs() < 0.02, "shrinking: {}", mid.transform.scale);
+    assert!(cx.backend().is_live(b));
+    step(&mut cx, 0.15);
+    cx.run_until_idle();
+    assert!(!cx.backend().is_live(b), "dropped once settled");
+    assert_eq!(cx.backend().children(list), [a, c]);
+    assert!(!cx.needs_frame());
+}
+
+#[test]
+fn a_key_back_mid_exit_turns_around_from_where_it_is() {
+    let mut cx = TestApp::new();
+    let (handle, log) = notes(&mut cx, &["a", "b"]);
+    let b = node(&cx, "b");
+    set_ids(&mut cx, &handle, &["a"]);
+    step(&mut cx, 0.1);
+    let at = props(&cx, b).style.opacity.unwrap();
+    set_ids(&mut cx, &handle, &["a", "b"]);
+    assert_eq!(node(&cx, "b"), b, "the same node, not a new one");
+    let back = props(&cx, b);
+    assert!(!back.inert);
+    assert!((back.style.opacity.unwrap() - at).abs() < 0.02, "no jump: {at} then {:?}", back.style.opacity);
+    step(&mut cx, 0.05);
+    assert!(props(&cx, b).style.opacity.unwrap() > at, "heading back in");
+    step(&mut cx, 0.3);
+    cx.run_until_idle();
+    assert_eq!(props(&cx, b).style.opacity, Some(1.));
+    assert_eq!(props(&cx, b).transform.scale, 1.);
+    assert!(cx.backend().is_live(b), "kept");
+    tap(&mut cx, b);
+    assert_eq!(*log.borrow(), ["b"], "takes input again");
+}
+
+#[test]
+fn siblings_glide_into_the_gap_and_turn_mid_flight() {
+    let mut cx = TestApp::new();
+    let (handle, _) = notes(&mut cx, &["a", "b", "c"]);
+    let c = node(&cx, "c");
+    assert_eq!(props(&cx, c).transform.offset, (0., 0.), "no glide on first mount");
+    assert!(!cx.needs_frame());
+
+    set_ids(&mut cx, &handle, &["a", "c"]);
+    assert_eq!(cx.backend().frame(c).unwrap().origin.y, 20., "laid out in the gap at once");
+    assert_eq!(shown_y(&cx, c), 40., "but drawn where it was");
+    step(&mut cx, 0.1);
+    let mid = shown_y(&cx, c);
+    assert!((mid - 30.).abs() < 0.5, "halfway: {mid}");
+
+    set_ids(&mut cx, &handle, &["c"]);
+    assert!((shown_y(&cx, c) - mid).abs() < 0.5, "turns from where it is: {mid} then {}", shown_y(&cx, c));
+    step(&mut cx, 0.25);
+    cx.run_until_idle();
+    assert_eq!(cx.backend().frame(c).unwrap().origin.y, 0.);
+    assert_eq!(props(&cx, c).transform.offset, (0., 0.));
+}
+
+#[test]
+fn an_inserted_element_pushes_its_siblings_down_smoothly() {
+    let mut cx = TestApp::new();
+    let (handle, _) = notes(&mut cx, &["b"]);
+    let b = node(&cx, "b");
+    set_ids(&mut cx, &handle, &["a", "b"]);
+    assert_eq!(shown_y(&cx, b), 0., "starts where it was");
+    assert_eq!(props(&cx, node(&cx, "a")).transform.offset, (0., 0.), "the new one does not glide");
+    step(&mut cx, 0.1);
+    assert!((shown_y(&cx, b) - 10.).abs() < 0.5, "{}", shown_y(&cx, b));
+}
+
+#[test]
+fn reduce_motion_jumps_layout_and_only_fades_an_exit() {
+    let mut cx = TestApp::new();
+    cx.set_reduce_motion(true);
+    let (handle, _) = notes(&mut cx, &["a", "b", "c"]);
+    let (b, c) = (node(&cx, "b"), node(&cx, "c"));
+    set_ids(&mut cx, &handle, &["a", "c"]);
+    assert_eq!(shown_y(&cx, c), 20., "the sibling jumps");
+    step(&mut cx, 0.1);
+    let mid = props(&cx, b);
+    assert!(mid.style.opacity.unwrap() < 1., "the exit still fades");
+    assert_eq!(mid.transform.scale, 1., "but does not shrink");
+}
+
+struct LayoutOnly {
+    top: bool,
+}
+
+impl Render for LayoutOnly {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        v_flex().when(self.top, |d| d.child(div().id("top").h(px(30.)))).child(
+            div()
+                .id("moving")
+                .h(px(10.))
+                .offset(px(5.), px(0.))
+                .animate_layout(Animation::linear(Duration::from_millis(100))),
+        )
+    }
+}
+
+#[test]
+fn a_layout_glide_composes_with_the_elements_own_offset() {
+    let mut cx = TestApp::new();
+    let handle = cx.open_window(WINDOW, |_, cx| cx.new(|_| LayoutOnly { top: false }));
+    let moving = node(&cx, "moving");
+    handle.root().update(&mut cx, |v, cx| {
+        v.top = true;
+        cx.notify();
+    });
+    cx.frame();
+    assert_eq!(props(&cx, moving).transform.offset, (5., -30.));
+    step(&mut cx, 0.05);
+    assert!((props(&cx, moving).transform.offset.1 - -15.).abs() < 0.5);
+    step(&mut cx, 0.1);
+    cx.run_until_idle();
+    assert_eq!(props(&cx, moving).transform.offset, (5., 0.), "lands on its own offset");
+}
+
+#[test]
+fn a_backend_that_lays_out_as_it_paints_glides_from_the_painted_frames() {
+    let mut cx = TestApp::with_backend(nd_ui::test_backend::TestBackend::new().without_frames());
+    let handle = cx.open_window(WINDOW, |_, cx| cx.new(|_| LayoutOnly { top: false }));
+    let moving = node(&cx, "moving");
+    let column = cx.backend().parent(moving).unwrap();
+    let paint = |cx: &mut TestApp, y: f32| {
+        cx.backend_mut().set_probe(
+            column,
+            nd_ui::semantics::Probe {
+                bounds: Some(Rect::new(0., 0., 400., 300.)),
+                ..nd_ui::semantics::Probe::default()
+            },
+        );
+        cx.backend_mut().set_probe(
+            moving,
+            nd_ui::semantics::Probe { bounds: Some(Rect::new(0., y, 400., 10.)), ..nd_ui::semantics::Probe::default() },
+        );
+    };
+    paint(&mut cx, 0.);
+    cx.run_until_idle();
+    handle.root().update(&mut cx, |v, cx| {
+        v.top = true;
+        cx.notify();
+    });
+    cx.frame();
+    paint(&mut cx, 30.);
+    assert!(cx.needs_frame(), "reads the frames the backend paints next");
+    cx.frame();
+    assert_eq!(props(&cx, moving).transform.offset, (5., -30.), "back where it was painted");
+    step(&mut cx, 0.2);
+    cx.run_until_idle();
+    assert_eq!(props(&cx, moving).transform.offset, (5., 0.));
+}

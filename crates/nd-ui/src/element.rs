@@ -278,6 +278,9 @@ pub struct DivProps {
     pub hero: Option<HeroFrom>,
     /// Size changes are reported as [`Resized`].
     pub reports_size: bool,
+    /// On its way out (see [`Div::exit_to`]): drawn, but it and everything in it take no
+    /// pointer input and are left out of the accessibility tree.
+    pub inert: bool,
     /// The access key of the first control inside (`.access_key("S")`).
     pub access_key: Option<SharedString>,
 }
@@ -489,7 +492,7 @@ impl Div {
     ) -> Self {
         self.group_hover = Some((name.into(), f(StyleRefinement::default())));
         if self.motion.is_none() {
-            self.motion = Some(MotionSpec { animation: Animation::fast(), enter: None });
+            self.motion = Some(MotionSpec::new(Animation::fast()));
         }
         self
     }
@@ -508,7 +511,7 @@ impl Div {
     pub fn hero_from(mut self, id: impl Into<SharedString>, away: bool) -> Self {
         self.hero = Some(HeroFrom { id: id.into(), away });
         if self.motion.is_none() {
-            self.motion = Some(MotionSpec { animation: Animation::natural(), enter: None });
+            self.motion = Some(MotionSpec::new(Animation::natural()));
         }
         self
     }
@@ -530,16 +533,39 @@ impl Div {
     /// points) with `animation`, on the window's frame clock: each render sets where it goes,
     /// and a new target mid-flight continues from where it is.
     pub fn animate(mut self, animation: Animation) -> Self {
-        let enter = self.motion.and_then(|m| m.enter);
-        self.motion = Some(MotionSpec { animation, enter });
+        let spec = self.motion.unwrap_or(MotionSpec::new(animation));
+        self.motion = Some(MotionSpec { animation, ..spec });
         self
     }
 
     /// When the element mounts, it starts at the pose `f` returns and animates to its own
     /// values (with `.animate`'s animation, a short ease-out without one).
     pub fn enter_from(mut self, f: impl FnOnce(Pose) -> Pose) -> Self {
-        let animation = self.motion.map_or(Animation::ease_out(std::time::Duration::from_millis(250)), |m| m.animation);
-        self.motion = Some(MotionSpec { animation, enter: Some(f(Pose::default())) });
+        let spec = self.motion.unwrap_or(MotionSpec::new(Animation::ease_out(std::time::Duration::from_millis(250))));
+        self.motion = Some(MotionSpec { enter: Some(f(Pose::default())), ..spec });
+        self
+    }
+
+    /// When the element leaves its parent's output, it stays drawn where it was, taking no
+    /// input and out of the accessibility tree, and animates to the pose `f` returns (with
+    /// `.animate`'s animation, a short ease-out without one); then it goes. Layout no longer
+    /// counts it, so its siblings close the gap at once (gliding with `.animate_layout`).
+    /// Rendered again with the same key before it is gone, it turns back from where it is.
+    /// Reduce motion keeps only the fade.
+    pub fn exit_to(mut self, f: impl FnOnce(Pose) -> Pose) -> Self {
+        let spec = self.motion.unwrap_or(MotionSpec::new(Animation::ease_out(std::time::Duration::from_millis(250))));
+        self.motion = Some(MotionSpec { exit: Some(f(Pose::default())), ..spec });
+        self
+    }
+
+    /// When layout moves the element within its parent (a sibling inserted or removed above
+    /// it, a grid reflowing), it glides from where it was with `animation` instead of jumping,
+    /// on top of its own offset; a new move mid-flight turns it from where it is. Sizes given
+    /// in points animate as with `.animate`, which takes this animation when not set. Not on
+    /// the first layout after mounting.
+    pub fn animate_layout(mut self, animation: Animation) -> Self {
+        let spec = self.motion.unwrap_or(MotionSpec::new(animation));
+        self.motion = Some(MotionSpec { layout: Some(animation), ..spec });
         self
     }
 
@@ -748,6 +774,7 @@ impl IntoElement for Div {
                 group_hover: self.group_hover,
                 hero: self.hero,
                 reports_size: self.reports_size,
+                inert: false,
                 access_key: self.access_key,
             }),
             layout: self.style,

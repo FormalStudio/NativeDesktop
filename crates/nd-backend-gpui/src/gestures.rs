@@ -79,9 +79,12 @@ fn gestures_of(node: &Node) -> Option<&GestureSet> {
     node.props.downcast_ref::<DivProps>().map(|d| &d.gestures).filter(|g| !g.is_empty())
 }
 
-/// A `visibility: Hidden` view keeps its box but shows nothing; nothing in it is hit.
+/// A `visibility: Hidden` view keeps its box but shows nothing, and an inert one (on its way
+/// out) still shows; nothing in either is hit.
 fn hidden(node: &Node) -> bool {
-    node.props.downcast_ref::<DivProps>().is_some_and(|d| d.style.visibility == Some(gpui::Visibility::Hidden))
+    node.props
+        .downcast_ref::<DivProps>()
+        .is_some_and(|d| d.inert || d.style.visibility == Some(gpui::Visibility::Hidden))
 }
 
 fn in_hidden(nodes: &HashMap<NodeId, Node>, mut at: NodeId) -> bool {
@@ -636,6 +639,7 @@ mod tests {
             hover: None,
             tracks_hover: false,
             reports_size: false,
+            inert: false,
             access_key: None,
             group: None,
             group_hover: None,

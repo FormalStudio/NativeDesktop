@@ -221,6 +221,12 @@ define_class!(
 
         // Content under a transparent title bar must not move the window unless it is a drag
         // region: a click on a card there is a click.
+        #[unsafe(method_id(hitTest:))]
+        fn hit_test(&self, point: NSPoint) -> Option<Retained<NSView>> {
+            let hit: Option<Retained<NSView>> = unsafe { msg_send![super(self), hitTest: point] };
+            if self.ivars().props.borrow().inert { None } else { hit }
+        }
+
         #[unsafe(method(mouseDownCanMoveWindow))]
         fn mouse_down_can_move_window(&self) -> bool {
             false
@@ -488,6 +494,9 @@ impl NdLayerView {
         }
         let had_hover = self.tracks_hover();
         let moved = self.ivars().props.borrow().transform != props.transform;
+        if self.ivars().props.borrow().inert != props.inert {
+            objc2_app_kit::NSAccessibility::setAccessibilityHidden(&**self, props.inert);
+        }
         *self.ivars().props.borrow_mut() = props.clone();
         self.setAlphaValue(self.current_look().opacity.into());
         if moved {

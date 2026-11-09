@@ -1,6 +1,6 @@
 +++
 title = "Motion"
-description = "Platform timings for every animation, hover groups that reveal actions, shared element transitions, presentations, and the lyrics depth of field."
+description = "Platform timings for every animation, exits and layout glides, hover groups that reveal actions, shared element transitions, presentations, and the lyrics depth of field."
 +++
 
 Every animation in nd goes through one set of platform timings. The theme's preset carries
@@ -26,8 +26,59 @@ div()
 ```
 
 `Animation::timed(..)` and `Animation::spring(..)` still take explicit values, for motion that
-has a reason to differ from the platform. `ND_ANIMATION_SLOWDOWN=8` stretches every paced
-animation eight times, to watch one frame by frame.
+has a reason to differ from the platform. `Animation::spring(response, damping)` takes Apple's
+terms; `Animation::spring_physics(stiffness, damping)` takes a hand-written integrator's k and c
+with a mass of 1, so a spec written as "k 420, c 31" carries over as it stands.
+`ND_ANIMATION_SLOWDOWN=8` stretches every paced animation eight times, to watch one frame by
+frame.
+
+## Entering and leaving
+
+`.enter_from(|p| ..)` gives a freshly mounted element a pose to come in from, and
+`.exit_to(|p| ..)` one to leave to. When the element drops out of its parent's output, the tree
+keeps its node drawn where it stood while it animates to the exit pose, then drops it. In the
+meantime it takes no pointer input, is out of the accessibility tree and out of the layout flow,
+so its siblings close the gap at once. Rendered again with the same key before it is gone, it
+turns back from where it is, with the velocity it had.
+
+```rust
+div()
+    .id(note.id.clone())
+    .enter_from(|p| p.opacity(0.).offset(px(0.), px(-6.)))
+    .exit_to(|p| p.opacity(0.).scale(0.96))
+```
+
+Both run on `.animate`'s animation, a short ease-out without one. The pose's values are the
+element's own: an offset in the pose replaces the element's offset rather than adding to it.
+With reduce motion on, an exit only fades.
+
+## Layout animation
+
+`.animate_layout(animation)` makes an element glide when layout moves it within its parent: a
+sibling inserted or removed before it, a grid reflowing for a new width. The tree compares each
+frame with the last one and runs the element's offset from the old place to its own, so the
+glide adds to any offset the element sets itself, and a new move mid-flight turns it from where
+it is. Sizes given in points animate as with `.animate`, which takes the same animation when it
+is not set. Nothing glides on the first layout after mounting, and with reduce motion on,
+layout jumps.
+
+```rust
+v_flex().children(notes.iter().map(|note| {
+    div()
+        .id(note.id.clone())
+        .animate_layout(Animation::spring_physics(420., 31.))
+        .exit_to(|p| p.opacity(0.))
+        .child(label(note.title.clone()))
+}))
+```
+
+AppKit knows each frame as it lays out, so the glide starts in the frame that moves the element.
+GPUI lays out as it paints: the element shows at its new place for one frame before it glides
+from the old one.
+
+`tile_grid` uses all three: tiles move to new slots on `.reflow(animation)` (the platform spring
+by default), new tiles fade and grow in, removed ones fade and shrink where they stood, and the
+grid's height follows. The first width it learns places the tiles at once.
 
 ## Hover groups
 

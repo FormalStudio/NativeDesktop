@@ -5,6 +5,17 @@ and the one it moves to.
 
 ## Unreleased
 
+- `Div::exit_to(|p| ..)`: an element that drops out of its parent's output stays drawn where it
+  stood, out of the layout flow, inert and out of the accessibility tree, while it animates to the
+  pose, then goes. The same key back before then turns it around from where it is. Reduce motion
+  keeps only the fade. `DivProps` gained `inert`.
+- `Div::animate_layout(animation)`: an element that layout moves within its parent glides from
+  its old place, on top of its own offset, and turns mid-flight from where it is. Not on its first
+  layout; reduce motion jumps.
+- `Animation::spring_physics(stiffness, damping)` builds a spring from an integrator's k and c.
+- `tile_grid` animates reflows, inserts and removals on `.reflow(animation)`, the platform spring
+  by default, and no longer jumps when its width changes. `TILE_SLIDE` is gone.
+
 - `WindowKind::Popup` opens a flyout for a tray or menu-bar icon: above other windows, without a
   title row, window controls or taskbar entry, at a fixed size, placed with `origin`. On Windows
   it is a rounded Acrylic tool window; on macOS a floating window with its buttons hidden.

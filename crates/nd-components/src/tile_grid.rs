@@ -1,9 +1,11 @@
 //! `tile_grid()`: tiles in rows the user reorders by dragging, as Arc's pinned favourites. The
 //! grid takes as many columns as fit tiles of at least the minimum width, up to a maximum, and
-//! sizes tiles to share the width; a short last row keeps the pitch. A dragged tile follows the
-//! pointer, takes the slot under it while the others slide aside, and settles where it is
-//! dropped or slides home on Escape or a release elsewhere. Built from elements, so it is the
-//! same on every backend; the tiles' content is the app's.
+//! sizes tiles to share the width; a short last row keeps the pitch. Tiles move to new slots
+//! (a reflow for a new width, a tile added or removed before them) on the grid's reflow
+//! animation, new tiles fade and grow in, and removed ones fade and shrink where they stood. A
+//! dragged tile follows the pointer, takes the slot under it while the others slide aside, and
+//! settles where it is dropped or slides home on Escape or a release elsewhere. Built from
+//! elements, so it is the same on every backend; the tiles' content is the app's.
 //!
 //! Tiles drag as [`DragItem`]s of the grid's kind, so another window's grid or list takes them
 //! too; drags of the grid's [`accepts`](TileGrid::accepts_drops) kinds open a gap where they
@@ -83,8 +85,6 @@ struct GridDrag {
 #[derive(Clone, Debug, Default)]
 struct GridState {
     width: Option<f32>,
-    /// The width the tiles were last placed for.
-    placed: Option<f32>,
     drag: Option<GridDrag>,
     /// Where a drag from elsewhere would land.
     gap: Option<usize>,
@@ -104,6 +104,7 @@ pub struct TileGrid {
     gap: f32,
     kind: Option<SharedString>,
     accepts: Vec<SharedString>,
+    reflow: Animation,
     on_move: Option<Handler<TileMoved>>,
     on_drop: Option<Handler<Dropped>>,
     on_drag_end: Option<Handler<DragEnded>>,
@@ -120,14 +121,17 @@ pub fn tile_grid(id: impl Into<SharedString>) -> TileGrid {
         gap: 8.,
         kind: None,
         accepts: Vec::new(),
+        reflow: Animation::natural(),
         on_move: None,
         on_drop: None,
         on_drag_end: None,
     }
 }
 
-/// How long the others take to slide aside, and a tile to settle.
-pub const TILE_SLIDE: Duration = Duration::from_millis(200);
+/// Where a tile comes in from and goes out to.
+fn tile_pose(pose: Pose) -> Pose {
+    pose.opacity(0.).scale(0.96)
+}
 
 impl TileGrid {
     pub fn tiles(mut self, tiles: impl IntoIterator<Item = Tile>) -> Self {
@@ -153,6 +157,13 @@ impl TileGrid {
 
     pub fn gap(mut self, gap: f32) -> Self {
         self.gap = gap;
+        self
+    }
+
+    /// How tiles move to new slots, fade in and out, and how the grid's height follows. The
+    /// platform spring by default.
+    pub fn reflow(mut self, animation: Animation) -> Self {
+        self.reflow = animation;
         self
     }
 
@@ -193,11 +204,9 @@ impl TileGrid {
         let view = app.rendering_view();
         let state = app.global::<TileGrids>().0.get(&key).cloned().unwrap_or_default();
         let width = state.width.unwrap_or(0.);
-        // A new width reflows at once: tiles slide only when the order changes.
-        let reflow = state.placed != state.width;
-        if reflow {
-            app.global_mut::<TileGrids>().0.entry(key.clone()).or_default().placed = state.width;
-        }
+        // Tiles laid out for no width yet do not move: their motion starts at rest on the
+        // first measured places.
+        let animate = state.width.is_some();
         let m = TileMetrics::new(width, self.max_columns, self.min_width, self.aspect, self.gap);
         let ids: Vec<SharedString> = self.tiles.iter().map(|t| t.id.clone()).collect();
 
@@ -251,9 +260,10 @@ impl TileGrid {
                 .w(px(m.tile.0))
                 .h(px(m.tile.1))
                 .offset(px(x), px(y));
-            // A dragged tile tracks the pointer at once and slides when let go.
-            if follow.is_none() && !reflow {
-                el = el.animate(Animation::ease_out(TILE_SLIDE));
+            // A dragged tile tracks the pointer at once; its motion stays, so it slides when let go.
+            if animate {
+                let animation = if follow.is_some() { Animation::linear(Duration::ZERO) } else { self.reflow };
+                el = el.animate(animation).enter_from(tile_pose).exit_to(tile_pose);
             }
             let mut el = el.child(tile.content);
             if let Some(kind) = &kind {
@@ -286,14 +296,20 @@ impl TileGrid {
         let (own_kind, drop_kind) = (kind.clone(), kind.clone());
         let (on_move, on_drop) = (self.on_move.clone(), self.on_drop.clone());
         let tiles_now = count - usize::from(state.gap.is_some());
+        let grid = self.id.clone();
         div()
             .id(self.id)
             .relative()
             .w_full()
             .h(px(m.height(count)))
+            .when(animate, |d| d.animate(self.reflow))
             .on_resize(move |e: &Resized, window, app| {
                 let width = e.width;
-                update(window, app, &|s| s.width = Some(width));
+                // The height animating reports sizes too; only a new width places the tiles.
+                let known = app.global::<TileGrids>().0.get(&(window.id(), grid.clone())).and_then(|s| s.width);
+                if known != Some(width) {
+                    update(window, app, &|s| s.width = Some(width));
+                }
             })
             .accepts_drops(accepts)
             .on_drag_over(move |e: &DragOver, window, app| {

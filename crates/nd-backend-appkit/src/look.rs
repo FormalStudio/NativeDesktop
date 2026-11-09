@@ -112,6 +112,8 @@ pub(crate) struct ViewLook {
     /// A shared element (`hero_from`): while its transform moves it, it is drawn above the
     /// window's content.
     pub hero: bool,
+    /// On its way out (`exit_to`): drawn, but no click lands in it and accessibility skips it.
+    pub inert: bool,
 }
 
 impl Default for ViewLook {
@@ -126,6 +128,7 @@ impl Default for ViewLook {
             clips: false,
             hover: None,
             hero: false,
+            inert: false,
         }
     }
 }
@@ -148,6 +151,7 @@ impl ViewLook {
             clips: style.overflow.x == Some(Overflow::Hidden) && style.overflow.y == Some(Overflow::Hidden),
             hover: None,
             hero: false,
+            inert: false,
         }
     }
 
@@ -156,6 +160,7 @@ impl ViewLook {
         let mut look = Self::from_style(&div.style, expose);
         look.transform = div.transform;
         look.hero = div.hero.is_some();
+        look.inert = div.inert;
         look.hover = div.hover.as_ref().map(|hover| {
             let mut style = div.style.clone();
             nd_gpui::gpui::Refineable::refine(&mut style, hover);

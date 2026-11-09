@@ -12,10 +12,10 @@ use std::mem;
 use std::rc::Rc;
 
 use nd_core::{NodeId, Rect, Size, WindowId};
-use nd_gpui::gpui::{KeyBinding, Refineable, StyleRefinement};
+use nd_gpui::gpui::{AbsoluteLength, KeyBinding, Length, Position, Refineable, StyleRefinement, px};
 use nd_gpui::taffy::{self, TaffyTree, prelude::TaffyMaxContent};
 
-use crate::animation::{self, MotionSpec, MotionState, MotionTokens, Transform, Values};
+use crate::animation::{self, Animation, MotionSpec, MotionState, MotionTokens, Pose, Transform, Values};
 use crate::app::{AnyView, App, EntityId};
 use crate::backend::{AvailableSpace, Backend, BoundaryInsets, Constraint, NodeKind, Props, PropsPatch};
 use crate::canvas::{self, CanvasProps, PaintFn};
@@ -65,6 +65,8 @@ struct RNode {
     dispatch: DispatchProps,
     taffy: taffy::NodeId,
     frame: Option<Rect>,
+    /// The native node it is a child of.
+    parent: Option<NodeId>,
     /// Created this frame; its own children are not inserted yet.
     fresh: bool,
     /// The box a native layout container gives this node (3.15 layout boundaries); its own
@@ -89,6 +91,10 @@ struct Animated {
     state: MotionState,
     props: Props,
     layout: StyleRefinement,
+    /// The pose it leaves to when its element is gone (`.exit_to`).
+    exit: Option<Pose>,
+    /// How it glides when layout moves it (`.animate_layout`), resolved.
+    flip: Option<Animation>,
 }
 
 /// A div's props and layout with `values` presented in place of its own.
@@ -125,6 +131,34 @@ fn shown(
         animation::present(&mut layout, &mut Transform::default(), values);
     }
     (Rc::new(div), layout)
+}
+
+/// The left and top border widths of a style, in points: an absolute child's insets start
+/// inside them.
+fn border_of(style: &StyleRefinement) -> (f32, f32) {
+    let points = |l: Option<AbsoluteLength>| match l {
+        Some(AbsoluteLength::Pixels(p)) => p.as_f32(),
+        _ => 0.,
+    };
+    (points(style.border_widths.left), points(style.border_widths.top))
+}
+
+/// `style` taken out of its parent's flow and held at `at`, a box in the parent's padding box.
+fn pinned(style: &StyleRefinement, at: Rect) -> StyleRefinement {
+    let mut style = style.clone();
+    style.position = Some(Position::Absolute);
+    style.inset.left = Some(px(at.origin.x).into());
+    style.inset.top = Some(px(at.origin.y).into());
+    style.inset.right = Some(Length::Auto);
+    style.inset.bottom = Some(Length::Auto);
+    for margin in [&mut style.margin.left, &mut style.margin.top, &mut style.margin.right, &mut style.margin.bottom] {
+        *margin = Some(px(0.).into());
+    }
+    style.size.width = Some(px(at.size.width).into());
+    style.size.height = Some(px(at.size.height).into());
+    style.min_size = Default::default();
+    style.max_size = Default::default();
+    style
 }
 
 /// A div's props drawn fully transparent, its layout untouched.
@@ -231,6 +265,16 @@ pub(crate) struct Tree {
     hero_home: HashMap<NodeId, Rect>,
     /// Nodes that report their size, laid out at a new one this frame.
     resized: Vec<(NodeId, Size)>,
+    /// Nodes whose element is gone, still drawn while their exit pose plays. They stay in
+    /// their parent's slots, so the same element coming back takes them up again.
+    retired: HashSet<NodeId>,
+    /// Retired nodes and everything in them: no handler hears them.
+    inert: HashSet<NodeId>,
+    /// Where a backend that lays out as it paints last painted each node with a layout
+    /// animation, within its parent.
+    painted_at: HashMap<NodeId, (f32, f32)>,
+    /// That backend painted a transaction since: the next frame reads the painted frames.
+    layout_check: bool,
 }
 
 fn idents(elements: &[AnyElement]) -> Vec<Ident> {
@@ -348,6 +392,7 @@ impl Tree {
                 dispatch: DispatchProps::default(),
                 taffy: root_taffy,
                 frame: None,
+                parent: None,
                 fresh: false,
                 boundary: None,
                 motion: None,
@@ -387,6 +432,10 @@ impl Tree {
             away_done: HashSet::new(),
             hero_home: HashMap::new(),
             resized: Vec::new(),
+            retired: HashSet::new(),
+            inert: HashSet::new(),
+            painted_at: HashMap::new(),
+            layout_check: false,
         }
     }
 
@@ -404,6 +453,9 @@ impl Tree {
     }
 
     pub(crate) fn handler(&self, node: NodeId, event: TypeId) -> Option<Handler> {
+        if self.inert.contains(&node) {
+            return None;
+        }
         self.nodes.get(&node)?.handlers.iter().find(|(t, _)| *t == event).map(|(_, h)| h.clone())
     }
 
@@ -440,6 +492,9 @@ impl Tree {
         }
         let mut stack = vec![self.root];
         while let Some(n) = stack.pop() {
+            if self.inert.contains(&n) {
+                continue;
+            }
             let node = &self.nodes[&n];
             if matches!(&node.ident.key, Key::Id(k) if k.as_ref() == id)
                 && let Some(target) = first_focusable(self, n)
@@ -458,6 +513,7 @@ impl Tree {
             || !self.animating.is_empty()
             || !self.heroes_pending.is_empty()
             || !self.away_pending.is_empty()
+            || self.layout_check
     }
 
     /// `el` as presented at `now`: a div that animates gets its motions started or retargeted
@@ -522,7 +578,8 @@ impl Tree {
         if self.away_done.contains(&id) {
             el.props = hidden(&el.props);
         }
-        self.pending_motion = Some(Animated { state, props: base.0, layout: base.1 });
+        let flip = spec.layout.map(|a| tokens.resolve(a, reduce));
+        self.pending_motion = Some(Animated { state, props: base.0, layout: base.1, exit: spec.exit, flip });
         el
     }
 
@@ -572,6 +629,9 @@ impl Tree {
 
     /// Starts node `n` towards what it shows now (its group hover and hero state applied).
     fn retarget_shown(&mut self, n: NodeId, now: f64, reduce: bool) {
+        if self.retired.contains(&n) {
+            return;
+        }
         let away = self.hero_away.get(&n).copied();
         let Some(node) = self.nodes.get_mut(&n) else { return };
         let Some(anim) = node.motion.as_mut() else { return };
@@ -665,42 +725,199 @@ impl Tree {
     /// updates. Returns the nodes whose motions all came to rest.
     pub(crate) fn step_motion(&mut self, now: f64) -> Vec<NodeId> {
         let mut ended = Vec::new();
+        let mut done = Vec::new();
         let mut ids: Vec<NodeId> = self.animating.iter().copied().collect();
         ids.sort();
         for id in ids {
-            let Some(node) = self.nodes.get_mut(&id) else {
+            let Some(anim) = self.nodes.get_mut(&id).and_then(|n| n.motion.as_mut()) else {
                 self.animating.remove(&id);
                 continue;
             };
-            let Some(anim) = node.motion.as_mut() else {
-                self.animating.remove(&id);
-                continue;
-            };
-            if anim.state.settle(now) {
-                ended.push(id);
-            }
+            let settled = anim.state.settle(now);
             let moving = anim.state.is_moving();
-            let (shown_props, shown_layout) = shown(&self.lit, self.hero_away.get(&id), id, &anim.props, &anim.layout);
-            let (mut props, layout) = present_div(&shown_props, &shown_layout, &anim.state.sample(now));
-            if self.away_done.contains(&id) {
-                props = hidden(&props);
+            if let Some(op) = self.present(id, now) {
+                self.tx.push(op);
             }
-            if !node.props.props_eq(&*props) {
-                let patch = PropsPatch { old: mem::replace(&mut node.props, props), new: node.props.clone() };
-                self.tx.push(Op::Update { node: id, patch });
-            }
-            if node.layout != layout {
-                node.layout = layout;
-                let node = &self.nodes[&id];
-                let style = self.taffy_style(&node.layout, &node.props, node.boundary);
-                self.taffy.set_style(node.taffy, style).expect("taffy node");
-                self.needs_layout = true;
+            let retired = self.retired.contains(&id);
+            if settled && !retired {
+                ended.push(id);
             }
             if !moving {
                 self.animating.remove(&id);
+                if retired {
+                    done.push(id);
+                }
             }
         }
+        for id in done {
+            self.drop_retired(id);
+        }
         ended
+    }
+
+    /// Node `id` with its motions sampled at `now`: its layout takes the presented values at
+    /// once, and the props update comes back for the caller's transaction.
+    fn present(&mut self, id: NodeId, now: f64) -> Option<Op> {
+        let node = self.nodes.get_mut(&id)?;
+        let anim = node.motion.as_ref()?;
+        let (shown_props, shown_layout) = shown(&self.lit, self.hero_away.get(&id), id, &anim.props, &anim.layout);
+        let (mut props, layout) = present_div(&shown_props, &shown_layout, &anim.state.sample(now));
+        if self.away_done.contains(&id) {
+            props = hidden(&props);
+        }
+        let op = (!node.props.props_eq(&*props)).then(|| {
+            let patch = PropsPatch { old: mem::replace(&mut node.props, props), new: node.props.clone() };
+            Op::Update { node: id, patch }
+        });
+        if node.layout != layout {
+            node.layout = layout;
+            let node = &self.nodes[&id];
+            let style = self.taffy_style(&node.layout, &node.props, node.boundary);
+            self.taffy.set_style(node.taffy, style).expect("taffy node");
+            self.needs_layout = true;
+        }
+        op
+    }
+
+    /// The box node `n` is held at while it exits, in its parent's padding box: its last
+    /// frame. `None` when that is not known (not painted yet, or inside a scroll view on a
+    /// backend that lays out as it paints).
+    fn held_frame(&self, n: NodeId, backend: &dyn Backend) -> Option<Rect> {
+        let node = self.nodes.get(&n)?;
+        let parent_id = node.parent?;
+        let parent = self.nodes.get(&parent_id)?;
+        let at = if backend.retains_frames() {
+            node.frame?
+        } else {
+            let div = parent.props.downcast_ref::<DivProps>();
+            if div.is_some_and(|d| d.gestures.scroll.any()) {
+                return None;
+            }
+            let (b, pb) = (backend.probe(n).bounds?, backend.probe(parent_id).bounds?);
+            // Painted bounds carry the offsets of the nodes above, the parent's own included.
+            let (ox, oy) = div.map_or((0., 0.), |d| d.transform.offset);
+            Rect::new(b.origin.x - pb.origin.x - ox, b.origin.y - pb.origin.y - oy, b.size.width, b.size.height)
+        };
+        let (bx, by) = border_of(&parent.layout);
+        Some(Rect::new(at.origin.x - bx, at.origin.y - by, at.size.width, at.size.height))
+    }
+
+    /// Keeps node `slot`, whose element is gone, drawn where it was while it plays its exit
+    /// pose: out of its parent's flow, inert, out of the dispatch tree. False when it has no
+    /// exit to play or no frame to hold it at, and goes now.
+    fn retire(&mut self, slot: Slot, backend: &dyn Backend, now: f64, reduce: bool) -> bool {
+        let Slot::Node(n) = slot else { return false };
+        if self.retired.contains(&n) {
+            return true;
+        }
+        let Some(pose) = self.nodes.get(&n).and_then(|n| n.motion.as_ref()).and_then(|m| m.exit) else {
+            return false;
+        };
+        let Some(at) = self.held_frame(n, backend) else { return false };
+        let anim = self.nodes.get_mut(&n).and_then(|n| n.motion.as_mut()).expect("motion");
+        if !anim.state.exit(pose, now, reduce) {
+            return false;
+        }
+        anim.layout = pinned(&anim.layout, at);
+        let mut div = anim.props.downcast_ref::<DivProps>().expect("only divs animate").clone();
+        div.style = pinned(&div.style, at);
+        div.inert = true;
+        anim.props = Rc::new(div);
+        self.retired.insert(n);
+        let mut stack = vec![n];
+        while let Some(c) = stack.pop() {
+            self.inert.insert(c);
+            stack.extend(self.nodes[&c].native.iter().copied());
+        }
+        if self.dispatch.contains(n) {
+            self.dispatch.remove(n);
+        }
+        self.animating.insert(n);
+        if let Some(op) = self.present(n, now) {
+            self.tx.push(op);
+        }
+        true
+    }
+
+    /// A retired node's element is back: it takes input again. Its motions turn from where
+    /// they are when it reconciles.
+    fn revive(&mut self, n: NodeId) {
+        self.retired.remove(&n);
+        let mut stack = vec![n];
+        while let Some(c) = stack.pop() {
+            self.inert.remove(&c);
+            stack.extend(self.nodes[&c].native.iter().copied());
+        }
+    }
+
+    /// Puts revived node `n` back in the dispatch tree, in its place under `parent`.
+    fn redispatch(&mut self, parent: NodeId, n: NodeId) {
+        if !self.dispatch.contains(parent) {
+            return;
+        }
+        let native = &self.nodes[&parent].native;
+        let after = native.iter().position(|c| *c == n).map_or(native.len(), |i| i + 1);
+        let before = native[after..].iter().copied().find(|c| !self.inert.contains(c) && self.dispatch.contains(*c));
+        self.dispatch.place(parent, n, before);
+        self.bind_dispatch_subtree(n);
+    }
+
+    /// Drops node `id`, whose exit has played out.
+    fn drop_retired(&mut self, id: NodeId) {
+        let parent = self.nodes.get(&id).and_then(|n| n.parent);
+        if let Some(node) = parent.and_then(|p| self.nodes.get_mut(&p)) {
+            node.slots.retain(|s| *s != Slot::Node(id));
+        }
+        self.unmount(Slot::Node(id));
+        if let Some(parent) = parent.filter(|p| self.nodes.contains_key(p)) {
+            self.sync_children(parent);
+        }
+    }
+
+    /// Whether any node glides when layout moves it.
+    fn follows_layout(&self) -> bool {
+        self.nodes.values().any(|n| n.motion.as_ref().is_some_and(|m| m.flip.is_some()))
+    }
+
+    /// On a backend that lays out as it paints (GPUI) frames are known only once painted: a
+    /// node with a layout animation that the last paint put somewhere else within its parent
+    /// starts from where the paint before had it. That paint showed it at its new place.
+    pub(crate) fn follow_painted_layout(&mut self, backend: &dyn Backend, now: f64, reduce: bool) {
+        self.layout_check = false;
+        if backend.retains_frames() {
+            return;
+        }
+        let mut painted = Vec::new();
+        for (&id, node) in &self.nodes {
+            if !node.motion.as_ref().is_some_and(|m| m.flip.is_some()) || self.retired.contains(&id) {
+                continue;
+            }
+            let at = self.held_frame(id, backend).map(|r| (r.origin.x, r.origin.y));
+            painted.push((id, at));
+        }
+        painted.sort_by_key(|p| p.0);
+        for (id, at) in painted {
+            let Some(at) = at else {
+                self.painted_at.remove(&id);
+                continue;
+            };
+            let Some(old) = self.painted_at.insert(id, at) else { continue };
+            let by = (old.0 - at.0, old.1 - at.1);
+            if by.0.abs() < 0.01 && by.1.abs() < 0.01 {
+                continue;
+            }
+            self.shift(id, by, now, reduce);
+        }
+    }
+
+    /// Node `id`'s layout frame moved by `by`: it glides from where it showed.
+    fn shift(&mut self, id: NodeId, by: (f32, f32), now: f64, reduce: bool) {
+        let Some(anim) = self.nodes.get_mut(&id).and_then(|n| n.motion.as_mut()) else { return };
+        let Some(flip) = anim.flip else { return };
+        anim.state.shift(flip, (f64::from(by.0), f64::from(by.1)), now, reduce);
+        if anim.state.is_moving() {
+            self.animating.insert(id);
+        }
     }
 
     /// Paints canvas `n` again for `width` x `height`, when that is not the size it was painted
@@ -868,6 +1085,7 @@ impl Tree {
                 dispatch: el.dispatch,
                 taffy: taffy.expect("taffy node"),
                 frame: None,
+                parent: None,
                 fresh: true,
                 boundary: None,
                 motion,
@@ -975,6 +1193,9 @@ impl Tree {
                 self.hero_away.remove(&n);
                 self.away_done.remove(&n);
                 self.hero_home.remove(&n);
+                self.retired.remove(&n);
+                self.inert.remove(&n);
+                self.painted_at.remove(&n);
                 self.tx.push(Op::Release { node: n });
                 for s in node.slots {
                     if let Slot::View(e) = s {
@@ -1035,32 +1256,48 @@ impl Tree {
         }
         list.retain(|n| keep.contains(n));
         let mut before: Option<NodeId> = None;
+        // Retired nodes are drawn but not dispatched to; a parent inside one is not either.
+        let dispatching = self.dispatch.contains(parent);
+        let mut dispatch_before: Option<NodeId> = None;
         for &n in desired.iter().rev() {
             let at = |list: &Vec<NodeId>| before.and_then(|b| list.iter().position(|x| *x == b)).unwrap_or(list.len());
+            let dispatched = dispatching && !self.inert.contains(&n);
             match list.iter().position(|x| *x == n) {
                 None => {
                     list.insert(at(&list), n);
                     self.tx.push(Op::Insert { parent, node: n, before });
-                    let fresh = !self.dispatch.contains(n);
-                    self.dispatch.place(parent, n, before);
-                    if fresh {
-                        self.bind_dispatch_subtree(n);
+                    if dispatched {
+                        let fresh = !self.dispatch.contains(n);
+                        self.dispatch.place(parent, n, dispatch_before);
+                        if fresh {
+                            self.bind_dispatch_subtree(n);
+                        }
                     }
                 }
                 Some(i) if list.get(i + 1).copied() != before => {
                     list.remove(i);
                     list.insert(at(&list), n);
                     self.tx.push(Op::Move { node: n, parent, before });
-                    self.dispatch.place(parent, n, before);
+                    if dispatched {
+                        self.dispatch.place(parent, n, dispatch_before);
+                    }
                 }
                 Some(_) => {}
             }
             before = Some(n);
+            if dispatched {
+                dispatch_before = Some(n);
+            }
         }
         let taffy_children: Vec<taffy::NodeId> = desired.iter().map(|n| self.nodes[n].taffy).collect();
         let node = self.nodes.get_mut(&parent).expect("node");
         self.taffy.set_children(node.taffy, &taffy_children).expect("taffy children");
-        node.native = desired;
+        for child in &desired {
+            if let Some(child) = self.nodes.get_mut(child) {
+                child.parent = Some(parent);
+            }
+        }
+        self.nodes.get_mut(&parent).expect("node").native = desired;
         self.needs_layout = true;
     }
 
@@ -1171,9 +1408,15 @@ impl Tree {
         let mut by_ident: HashMap<Ident, Slot> = old.iter().map(|s| (self.ident_of(*s).clone(), *s)).collect();
         let idents = idents(&children);
         let mut matched = Vec::with_capacity(children.len());
+        let mut revived = Vec::new();
         for (el, ident) in children.into_iter().zip(idents) {
             matched.push(match (by_ident.remove(&ident), el.0) {
-                (Some(slot @ Slot::Node(_)), Element::Node(desc)) => (Ok(slot), Some(desc)),
+                (Some(slot @ Slot::Node(n)), Element::Node(desc)) => {
+                    if self.retired.contains(&n) {
+                        revived.push(n);
+                    }
+                    (Ok(slot), Some(desc))
+                }
                 (Some(slot @ Slot::View(e)), Element::View(_)) => {
                     assert!(self.placed.insert(e), "{e:?} is rendered in two places");
                     (Ok(slot), None)
@@ -1182,14 +1425,24 @@ impl Tree {
             });
         }
         // Unmount before mounting, so a view that moved between keys is adopted, not rebuilt.
+        // One with an exit pose is held, where it was among the others, until it has played.
         let gone: HashSet<Slot> = by_ident.into_values().collect();
-        for slot in old {
-            if gone.contains(&slot) {
+        let mut held = Vec::new();
+        for (i, slot) in old.into_iter().enumerate() {
+            if !gone.contains(&slot) {
+                continue;
+            }
+            if self.retire(slot, &*app.backend, window.now(), app.reduce_motion) {
+                held.push((i, slot));
+            } else {
                 self.unmount(slot);
             }
         }
-        let mut slots = Vec::with_capacity(matched.len());
-        let mut reused = Vec::with_capacity(matched.len());
+        for &n in &revived {
+            self.revive(n);
+        }
+        let mut slots = Vec::with_capacity(matched.len() + held.len());
+        let mut reused = Vec::with_capacity(matched.len() + held.len());
         for (slot, desc) in matched {
             slots.push(match slot {
                 Ok(slot) => slot,
@@ -1197,8 +1450,16 @@ impl Tree {
             });
             reused.push(desc);
         }
+        for (i, slot) in held {
+            let at = i.min(slots.len());
+            slots.insert(at, slot);
+            reused.insert(at, None);
+        }
         self.nodes.get_mut(&parent).expect("node").slots = slots.clone();
         self.sync_children(parent);
+        for n in revived {
+            self.redispatch(parent, n);
+        }
         for (slot, desc) in slots.into_iter().zip(reused) {
             match (slot, desc) {
                 (Slot::Node(n), Some(desc)) => self.reconcile_node(n, *desc, depth, window, app),
@@ -1288,6 +1549,10 @@ impl Tree {
                 }
                 self.reaffirm.remove(&n);
                 self.animating.remove(&n);
+                self.painted_at.remove(&n);
+                if self.retired.remove(&n) {
+                    self.inert.remove(&n);
+                }
                 let slots = node.slots.clone();
                 out.nodes.push((n, node));
                 for s in slots {
@@ -1346,7 +1611,7 @@ impl Tree {
         tx.commit(&mut *app.backend, &mut app.measure_cache);
     }
 
-    fn layout(&mut self, backend: &mut dyn Backend, cache: &mut MeasureCache) -> Vec<Op> {
+    fn layout(&mut self, backend: &mut dyn Backend, cache: &mut MeasureCache, now: f64, reduce: bool) -> Vec<Op> {
         if !self.needs_layout {
             return Vec::new();
         }
@@ -1393,11 +1658,19 @@ impl Tree {
         )
         .expect("taffy layout");
         let mut ops = Vec::new();
+        let mut moved = Vec::new();
         let mut stack = self.nodes[&self.root].native.clone();
         while let Some(n) = stack.pop() {
             let node = self.nodes.get_mut(&n).expect("node");
             let l = self.taffy.layout(node.taffy).expect("taffy layout");
             let frame = Rect::new(l.location.x, l.location.y, l.size.width, l.size.height);
+            if let Some(old) = node.frame
+                && old.origin != frame.origin
+                && node.motion.as_ref().is_some_and(|m| m.flip.is_some())
+                && !self.retired.contains(&n)
+            {
+                moved.push((n, (old.origin.x - frame.origin.x, old.origin.y - frame.origin.y)));
+            }
             if node.frame != Some(frame) {
                 if node.frame.is_none_or(|f| f.size != frame.size)
                     && node.props.downcast_ref::<DivProps>().is_some_and(|p| p.reports_size)
@@ -1408,6 +1681,11 @@ impl Tree {
                 ops.push(Op::SetFrame { node: n, frame });
             }
             stack.extend(node.native.iter().copied());
+        }
+        // In the transaction that moves them, so no frame shows them at the new place.
+        for (n, by) in moved {
+            self.shift(n, by, now, reduce);
+            ops.extend(self.present(n, now));
         }
         ops
     }
@@ -1426,6 +1704,7 @@ impl App {
         tree.rendered.clear();
         tree.drawn_in = self.frames;
         let stranded = tree.place_heroes(&*self.backend, window.now(), self.reduce_motion, &self.motion);
+        tree.follow_painted_layout(&*self.backend, window.now(), self.reduce_motion);
         for node in stranded.into_iter().chain(tree.step_motion(window.now())) {
             if tree.handler(node, std::any::TypeId::of::<crate::AnimationEnded>()).is_some() {
                 self.events().emitter(node).emit(crate::AnimationEnded);
@@ -1489,10 +1768,14 @@ impl App {
         }
         let target = tree.view_node(tree.root_view.entity_id());
         tree.dispatch.set_default_target(target);
+        if !self.backend.retains_frames() && !tree.tx.is_empty() && tree.follows_layout() {
+            tree.layout_check = true;
+        }
         let tx = mem::replace(&mut tree.tx, Transaction::new(id));
         let force = tree.needs_layout;
+        let (now, reduce) = (window.now(), self.reduce_motion);
         tx.commit_with(&mut *self.backend, &mut self.measure_cache, force, |backend, cache| {
-            tree.layout(backend, cache)
+            tree.layout(backend, cache, now, reduce)
         });
         // A retained backend's frames are known now; canvases laid out at a new size paint
         // again, and the next frame sends what they painted.
