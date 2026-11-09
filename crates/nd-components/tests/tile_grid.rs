@@ -118,6 +118,13 @@ fn props(cx: &TestApp, id: NodeId) -> DivProps {
     cx.backend().props(id).and_then(|p| p.downcast_ref::<DivProps>()).cloned().expect("div")
 }
 
+/// Where the tile is drawn in the grid: its layout frame moved by its offset.
+fn shown(cx: &TestApp, id: NodeId) -> (f32, f32) {
+    let frame = cx.backend().frame(id).expect("laid out");
+    let (dx, dy) = props(cx, id).transform.offset;
+    (frame.origin.x + dx, frame.origin.y + dy)
+}
+
 fn open_pinned(ids: &[&'static str]) -> (TestApp, WindowHandle<Pinned>) {
     let mut cx = TestApp::new();
     let ids = ids.to_vec();
@@ -139,8 +146,20 @@ fn set_tiles(cx: &mut TestApp, handle: &WindowHandle<Pinned>, ids: &[&'static st
 fn the_first_width_places_tiles_at_once() {
     let (cx, _) = open_pinned(&["a", "b"]);
     let b = node(&cx, "b");
-    assert_eq!(props(&cx, b).transform.offset, (122., 0.));
+    assert_eq!(shown(&cx, b), (122., 0.));
+    assert_eq!(props(&cx, b).transform.offset, (0., 0.), "no glide on first show");
     assert_eq!(props(&cx, b).style.opacity, None, "no entrance on first show");
+}
+
+#[test]
+fn tiles_sit_at_their_slots_in_layout() {
+    // A backend hit-tests and hovers layout frames, so a tile placed by offset alone would take
+    // its clicks at the grid's origin.
+    let (cx, _) = open_pinned(&["a", "b", "c", "d", "e"]);
+    let origin = |id| cx.backend().frame(node(&cx, id)).map(|f| (f.origin.x, f.origin.y));
+    assert_eq!(origin("a"), Some((0., 0.)));
+    assert_eq!(origin("b"), Some((122., 0.)));
+    assert_eq!(origin("e"), Some((0., (114. * 0.74_f32).round() + 8.)));
 }
 
 #[test]
@@ -150,11 +169,11 @@ fn a_removed_tile_fades_where_it_stood_while_the_rest_slide_over() {
     set_tiles(&mut cx, &handle, &["b", "c"]);
     assert!(cx.backend().is_live(a), "held while it fades");
     assert!(props(&cx, a).inert);
-    assert_eq!(props(&cx, a).transform.offset, (0., 0.), "where it stood");
-    assert!((props(&cx, b).transform.offset.0 - 122.).abs() < 0.5, "slides from its old slot");
+    assert_eq!(shown(&cx, a), (0., 0.), "where it stood");
+    assert!((shown(&cx, b).0 - 122.).abs() < 0.5, "slides from its old slot");
     settle(&mut cx);
     assert!(!cx.backend().is_live(a), "gone once faded");
-    assert_eq!(props(&cx, b).transform.offset, (0., 0.));
+    assert_eq!(shown(&cx, b), (0., 0.));
 }
 
 #[test]
@@ -165,10 +184,10 @@ fn an_added_tile_fades_in_and_pushes_the_rest_along() {
     let a = node(&cx, "a");
     assert_eq!(props(&cx, a).style.opacity, Some(0.), "comes in from transparent");
     assert!(props(&cx, a).transform.scale < 1.);
-    assert_eq!(props(&cx, b).transform.offset, (0., 0.), "moves from where it was");
+    assert_eq!(shown(&cx, b), (0., 0.), "moves from where it was");
     settle(&mut cx);
     assert_eq!(props(&cx, a).style.opacity.unwrap_or(1.), 1.);
-    assert_eq!(props(&cx, b).transform.offset, (122., 0.));
+    assert_eq!(shown(&cx, b), (122., 0.));
 }
 
 #[test]
@@ -180,10 +199,10 @@ fn a_new_width_reflows_on_the_spring() {
         cx.drain_events();
         cx.frame();
     }
-    assert!((props(&cx, b).transform.offset.0 - 122.).abs() < 0.5, "no jump: {:?}", props(&cx, b).transform.offset);
+    assert!((shown(&cx, b).0 - 122.).abs() < 0.5, "no jump: {:?}", shown(&cx, b));
     assert!(cx.needs_frame(), "moving");
     settle(&mut cx);
-    assert_eq!(props(&cx, b).transform.offset, (77., 0.), "four 69 pt columns");
+    assert_eq!(shown(&cx, b), (77., 0.), "four 69 pt columns");
 }
 
 #[test]
@@ -193,13 +212,13 @@ fn a_released_tile_slides_home_from_the_pointer() {
     let start = centre(1);
     drag(&mut cx, b, GesturePhase::Began, start, start);
     drag(&mut cx, b, GesturePhase::Changed, start, Point { x: start.x, y: start.y + 60. });
-    assert_eq!(props(&cx, b).transform.offset, (122., 60.), "on the pointer");
+    assert_eq!(shown(&cx, b), (122., 60.), "on the pointer");
     let item = nd_ui::DragItem::new("tab", "b");
     cx.events().emitter(b).emit(DragEnded { item, outcome: nd_ui::DragOutcome::Cancelled });
     cx.drain_events();
     cx.frame();
-    let (x, y) = props(&cx, b).transform.offset;
+    let (x, y) = shown(&cx, b);
     assert!(x == 122. && y > 50., "leaves from where it was let go: {y}");
     settle(&mut cx);
-    assert_eq!(props(&cx, b).transform.offset, (122., 0.));
+    assert_eq!(shown(&cx, b), (122., 0.));
 }

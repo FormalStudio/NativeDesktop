@@ -95,6 +95,9 @@ struct Animated {
     exit: Option<Pose>,
     /// How it glides when layout moves it (`.animate_layout`), resolved.
     flip: Option<Animation>,
+    /// Laid out since it asked to glide. Only a later move glides: the first layout that sees
+    /// the request places it, as the first layout after mounting does.
+    laid_out: bool,
 }
 
 /// A div's props and layout with `values` presented in place of its own.
@@ -556,6 +559,7 @@ impl Tree {
         let (shown_props, shown_layout) = shown(&self.lit, self.hero_away.get(&id), id, &el.props, &el.layout);
         let transform = shown_props.downcast_ref::<DivProps>().map_or_else(Transform::default, |d| d.transform);
         let targets = animation::values(&shown_layout, &transform);
+        let laid_out = previous.as_ref().is_some_and(|p| p.flip.is_some() && p.laid_out);
         let mut state = match previous {
             Some(mut previous) => {
                 previous.state.retarget(spec.animation, targets, now, reduce);
@@ -583,7 +587,7 @@ impl Tree {
             el.props = hidden(&el.props);
         }
         let flip = spec.layout.map(|a| tokens.resolve(a, reduce));
-        self.pending_motion = Some(Animated { state, props: base.0, layout: base.1, exit: spec.exit, flip });
+        self.pending_motion = Some(Animated { state, props: base.0, layout: base.1, exit: spec.exit, flip, laid_out });
         el
     }
 
@@ -1657,10 +1661,13 @@ impl Tree {
             let frame = Rect::new(l.location.x, l.location.y, l.size.width, l.size.height);
             if let Some(old) = node.frame
                 && old.origin != frame.origin
-                && node.motion.as_ref().is_some_and(|m| m.flip.is_some())
+                && node.motion.as_ref().is_some_and(|m| m.flip.is_some() && m.laid_out)
                 && !self.retired.contains(&n)
             {
                 moved.push((n, (old.origin.x - frame.origin.x, old.origin.y - frame.origin.y)));
+            }
+            if let Some(m) = node.motion.as_mut() {
+                m.laid_out = true;
             }
             if node.frame != Some(frame) {
                 if node.frame.is_none_or(|f| f.size != frame.size)

@@ -241,29 +241,25 @@ impl TileGrid {
         accepts.extend(kind.clone());
         let mut children = Vec::with_capacity(self.tiles.len());
         for tile in self.tiles {
-            let slot = slot_of.get(&tile.id).copied().unwrap_or(0);
-            let (x, y) = m.origin(slot);
             let follow = dragged.filter(|d| d.id == tile.id);
-            let (x, y) = match follow {
-                // Follows the pointer from where it was picked up.
-                Some(d) => {
-                    let home = m.origin(ids.iter().position(|i| *i == d.id).unwrap_or(0));
-                    (home.0 + d.translation.0, home.1 + d.translation.1)
-                }
-                None => (x, y),
+            // Tiles sit at their slots in layout, so they are hit and hovered where they are
+            // drawn; a dragged one stays at its own slot and follows the pointer by its offset.
+            let ((x, y), (dx, dy)) = match follow {
+                Some(d) => (m.origin(ids.iter().position(|i| *i == d.id).unwrap_or(0)), d.translation),
+                None => (m.origin(slot_of.get(&tile.id).copied().unwrap_or(0)), (0., 0.)),
             };
             let mut el = div()
                 .id(tile.id.clone())
                 .absolute()
-                .top_0()
-                .left_0()
+                .left(px(x))
+                .top(px(y))
                 .w(px(m.tile.0))
                 .h(px(m.tile.1))
-                .offset(px(x), px(y));
+                .offset(px(dx), px(dy));
             // A dragged tile tracks the pointer at once; its motion stays, so it slides when let go.
             if animate {
                 let animation = if follow.is_some() { Animation::linear(Duration::ZERO) } else { self.reflow };
-                el = el.animate(animation).enter_from(tile_pose).exit_to(tile_pose);
+                el = el.animate(animation).animate_layout(self.reflow).enter_from(tile_pose).exit_to(tile_pose);
             }
             let mut el = el.child(tile.content);
             if let Some(kind) = &kind {

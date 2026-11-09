@@ -219,14 +219,18 @@ define_class!(
             self.ivars().focusable.get()
         }
 
-        // Content under a transparent title bar must not move the window unless it is a drag
-        // region: a click on a card there is a click.
+        // AppKit hit-tests frames, never the layer transform that draws an offset or scale, so
+        // the point is taken back through it first: a click lands on what is drawn under it.
         #[unsafe(method_id(hitTest:))]
         fn hit_test(&self, point: NSPoint) -> Option<Retained<NSView>> {
-            let hit: Option<Retained<NSView>> = unsafe { msg_send![super(self), hitTest: point] };
-            if self.ivars().props.borrow().inert { None } else { hit }
+            match self.untransformed(point) {
+                Some(point) if !self.ivars().props.borrow().inert => unsafe { msg_send![super(self), hitTest: point] },
+                _ => None,
+            }
         }
 
+        // Content under a transparent title bar must not move the window unless it is a drag
+        // region: a click on a card there is a click.
         #[unsafe(method(mouseDownCanMoveWindow))]
         fn mouse_down_can_move_window(&self) -> bool {
             false
@@ -616,19 +620,37 @@ impl NdLayerView {
     /// anchor is its origin, as AppKit sets it for a layer-backed view).
     fn apply_transform(&self) {
         let Some(layer) = self.layer() else { return };
+        let (s, tx, ty) = self.affine();
+        layer.setAffineTransform(objc2_core_foundation::CGAffineTransform { a: s, b: 0., c: 0., d: s, tx, ty });
+    }
+
+    /// The scale and translation of the layer's transform, in the superview's space.
+    fn affine(&self) -> (f64, f64, f64) {
         let t = self.ivars().props.borrow().transform;
         let size = self.bounds().size;
         let s = f64::from(t.scale);
         // A lifted hero sits on the window's frame view, whose y axis points up.
         let down = if unsafe { self.superview() }.is_none_or(|p| p.isFlipped()) { 1. } else { -1. };
-        layer.setAffineTransform(objc2_core_foundation::CGAffineTransform {
-            a: s,
-            b: 0.,
-            c: 0.,
-            d: s,
-            tx: f64::from(t.offset.0) + size.width * (1. - s) / 2.,
-            ty: down * f64::from(t.offset.1) + size.height * (1. - s) / 2.,
-        });
+        (
+            s,
+            f64::from(t.offset.0) + size.width * (1. - s) / 2.,
+            down * f64::from(t.offset.1) + size.height * (1. - s) / 2.,
+        )
+    }
+
+    /// `point`, in the superview's space, where it falls on the view's frame before the layer
+    /// transform moves and scales what the frame shows. `None` at a scale of zero, where
+    /// nothing is drawn.
+    fn untransformed(&self, point: NSPoint) -> Option<NSPoint> {
+        if self.ivars().props.borrow().transform.is_identity() {
+            return Some(point);
+        }
+        let (s, tx, ty) = self.affine();
+        if s.abs() < f64::EPSILON {
+            return None;
+        }
+        let o = self.frame().origin;
+        Some(NSPoint::new(o.x + (point.x - o.x - tx) / s, o.y + (point.y - o.y - ty) / s))
     }
 }
 

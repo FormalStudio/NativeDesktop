@@ -5,6 +5,12 @@ and the one it moves to.
 
 ## Unreleased
 
+- On AppKit a click lands on what is drawn under the pointer: an element moved by `.offset` or
+  scaled by `.scale` (a press dip, a layout glide, a hero) takes clicks where it is drawn, not
+  where layout put it. A `tile_grid` places its tiles at their slots in layout and glides them
+  with `animate_layout`, so a click on the first card no longer opens the last. An element that
+  gains `animate_layout` after mounting glides from its next move, not the layout that sees it.
+  The gallery has a Tile grid page.
 - On the GPUI backend `animate_layout` starts its glide in the frame that moves the element, from
   where it was (it showed at its new place for one frame first), and `exit_to` and
   `animate_layout` work inside a scroll view, where the element vanished or jumped.

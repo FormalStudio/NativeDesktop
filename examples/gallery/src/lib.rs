@@ -6,6 +6,7 @@
 pub mod forms;
 pub mod layout;
 pub mod media;
+pub mod tiles;
 
 use std::time::Duration;
 
@@ -28,10 +29,11 @@ pub enum Page {
     StatusPage,
     Dialogs,
     Media,
+    Tiles,
 }
 
 impl Page {
-    pub const ALL: [Page; 10] = [
+    pub const ALL: [Page; 11] = [
         Page::Palette,
         Page::SourceList,
         Page::Toasts,
@@ -42,6 +44,7 @@ impl Page {
         Page::StatusPage,
         Page::Dialogs,
         Page::Media,
+        Page::Tiles,
     ];
 
     pub fn id(self) -> &'static str {
@@ -56,6 +59,7 @@ impl Page {
             Page::StatusPage => "status-page",
             Page::Dialogs => "dialogs",
             Page::Media => "media",
+            Page::Tiles => "tiles",
         }
     }
 
@@ -71,6 +75,7 @@ impl Page {
             Page::StatusPage => "Status page",
             Page::Dialogs => "Dialogs",
             Page::Media => "Media",
+            Page::Tiles => "Tile grid",
         }
     }
 
@@ -86,6 +91,7 @@ impl Page {
             Page::StatusPage => Icon::Inbox,
             Page::Dialogs => Icon::Check,
             Page::Media => Icon::Music,
+            Page::Tiles => Icon::Square,
         }
     }
 
@@ -95,7 +101,7 @@ impl Page {
             Page::Toasts | Page::Banner => "feedback",
             Page::Forms => "controls",
             Page::Tabs | Page::Split | Page::StatusPage | Page::Dialogs => "layout",
-            Page::Media => "content",
+            Page::Media | Page::Tiles => "content",
         }
     }
 
@@ -138,6 +144,7 @@ pub struct Gallery {
     split: Entity<layout::SplitDemo>,
     dialogs: Entity<layout::DialogsDemo>,
     media: Entity<media::MediaPage>,
+    tiles: Entity<tiles::TilesPage>,
 }
 
 fn secondary_k() -> &'static str {
@@ -152,6 +159,7 @@ impl Gallery {
             split: cx.new(layout::SplitDemo::new),
             dialogs: cx.new(layout::DialogsDemo::new),
             media: cx.new(|cx| media::MediaPage::new(start.audio, cx)),
+            tiles: cx.new(tiles::TilesPage::new),
             page: start.page,
             palette_open: start.palette.is_some(),
             query: start.palette.clone().unwrap_or_default(),
@@ -335,6 +343,11 @@ impl Gallery {
                 .child(self.dialogs.clone())
                 .into_any_element(),
             Page::Media => div().flex_1().min_h_0().w_full().child(self.media.clone()).into_any_element(),
+            Page::Tiles => column
+                .max_w(px(640.))
+                .child(note("Click a card to open it, drag one to reorder. Titles take one line, summaries two."))
+                .child(self.tiles.clone())
+                .into_any_element(),
         }
     }
 }

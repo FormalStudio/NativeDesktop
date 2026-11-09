@@ -18,7 +18,8 @@ gets the platform's timing for it:
 The curve is `CAMediaTimingFunction`'s default on macOS, ease-out-cubic on GNOME and WinUI's
 entrance curve on Windows. With reduce motion on, every paced animation becomes a short fade:
 offsets, scales and sizes jump, and opacity still eases. `.scale(..)` scales an element about
-its centre on both backends; on GPUI its hit area follows what is drawn.
+its centre on both backends. An element's offset and scale move its hit area with it, so a click
+lands on what is drawn under the pointer. Hover follows the layout box on AppKit.
 
 ```rust
 div()
@@ -75,7 +76,8 @@ v_flex().children(notes.iter().map(|note| {
 
 `tile_grid` uses all three: tiles move to new slots on `.reflow(animation)` (the platform spring
 by default), new tiles fade and grow in, removed ones fade and shrink where they stood, and the
-grid's height follows. The first width it learns places the tiles at once.
+grid's height follows. The first width it learns places the tiles at once. Tiles sit at their
+slots in layout and glide with `animate_layout`, so they hover where they are drawn too.
 
 ## Hover groups
 
