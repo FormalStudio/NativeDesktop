@@ -5,6 +5,10 @@ and the one it moves to.
 
 ## Unreleased
 
+- On AppKit a hero's first frame draws it on its source: AppKit put the view's layer transform
+  back to identity when it synced the geometry of the hero lifted onto the frame view, so for one
+  frame the hero showed at its own place, the card's size in the corner of the page it grows into.
+  Any offset or scaled view takes its transform again when its layer updates.
 - On AppKit `.on_resize` inside a scaffold pane or split pane reports the size the pane gives it
   from its first report: nd places nothing in a pane AppKit has not sized yet, where the first
   layout reported a width and height of 0 and started layout glides from that empty box.

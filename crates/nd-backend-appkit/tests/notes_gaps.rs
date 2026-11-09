@@ -41,6 +41,7 @@ mod gaps {
         corners(&rig, &mut c);
         row_menus(&rig, &mut c);
         shadows_and_presses(&rig, &mut c);
+        hero_first_frame(&rig, &mut c);
         if c.0 == 0 {
             println!("ND_NOTES_GAPS_OK");
             std::process::exit(0);
@@ -314,6 +315,58 @@ mod gaps {
         plain.mouseUp(&event(NSEventType::LeftMouseUp));
         settle(rig);
         c.check((scale() - 1.).abs() < 1e-3, &format!("press: and comes back on release ({})", scale()));
+        rig.close(opened);
+    }
+
+    struct Hero {
+        open: bool,
+    }
+
+    impl Render for Hero {
+        fn render(&mut self, _w: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div()
+                .id("stage")
+                .size_full()
+                .relative()
+                .child(div().id("card").absolute().top(px(300.)).left(px(200.)).size(px(80.)).bg(hsla(0., 0., 0.5, 1.)))
+                .when(self.open, |d| {
+                    d.child(
+                        div()
+                            .id("hero")
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .w(px(400.))
+                            .h(px(500.))
+                            .bg(hsla(0., 0., 1., 1.))
+                            .hero_from("card", false)
+                            .child(text("A page growing out of its card")),
+                    )
+                })
+        }
+    }
+
+    /// The frame a hero first shows in draws it on its source: AppKit resets the backing layer's
+    /// transform when it syncs the geometry of a view lifted onto the frame view.
+    fn hero_first_frame(rig: &Rig, c: &mut Checks) {
+        let opened = rig.open("hero", |_| Hero { open: false });
+        let win = opened.id();
+        rig.pump();
+        rig.update(&opened, |v, cx| {
+            v.open = true;
+            cx.notify();
+        });
+        // The clock stands still: the hero stays on its source once placed.
+        for _ in 0..3 {
+            rig.pump();
+        }
+        let hero = rig.view(win, "hero");
+        opened.window.displayIfNeeded();
+        let t = hero.layer().expect("layer-backed").affineTransform();
+        c.check(
+            (t.tx - 200.).abs() < 1. && (t.ty.abs() - 300.).abs() < 1.,
+            &format!("hero: the first frame drawn keeps the offset onto its source ({}, {})", t.tx, t.ty),
+        );
         rig.close(opened);
     }
 

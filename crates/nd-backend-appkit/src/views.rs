@@ -436,6 +436,12 @@ define_class!(
         #[unsafe(method(updateLayer))]
         fn update_layer(&self) {
             let Some(layer) = self.layer() else { return };
+            // AppKit puts the backing layer's transform back to identity when it syncs the layer's
+            // geometry in the display pass, as it does for a hero just lifted onto the frame view:
+            // that frame would draw it where layout put it, not where its offset moves it.
+            if !self.ivars().props.borrow().transform.is_identity() {
+                self.apply_transform();
+            }
             let props = self.current_look();
             let background = props.background.or(self.ivars().surface.get()).map(|c| c.ns_color().CGColor());
             layer.setBackgroundColor(background.as_deref());
