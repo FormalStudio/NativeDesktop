@@ -79,6 +79,8 @@ struct Log {
     clicks: Vec<&'static str>,
     answers: Vec<usize>,
     widths: Vec<(&'static str, f32)>,
+    /// What the scaffold's content reported to `.on_resize`.
+    content_sizes: Vec<(f32, f32)>,
 }
 
 struct Scene {
@@ -210,7 +212,10 @@ impl Render for Scene {
                             cx.notify();
                         },
                     )))
-                    .content(text("Body"))
+                    .content(div().size_full().child(text("Body")).on_resize({
+                        let log = self.log.clone();
+                        move |e, _, _| log.borrow_mut().content_sizes.push((e.width, e.height))
+                    }))
                     .inspector(
                         inspector().resizable().width(px(inspector_w)).min_w(px(200.)).child(text("Info")).on_resize(
                             cx.listener(|this, e: &PaneResized, _, cx| {
@@ -800,6 +805,11 @@ mod gate_m6 {
             o.input(vec![SyntheticInput::Drag { from: Point { x: from, y }, to: Point { x: to, y }, steps: 8 }]);
         };
         assert_eq!(width(&o, "nd-sidebar"), 220.);
+        let sizes = o.log.borrow().content_sizes.clone();
+        assert!(
+            sizes.first().is_some_and(|(w, h)| *w > 100. && *h > 100.) && sizes.iter().all(|(w, h)| *w > 0. && *h > 0.),
+            "the content reports its real size from the first layout: {sizes:?}"
+        );
         drag(&mut o, 220., 300.);
         assert_eq!(o.log.borrow().widths.last(), Some(&("sidebar", 300.)), "the drag reports as it moves");
         assert!(o.log.borrow().widths.len() > 1, "more than once: {:?}", o.log.borrow().widths);

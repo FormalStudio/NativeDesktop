@@ -5,6 +5,9 @@ and the one it moves to.
 
 ## Unreleased
 
+- On AppKit `.on_resize` inside a scaffold pane or split pane reports the size the pane gives it
+  from its first report: nd places nothing in a pane AppKit has not sized yet, where the first
+  layout reported a width and height of 0 and started layout glides from that empty box.
 - `.active(|p| p.scale(0.97))` gives a `div` a pose to take while a press on it is held, eased on
   the fast timing, and dropped when the button comes up or the press becomes a drag. Backends
   report presses as `PressChanged`, and `DivProps` gained `active`. AppKit casts `box_shadow`:

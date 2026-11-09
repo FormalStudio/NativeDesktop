@@ -1688,6 +1688,12 @@ impl Tree {
         let mut stack = self.nodes[&self.root].native.clone();
         while let Some(n) = stack.pop() {
             let node = self.nodes.get_mut(&n).expect("node");
+            // A native container that has not sized its child yet (a split pane before AppKit
+            // lays out the split view) places nothing in it: its first frames would report an
+            // empty size and start layout glides from it.
+            if matches!(node.boundary, Some(Boundary::Box(s, _)) if s.width <= 0. && s.height <= 0.) {
+                continue;
+            }
             let l = self.taffy.layout(node.taffy).expect("taffy layout");
             let frame = Rect::new(l.location.x, l.location.y, l.size.width, l.size.height);
             if let Some(old) = node.frame

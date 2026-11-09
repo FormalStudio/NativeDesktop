@@ -57,6 +57,8 @@ mod layout {
         tabs: Vec<String>,
         ratios: Vec<f32>,
         collapses: Vec<bool>,
+        /// What the scaffold's content reported to `.on_resize`.
+        content_sizes: Vec<(f32, f32)>,
     }
 
     struct Layout {
@@ -119,7 +121,10 @@ mod layout {
             scaffold()
                 .toolbar(toolbar().inspector_toggle())
                 .sidebar(sidebar().child(div()))
-                .content(div().size_full())
+                .content(div().size_full().on_resize({
+                    let log = self.log.clone();
+                    move |e, _, _| log.borrow_mut().content_sizes.push((e.width, e.height))
+                }))
                 .inspector(inspector().collapsed(self.collapsed).on_collapse_change(cx.listener(
                     |this, e: &PaneCollapsed, _, cx| {
                         this.log.borrow_mut().collapses.push(e.collapsed);
@@ -405,6 +410,14 @@ mod layout {
         c.check(
             (top - bottom).abs() <= 2. && top.abs() <= 6.,
             &format!("the page's content sits centred in its measured frame (top {top}, bottom {bottom})"),
+        );
+
+        // The content pane's first size report is the size AppKit gave the pane, not the empty
+        // box it had before the split view laid out.
+        let sizes = log.borrow().content_sizes.clone();
+        c.check(
+            sizes.first().is_some_and(|(w, h)| *w > 100. && *h > 100.) && sizes.iter().all(|(w, h)| *w > 0. && *h > 0.),
+            &format!("the scaffold's content reports its real size from the first layout ({sizes:?})"),
         );
 
         // Inspector: the toolbar's system toggle collapses it, reported once.
