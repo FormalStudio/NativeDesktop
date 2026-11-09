@@ -19,7 +19,8 @@ use std::rc::{Rc, Weak};
 
 use nd_components::{
     ActionVisibility, ImageFit, SOURCE_ART, SOURCE_ART_RADIUS, SourceAction, SourceActionClicked, SourceActivated,
-    SourceCollapsed, SourceExpanded, SourceIndex, SourceNode, SourceSelected, SourceTreeProps,
+    SourceCollapsed, SourceExpanded, SourceIndex, SourceMenuRequested, SourceMiddleClicked, SourceNode, SourceSelected,
+    SourceTreeProps,
 };
 use nd_ui::events::Emit;
 use nd_ui::prelude::SharedString;
@@ -29,7 +30,7 @@ use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{AllocAnyThread, DefinedClass, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
     NSAccessibility, NSBackgroundStyle, NSBezelStyle, NSButton, NSColor, NSControlTextEditingDelegate, NSDragOperation,
-    NSDraggingSession, NSEvent, NSFont, NSFontWeightRegular, NSImageView, NSLayoutConstraint, NSLineBreakMode,
+    NSDraggingSession, NSEvent, NSFont, NSFontWeightRegular, NSImageView, NSLayoutConstraint, NSLineBreakMode, NSMenu,
     NSOutlineView, NSOutlineViewDataSource, NSOutlineViewDelegate, NSPasteboardItem, NSPasteboardWriting, NSResponder,
     NSScrollView, NSTableCellView, NSTableColumn, NSTableRowView, NSTableViewAnimationOptions, NSTableViewDataSource,
     NSTableViewDelegate, NSTableViewRowSizeStyle, NSTableViewStyle, NSTextField, NSTrackingArea, NSTrackingAreaOptions,
@@ -111,6 +112,8 @@ pub(crate) struct Shared {
     /// Set while nd changes the outline (reload, expansion replay, selection), so the delegate
     /// does not report it back.
     programmatic: Cell<bool>,
+    /// A right click on a row asks for its menu (`SourceTreeProps::row_menus`).
+    row_menus: Cell<bool>,
 }
 
 impl Shared {
@@ -129,6 +132,65 @@ impl Shared {
 
 pub struct SourceIvars {
     shared: Rc<Shared>,
+}
+
+define_class!(
+    // SAFETY: NSOutlineView has no subclassing requirements beyond calling super in the
+    // override below, and this type does not implement Drop.
+    #[unsafe(super(NSOutlineView, objc2_app_kit::NSTableView, objc2_app_kit::NSControl, NSView, NSResponder))]
+    #[thread_kind = MainThreadOnly]
+    #[ivars = SourceIvars]
+    struct NdOutlineView;
+
+    impl NdOutlineView {
+        // AppKit asks on a right click and on a control-click. The app builds the menu on its
+        // next frame and nd shows it then, so none is shown now, and the selection stays as it
+        // is: on macOS a row's menu acts on the clicked row, which Finder and Mail leave
+        // unselected.
+        #[unsafe(method_id(menuForEvent:))]
+        fn menu_for_event(&self, event: &NSEvent) -> Option<Retained<NSMenu>> {
+            if self.request_menu(event) { None } else { unsafe { msg_send![super(self), menuForEvent: event] } }
+        }
+
+        #[unsafe(method(otherMouseDown:))]
+        fn other_mouse_down(&self, event: &NSEvent) {
+            let row = (event.buttonNumber() == 2).then(|| self.row_id(event)).flatten();
+            match row {
+                Some(id) => self.ivars().shared.report(SourceMiddleClicked { id }),
+                None => unsafe { msg_send![super(self), otherMouseDown: event] },
+            }
+        }
+    }
+);
+
+impl NdOutlineView {
+    fn new(mtm: MainThreadMarker, shared: Rc<Shared>) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(SourceIvars { shared });
+        unsafe { msg_send![super(this), initWithFrame: NSRect::ZERO] }
+    }
+
+    /// The id of the row under `event`; `None` over a section header or no row.
+    fn row_id(&self, event: &NSEvent) -> Option<SharedString> {
+        let row = self.rowAtPoint(self.convertPoint_fromView(event.locationInWindow(), None));
+        let item = (row >= 0).then(|| self.itemAtRow(row)).flatten()?;
+        let data = self.ivars().shared.data.borrow();
+        data.node_index(Some(&item)).filter(|&i| !data.nodes[i].section).map(|i| data.nodes[i].id.clone())
+    }
+
+    /// Reports a menu request for the row under `event`, in the coordinates of the tree's
+    /// view (its scroll view). False when the tree has no row menus or no row is there.
+    fn request_menu(&self, event: &NSEvent) -> bool {
+        let shared = &self.ivars().shared;
+        if !shared.row_menus.get() {
+            return false;
+        }
+        let (Some(id), Some(scroll)) = (self.row_id(event), self.enclosingScrollView()) else { return false };
+        let at = scroll.convertPoint_fromView(event.locationInWindow(), None);
+        let node = shared.emit.node();
+        shared.emit.emit(SourceMenuRequested { node, id, x: at.x as f32, y: at.y as f32 });
+        shared.wake.wake();
+        true
+    }
 }
 
 define_class!(
@@ -745,7 +807,14 @@ pub(crate) struct SourceTreeNative {
 
 impl SourceTreeNative {
     pub fn new(mtm: MainThreadMarker, emit: Emit, wake: Wake, props: &SourceTreeProps) -> Self {
-        let outline = NSOutlineView::new(mtm);
+        let shared = Rc::new(Shared {
+            data: RefCell::default(),
+            emit,
+            wake,
+            programmatic: Cell::new(false),
+            row_menus: Cell::new(props.row_menus),
+        });
+        let outline: Retained<NSOutlineView> = Retained::into_super(NdOutlineView::new(mtm, shared.clone()));
         outline.setStyle(NSTableViewStyle::SourceList);
         // A table made in code starts at the custom 24 pt row; the default style follows the
         // sidebar icon size in System Settings, as Finder's and Notes' sidebars do.
@@ -755,7 +824,6 @@ impl SourceTreeNative {
         outline.addTableColumn(&column);
         unsafe { outline.setOutlineTableColumn(Some(&column)) };
         outline.setFloatsGroupRows(false);
-        let shared = Rc::new(Shared { data: RefCell::default(), emit, wake, programmatic: Cell::new(false) });
         let source = NdSourceTree::alloc(mtm).set_ivars(SourceIvars { shared });
         let source: Retained<NdSourceTree> = unsafe { msg_send![super(source), init] };
         unsafe {
@@ -850,6 +918,8 @@ impl SourceTreeNative {
     }
 
     pub fn update(&mut self, props: &SourceTreeProps) {
+        self.props.row_menus = props.row_menus;
+        self.shared().row_menus.set(props.row_menus);
         if props.nodes != self.props.nodes
             || props.actions != self.props.actions
             || props.action_visibility != self.props.action_visibility

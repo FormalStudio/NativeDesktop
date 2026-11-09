@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use nd::prelude::*;
 
-actions!(gallery, [OpenPalette]);
+actions!(gallery, [OpenPalette, ShowMenuPage, RemoveMenuFolder]);
 
 pub const CONTEXT: &str = "Gallery";
 
@@ -145,6 +145,8 @@ pub struct Gallery {
     dialogs: Entity<layout::DialogsDemo>,
     media: Entity<media::MediaPage>,
     tiles: Entity<tiles::TilesPage>,
+    /// The row whose context menu is open.
+    menu_row: Option<SharedString>,
 }
 
 fn secondary_k() -> &'static str {
@@ -160,6 +162,7 @@ impl Gallery {
             dialogs: cx.new(layout::DialogsDemo::new),
             media: cx.new(|cx| media::MediaPage::new(start.audio, cx)),
             tiles: cx.new(tiles::TilesPage::new),
+            menu_row: None,
             page: start.page,
             palette_open: start.palette.is_some(),
             query: start.palette.clone().unwrap_or_default(),
@@ -366,6 +369,21 @@ impl Render for Gallery {
                 this.query = SharedString::default();
                 cx.notify();
             }))
+            .on_action(cx.listener(|this, _: &ShowMenuPage, _, cx| {
+                if let Some(page) = this.menu_row.take().as_deref().and_then(Page::by_id) {
+                    this.page = page;
+                    this.last_event = format!("Showed {} from its menu", page.id()).into();
+                }
+                cx.notify();
+            }))
+            .on_action(cx.listener(|this, _: &RemoveMenuFolder, _, cx| {
+                if let Some(row) = this.menu_row.take() {
+                    let name = row.strip_prefix("folder:").unwrap_or(&row).to_owned();
+                    this.folders.retain(|f| *f != name);
+                    this.last_event = format!("Removed {name} from its menu").into();
+                }
+                cx.notify();
+            }))
             .toolbar(
                 toolbar()
                     .title("Gallery")
@@ -397,6 +415,22 @@ impl Render for Gallery {
                             if e.id == "all-folders" {
                                 this.folders_open = false;
                             }
+                            cx.notify();
+                        }))
+                        .context_menu({
+                            let this = cx.entity().downgrade();
+                            move |id, menu, _, cx| {
+                                let _ = this.update(cx, |g, _| g.menu_row = Some(id.clone()));
+                                match id.strip_prefix("folder:") {
+                                    Some(name) => {
+                                        menu.item_destructive(format!("Remove \u{201c}{name}\u{201d}"), RemoveMenuFolder)
+                                    }
+                                    None => menu.item("Show Page", ShowMenuPage),
+                                }
+                            }
+                        })
+                        .on_middle_click(cx.listener(|this, e: &nd::chrome::SourceMiddleClicked, _, cx| {
+                            this.last_event = format!("Middle-clicked {}", e.id).into();
                             cx.notify();
                         }))
                         .on_action(cx.listener(|this, e: &SourceActionClicked, _, cx| {

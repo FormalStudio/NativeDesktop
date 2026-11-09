@@ -5,6 +5,10 @@ and the one it moves to.
 
 ## Unreleased
 
+- A `source_tree` or `source_list` on AppKit raises its rows' menus: a right click or a
+  control-click on a row asks for that row's `.context_menu`, leaving the selection as it is, as
+  Finder's sidebar does, and a middle click reports `SourceMiddleClicked`. A context menu with no
+  items opens nothing. The gallery's sidebar has row menus.
 - AppKit draws each corner of a `div` at its own radius: corners of one radius (or none) round
   with the layer's masked corners, and corners of different radii cut a shape mask, with the
   border stroked along it. Only the top-left radius applied before.
