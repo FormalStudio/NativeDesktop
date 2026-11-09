@@ -5,8 +5,10 @@ mod common;
 
 use common::*;
 use nd_components::forms::*;
-use nd_components::{Icon, Mapping};
+use nd_components::{Icon, Mapping, markdown_editor};
+use nd_ui::Keystroke;
 use nd_ui::Role;
+use nd_ui::dispatch::KeyDispatch;
 use nd_ui::prelude::*;
 use nd_ui::semantics::{ActionError, SemanticAction};
 
@@ -160,6 +162,93 @@ fn text_area_takes_several_lines() {
     rig.fresh();
     rig.emit("notes", TextChanged { text: "one\ntwo".into() });
     assert_eq!(rig.all_updates(), 0);
+}
+
+fn styled_view(s: &Text, cx: &mut Context<Host<Text>>) -> AnyElement {
+    // A closure built again each render: the same styler as far as the area is concerned.
+    let shout = |line: &str, state: u32| nd_ui::StyledParagraph {
+        runs: vec![(0..line.len(), nd_ui::SpanStyle { bold: true, ..Default::default() })],
+        state,
+        ..Default::default()
+    };
+    v_flex()
+        .child(text_area("doc").text(s.text.clone()).label("Document").styles(shout).max_measure(640.).on_change(
+            cx.listener(|h, e: &TextChanged, _, cx| {
+                h.s.text = e.text.to_string();
+                h.s.changes += 1;
+                cx.notify();
+            }),
+        ))
+        .child(markdown_editor("md", &cx.new(|_| TextFieldState::default().with_text("# Title"))))
+        .into_any_element()
+}
+
+#[test]
+fn text_area_carries_its_styler_and_measure() {
+    let mut rig = Rig::new(Text::default(), styled_view);
+    let props = rig.props::<TextAreaProps>("doc");
+    assert_eq!(props.max_measure, Some(640.));
+    let styler = props.styles.unwrap_or_else(|| panic!("the area has a styler"));
+    let styled = styler.style("hello", 3);
+    assert_eq!((styled.runs.len(), styled.state), (1, 3));
+
+    // Rendering again rebuilds the closure; the props are equal, so nothing restyles.
+    rig.fresh();
+    rig.rerender();
+    assert_eq!(rig.updates("doc"), 0);
+
+    rig.set_value("doc", "one\ntwo").unwrap();
+    assert_eq!(rig.state().text, "one\ntwo");
+    assert_eq!(rig.sem("doc").value.as_deref(), Some("one\ntwo"));
+}
+
+#[test]
+fn markdown_editor_is_a_bound_styled_area_in_a_column() {
+    let rig = Rig::new(Text::default(), styled_view);
+    assert!(rig.kind_is::<TextAreaKind>("md"));
+    let props = rig.props::<TextAreaProps>("md");
+    assert_eq!(props.text.as_ref(), "# Title");
+    assert_eq!(props.max_measure, Some(nd_components::markdown::MEASURE));
+    let styler = props.styles.unwrap_or_else(|| panic!("markdown styles"));
+    let heading = styler.style("# Title", 0);
+    assert!(heading.runs.iter().any(|(_, s)| s.bold && s.scale == Some(1.75)));
+    // Its keys: Return continues a list.
+    let edit = styler.edit(nd_ui::EditKey::Return, "- milk", 6..6, 0).unwrap_or_else(|| panic!("continues"));
+    assert_eq!(edit.text, "\n- ");
+}
+
+fn keys_view(_: &Text, _: &mut Context<Host<Text>>) -> AnyElement {
+    v_flex()
+        .child(text_area("notes"))
+        .child(text_area("doc").styles(nd_components::Markdown))
+        .child(nd_ui::button("save", "Save").variant(nd_ui::ButtonVariant::Primary))
+        .into_any_element()
+}
+
+#[test]
+fn text_areas_keep_return_and_a_styled_one_keeps_tab() {
+    let mut rig = Rig::new(Text::default(), keys_view);
+    let window = rig.win.id();
+    let press = |rig: &mut Rig<Text>, keys: &'static str| {
+        let result = rig.cx.dispatch_keystroke(window, &Keystroke::parse(keys).expect("keystroke"));
+        rig.cx.run_until_idle();
+        result
+    };
+    let (notes, doc) = (rig.node("notes"), rig.node("doc"));
+
+    rig.cx.focus(window, notes);
+    assert_eq!(press(&mut rig, "enter"), KeyDispatch::Unhandled, "the text view inserts the line");
+    assert_eq!(press(&mut rig, "tab"), KeyDispatch::Handled);
+    assert_eq!(rig.cx.focused(window), Some(doc));
+
+    // The styled area's styler indents with Tab: nd leaves Tab and Shift-Tab to it.
+    for keys in ["tab", "shift-tab", "enter"] {
+        assert_eq!(press(&mut rig, keys), KeyDispatch::Unhandled, "{keys}");
+        assert_eq!(rig.cx.focused(window), Some(doc));
+    }
+    // Control-Tab leaves it, as it leaves a macOS text view.
+    assert_eq!(press(&mut rig, "ctrl-shift-tab"), KeyDispatch::Handled);
+    assert_eq!(rig.cx.focused(window), Some(notes));
 }
 
 #[derive(Default)]

@@ -16,6 +16,7 @@ mod display;
 mod emoji;
 pub(crate) mod glyph;
 pub(crate) mod look;
+mod paragraphs;
 mod pickers;
 pub(crate) mod text;
 pub(crate) mod toggle;

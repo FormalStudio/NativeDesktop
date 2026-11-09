@@ -43,6 +43,8 @@ pub struct SpanStyle {
     pub color: Option<TextColor>,
     /// The run's font size as a multiple of the text's (iMessage's Big and Small effects).
     pub scale: Option<f32>,
+    /// A fill behind the run. Text areas draw it; `text` and labels leave it out.
+    pub background: Option<crate::TextFill>,
 }
 
 impl SpanStyle {

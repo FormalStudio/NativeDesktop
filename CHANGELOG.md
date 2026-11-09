@@ -5,6 +5,26 @@ and the one it moves to.
 
 ## Unreleased
 
+- `text_area(..).styles(styler)` styles the text as the user types: the styler gets one paragraph
+  and the state the paragraph before handed on, and returns runs (`SpanStyle` with size, weight,
+  italic, monospace, colour token, the new `background: Option<TextFill>`, underline,
+  strikethrough) and a `ParagraphStyle` (line height, spacing before and after, first-line and
+  head indents, in ems). An edit restyles the paragraphs it touched and goes on only while that
+  state changes, so a keystroke in a 1M-character document styles one paragraph. AppKit sets the
+  attributes on the `NSTextStorage` outside the undo manager; the drawn editor shapes each
+  paragraph on its own and only near the viewport. A styler's `edit` may take Return, Tab,
+  Shift-Tab and Command-B/I. `.max_measure(points)` keeps the text in a centred column.
+- `markdown_editor(id, &state)` (and `Markdown` for `.styles`): live-preview markdown with the
+  syntax dimmed in place, headings H1 to H3 scaled, emphasis, strikethrough, code spans and
+  fences on a code well, quotes, lists and tasks (a ticked one dimmed and struck), links and
+  rules. Return continues a list, task or quote, lifts an empty nested item and clears an empty
+  top-level one, Tab and Shift-Tab nest list items, Command-B and Command-I wrap the selection.
+- A styled text area keeps Tab and Shift-Tab (`KeyRoles::takes_tab`); Control-Tab moves focus out
+  of it. Every text area now keeps Return, which used to press the window's default button.
+- The drawn text area takes the app's `.text_size()`, and has undo and redo (Command-Z,
+  Shift-Command-Z, Control-Y off macOS), typing within 700 ms folded into one step. AppKit's
+  text area takes `.text_size()` too. `TextFieldState::with_text` starts a state with text.
+
 - `WindowKind::Popup` opens a flyout for a tray or menu-bar icon: above other windows, without a
   title row, window controls or taskbar entry, at a fixed size, placed with `origin`. On Windows
   it is a rounded Acrylic tool window; on macOS a floating window with its buttons hidden.

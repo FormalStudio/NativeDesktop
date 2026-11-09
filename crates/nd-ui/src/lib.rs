@@ -15,6 +15,7 @@ mod layout;
 pub mod overlay;
 mod rich_text;
 pub mod semantics;
+pub mod styled_text;
 pub mod surface;
 #[cfg(feature = "test-support")]
 pub mod test_app;
@@ -53,6 +54,7 @@ pub use overlay::{
     tooltip,
 };
 pub use rich_text::{LinkClicked, RichText, Span, SpanStyle, TextColor, span};
+pub use styled_text::{EditKey, ParagraphStyle, StyledParagraph, Styler, TextEdit, TextFill, TextStyler};
 pub use surface::{InputCounts, SurfaceProps, SurfaceSource, native_surface};
 pub use window::{ForeignParent, Titlebar, TitlebarInsets, Window, WindowHandle, WindowKind, WindowOptions};
 

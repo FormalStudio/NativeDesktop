@@ -27,6 +27,7 @@ title = "Guides"
 pages = [
   "guides/virtualization",
   "guides/overlays",
+  "guides/styled-text",
   "guides/gestures",
   "guides/motion",
   "guides/windows-and-tabs",
