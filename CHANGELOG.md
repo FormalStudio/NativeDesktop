@@ -20,7 +20,13 @@ and the one it moves to.
 - `scaffold().content_min_width(points)` keeps the content at least that wide beside the
   sidebar: on macOS the window stops narrowing there while the sidebar shows, and opening the
   sidebar in a narrow window widens it.
-
+- On AppKit a control-click on an element's content raises the menu of the nearest element
+  around it that has one: the content's own press went to the gestures around it, so a
+  control-click on a card's text opened the card instead of its menu. A control-click on a link
+  in text no longer follows the link.
+- A context menu leaves out a submenu with nothing in it, and the separators that leaves doubled
+  or at an edge: AppKit drew its row with a chevron that opened nothing on hover, as a note's
+  Move To did with no folder to move to. A menu left with nothing opens nothing, on every backend.
 - `BoxShadow` is in the prelude, so an app can pass shadows of its own to `.shadow(vec![..])`
   instead of only the `shadow_sm()` to `shadow_2xl()` presets.
 - `nd::test` exports `DivProps`, so an app's tier 1 test can read a div's look from the

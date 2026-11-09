@@ -594,7 +594,22 @@ impl NdLayerView {
         self.ivars().gestures.borrow().clone()
     }
 
+    /// Asks the nearest view from this one outwards that has a menu for it. A right click
+    /// reaches that view through the responder chain, but a control-click is a left press,
+    /// which the gestures of the innermost view (a card's text) would take as a tap.
     fn request_menu(&self, event: &NSEvent) -> bool {
+        let mut cursor: Option<Retained<NSView>> = Some(Retained::into_super(self.retain()));
+        while let Some(v) = cursor {
+            if v.downcast_ref::<NdLayerView>().is_some_and(|layer| layer.raise_menu(event)) {
+                return true;
+            }
+            // SAFETY: main thread, a view in a live window; the superview is retained before use.
+            cursor = unsafe { v.superview() };
+        }
+        false
+    }
+
+    fn raise_menu(&self, event: &NSEvent) -> bool {
         let menu = self.ivars().menu.borrow();
         let Some((emit, wake)) = menu.as_ref() else { return false };
         let at = self.convertPoint_fromView(event.locationInWindow(), None);
@@ -937,7 +952,9 @@ define_class!(
 
         #[unsafe(method(mouseDown:))]
         fn mouse_down(&self, event: &NSEvent) {
-            if !self.click_link(event) {
+            // A control-click goes on to the views around, which raise their menu.
+            let control = event.modifierFlags().contains(NSEventModifierFlags::Control);
+            if control || !self.click_link(event) {
                 let _: () = unsafe { msg_send![super(self), mouseDown: event] };
             }
         }

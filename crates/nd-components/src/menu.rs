@@ -201,6 +201,33 @@ impl ContextMenu {
     }
 }
 
+/// `items` without the submenus that hold nothing, and without the separators that leaves
+/// leading, trailing or doubled. AppKit shows an empty submenu's row with its chevron and opens
+/// nothing on hover, as a note's Move To does with no folder to move to.
+pub(crate) fn prune(items: Vec<MenuItem>) -> Vec<MenuItem> {
+    let mut out: Vec<MenuItem> = Vec::with_capacity(items.len());
+    for item in items {
+        let item = match item {
+            MenuItem::Submenu(mut sub) => {
+                sub.items = prune(sub.items);
+                if sub.items.is_empty() {
+                    continue;
+                }
+                MenuItem::Submenu(sub)
+            }
+            other => other,
+        };
+        if matches!(item, MenuItem::Separator) && out.last().is_none_or(|last| matches!(last, MenuItem::Separator)) {
+            continue;
+        }
+        out.push(item);
+    }
+    if matches!(out.last(), Some(MenuItem::Separator)) {
+        out.pop();
+    }
+    out
+}
+
 /// Reported by a backend when the user asks for a node's context menu (right click,
 /// control-click, the menu key). `x`/`y` are in the node's coordinates.
 #[derive(Clone, Copy, Debug, PartialEq)]

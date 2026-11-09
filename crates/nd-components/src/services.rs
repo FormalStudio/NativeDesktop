@@ -50,7 +50,12 @@ pub fn set_menus(cx: &mut App, menus: impl IntoIterator<Item = Menu>) {
     }
 }
 
-pub fn show_context_menu(cx: &mut App, window: WindowId, node: NodeId, x: f32, y: f32, menu: ContextMenu) {
+pub fn show_context_menu(cx: &mut App, window: WindowId, node: NodeId, x: f32, y: f32, mut menu: ContextMenu) {
+    menu.items = crate::menu::prune(menu.items);
+    // A row with nothing to offer opens no menu, not an empty one.
+    if menu.items.is_empty() {
+        return;
+    }
     if let Some(s) = services(cx) {
         s.show_context_menu(cx, window, node, x, y, menu);
     }
