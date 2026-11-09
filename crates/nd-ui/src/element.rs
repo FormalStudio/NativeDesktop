@@ -273,6 +273,9 @@ pub struct DivProps {
     /// Refines the style while the pointer is over the nearest ancestor `group` of this name,
     /// animated (see [`Div::group_hover`]).
     pub group_hover: Option<(SharedString, StyleRefinement)>,
+    /// The pose it takes while a press on it is held, animated (see [`Div::active`]).
+    /// Backends report presses as [`PressChanged`].
+    pub active: Option<Pose>,
     /// A shared element: it travels from another element's frame when it mounts, and back to
     /// it while `away` (see [`Div::hero_from`]).
     pub hero: Option<HeroFrom>,
@@ -307,6 +310,13 @@ pub struct Resized {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HoverChanged {
     pub hovered: bool,
+}
+
+/// A press on a node with an `.active` pose began (`pressed`) or ended: the button came up, or
+/// the press turned into a drag.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PressChanged {
+    pub pressed: bool,
 }
 
 /// Type-erased props a layer above `nd-ui` hangs on a `div`, compared by value.
@@ -349,6 +359,7 @@ pub struct Div {
     tracks_hover: bool,
     group: Option<SharedString>,
     group_hover: Option<(SharedString, StyleRefinement)>,
+    active: Option<Pose>,
     hero: Option<HeroFrom>,
     reports_size: bool,
     motion: Option<MotionSpec>,
@@ -401,6 +412,7 @@ impl Div {
             tracks_hover: false,
             group: None,
             group_hover: None,
+            active: None,
             hero: None,
             reports_size: false,
             motion: None,
@@ -494,6 +506,18 @@ impl Div {
         f: impl FnOnce(StyleRefinement) -> StyleRefinement,
     ) -> Self {
         self.group_hover = Some((name.into(), f(StyleRefinement::default())));
+        if self.motion.is_none() {
+            self.motion = Some(MotionSpec::new(Animation::fast()));
+        }
+        self
+    }
+
+    /// Takes the pose `f` returns while a press on the element is held, and goes back when the
+    /// button comes up or the press turns into a drag, easing with the platform's fast timing
+    /// (or `.animate`'s animation): `.active(|p| p.scale(0.98))` dips a card as it is clicked.
+    /// The pose's opacity, offset and scale replace the element's own.
+    pub fn active(mut self, f: impl FnOnce(Pose) -> Pose) -> Self {
+        self.active = Some(f(Pose::default()));
         if self.motion.is_none() {
             self.motion = Some(MotionSpec::new(Animation::fast()));
         }
@@ -774,6 +798,7 @@ impl IntoElement for Div {
                 tracks_hover: self.tracks_hover,
                 group: self.group,
                 group_hover: self.group_hover,
+                active: self.active,
                 hero: self.hero,
                 reports_size: self.reports_size,
                 inert: false,

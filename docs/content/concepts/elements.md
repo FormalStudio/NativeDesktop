@@ -33,6 +33,10 @@ Elements take GPUI's `Styled` methods: `size_full()`, `gap_2()`, `px_3()`, `item
 method writes one field of the element's style. Text has a few methods of its own, such as
 `tabular_nums()` for digits that don't shift as a count changes.
 
+Corners take a radius each (`rounded_tl(..)`, `rounded_br(..)`), and `shadow_sm()` and its
+larger steps cast a drop shadow on both backends. On AppKit a view casts one shadow, the outer one
+with the widest blur, and it follows the corners even when the view clips its content.
+
 Take colors, spacing, and type sizes from `cx.theme()`: `theme.text.secondary`,
 `theme.spacing.content_margin`, `theme.type_scale.title`. A literal color fails `nd check`. The
 tokens follow the platform's light and dark appearance and a matugen palette. For the full list,

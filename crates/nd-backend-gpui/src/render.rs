@@ -230,6 +230,9 @@ thread_local! {
     static INERT_MASK: Cell<Option<ContentMask<Pixels>>> = const { Cell::new(None) };
 }
 
+/// How far a press may move, in pixels, before it is a drag and its `.active` pose lets go.
+const PRESS_SLOP: f32 = 4.;
+
 /// A subtree on its way out (`DivProps::inert`): drawn, but nothing in it is hit, hovered or
 /// shows a cursor or tooltip. A hitbox is clipped to the content mask in effect where it is
 /// inserted, which is at prepaint, so the subtree prepaints under an empty mask and paints under
@@ -994,6 +997,9 @@ impl<'a> Build<'a> {
                     cx.stop_propagation();
                 });
             }
+            if props.active.is_some() {
+                d = self.reports_presses(d, id);
+            }
             if props.tracks_hover {
                 let emit = self.backend.state.borrow().events.emitter(id);
                 let wake = self.wake.clone();
@@ -1027,6 +1033,37 @@ impl<'a> Build<'a> {
 
     /// Reports the div's laid-out size (`nd_ui::Resized`) when it changes, from a canvas filling
     /// it: GPUI lays the div out, so its size is known only at prepaint.
+    /// `d` reporting presses on node `id` (`.active`): one going down, and its end when the
+    /// button comes up anywhere or the pointer moves far enough to start a drag.
+    fn reports_presses(&self, d: gpui::Div, id: NodeId) -> gpui::Div {
+        let emit = self.backend.state.borrow().events.emitter(id);
+        let (wake, presses) = (self.wake.clone(), self.backend.presses.clone());
+        let press = move |at: Option<gpui::Point<gpui::Pixels>>, cx: &mut App| {
+            let was = match at {
+                Some(at) => presses.borrow_mut().insert(id, at).is_some(),
+                None => presses.borrow_mut().remove(&id).is_some(),
+            };
+            if was != at.is_some() {
+                emit.emit(nd_ui::PressChanged { pressed: at.is_some() });
+                wake(cx);
+            }
+        };
+        let (down, up, up_out, moved) = (press.clone(), press.clone(), press.clone(), press);
+        let held = self.backend.presses.clone();
+        d.on_mouse_down(MouseButton::Left, move |event: &MouseDownEvent, _, cx| down(Some(event.position), cx))
+            .on_mouse_up(MouseButton::Left, move |_, _, cx| up(None, cx))
+            .on_mouse_up_out(MouseButton::Left, move |_, _, cx| up_out(None, cx))
+            .on_mouse_move(move |event: &gpui::MouseMoveEvent, _, cx| {
+                let from = held.borrow().get(&id).copied();
+                if let Some(from) = from {
+                    let (dx, dy) = ((event.position.x - from.x).as_f32(), (event.position.y - from.y).as_f32());
+                    if event.pressed_button != Some(MouseButton::Left) || dx.hypot(dy) > PRESS_SLOP {
+                        moved(None, cx);
+                    }
+                }
+            })
+    }
+
     fn size_reporter(&self, id: NodeId) -> AnyElement {
         let emit = self.backend.state.borrow().events.emitter(id);
         let (wake, reported) = (self.wake.clone(), self.backend.reported_sizes.clone());

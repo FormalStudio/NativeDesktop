@@ -721,6 +721,63 @@ mod motion {
         assert!(leaving[2] > 200 && leaving[0] < 100, "the leaving row is drawn unlit: {leaving:?}");
     }
 
+    /// A blue card that fades out while a press on it is held.
+    struct Card;
+
+    impl Render for Card {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            div().size_full().p(px(10.)).bg(rgb(0xffffff)).child(
+                div()
+                    .id("card")
+                    .size(px(100.))
+                    .bg(rgb(0x3366ff))
+                    .active(|p| p.opacity(0.))
+                    .animate(Animation::linear(Duration::from_millis(1))),
+            )
+        }
+    }
+
+    fn press(cx: &mut HeadlessAppContext, host: &GpuiHost, window: WindowId, phase: PointerPhase, at: nd_ui::Point) {
+        cx.update(|cx| {
+            host.update(cx, |app| {
+                let input = SyntheticInput::Pointer { phase, at, button: MouseButton::Left, click_count: 1 };
+                app.synthesize(window, &input).expect("posted");
+            })
+        });
+        for _ in 0..3 {
+            settle(cx, host);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        settle(cx, host);
+    }
+
+    /// GPUI reports a press on an `.active` div down and up, so its pose shows while it is held.
+    pub fn an_active_pose_shows_while_a_press_is_held() {
+        if nd_gpui::gpui_platform::current_headless_renderer().ok().flatten().is_none() {
+            println!("skipped: GPUI has no headless renderer on this OS");
+            return;
+        }
+        let mut cx = headless();
+        let mut opened = None;
+        let host = cx.update(|cx| {
+            GpuiHost::builder().quit_when_empty(false).start(cx, |app| {
+                let options = WindowOptions::main("card").size(size(px(320.), px(240.)));
+                let handle = app.open_window(options, |_, cx| cx.new(|_| Card));
+                opened = Some(handle.id());
+            })
+        });
+        let window = opened.expect("window");
+        settle(&mut cx, &host);
+        let at = nd_ui::Point { x: 60., y: 60. };
+        assert!(pixel(&host, window, at)[2] > 200, "the card at rest");
+        press(&mut cx, &host, window, PointerPhase::Down, at);
+        let held = pixel(&host, window, at);
+        assert!(held[0] > 200 && held[1] > 200, "faded out while held: {held:?}");
+        press(&mut cx, &host, window, PointerPhase::Up, at);
+        let up = pixel(&host, window, at);
+        assert!(up[2] > 200 && up[0] < 100, "back when the button comes up: {up:?}");
+    }
+
     const SLOW: Duration = Duration::from_secs(20);
 
     /// A box that glides when a row is put above it.
@@ -870,6 +927,7 @@ fn main() {
             gate_m4::a_wheel_with_the_secondary_key_zooms_instead_of_scrolling,
         ),
         ("motion::a_leaving_element_takes_no_pointer", motion::a_leaving_element_takes_no_pointer),
+        ("motion::an_active_pose_shows_while_a_press_is_held", motion::an_active_pose_shows_while_a_press_is_held),
         (
             "motion::a_layout_glide_starts_from_the_old_place_in_its_first_frame",
             motion::a_layout_glide_starts_from_the_old_place_in_its_first_frame,

@@ -115,6 +115,34 @@ pub(crate) struct ViewLook {
     pub hero: bool,
     /// On its way out (`exit_to`): drawn, but no click lands in it and accessibility skips it.
     pub inert: bool,
+    pub shadow: Option<Shadow>,
+}
+
+/// The one drop shadow Core Animation casts for a view: of a style's `box_shadow` list, the
+/// outer one with the widest blur.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct Shadow {
+    pub color: Color,
+    pub offset: (f32, f32),
+    pub blur: f32,
+    pub spread: f32,
+}
+
+impl Shadow {
+    fn of(style: &StyleRefinement) -> Option<Self> {
+        let shadow = style
+            .box_shadow
+            .as_ref()?
+            .iter()
+            .filter(|s| !s.inset && s.color.a > 0.)
+            .max_by(|a, b| a.blur_radius.as_f32().total_cmp(&b.blur_radius.as_f32()))?;
+        Some(Self {
+            color: shadow.color.into(),
+            offset: (shadow.offset.x.as_f32(), shadow.offset.y.as_f32()),
+            blur: shadow.blur_radius.as_f32(),
+            spread: shadow.spread_radius.as_f32(),
+        })
+    }
 }
 
 impl Default for ViewLook {
@@ -130,6 +158,7 @@ impl Default for ViewLook {
             hover: None,
             hero: false,
             inert: false,
+            shadow: None,
         }
     }
 }
@@ -154,6 +183,7 @@ impl ViewLook {
             hover: None,
             hero: false,
             inert: false,
+            shadow: Shadow::of(style),
         }
     }
 

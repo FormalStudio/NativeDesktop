@@ -249,6 +249,44 @@ fn a_themed_animation_follows_the_apps_motion_tokens() {
     assert!((at - 0.25).abs() < 0.03, "a quarter of 400 ms, linear: {at}");
 }
 
+struct Pressable;
+
+impl Render for Pressable {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div().child(div().id("card").size(px(100.)).active(|p| p.scale(0.9)))
+    }
+}
+
+fn press(cx: &mut TestApp, node: NodeId, pressed: bool) {
+    cx.events().emitter(node).emit(PressChanged { pressed });
+    cx.drain_events();
+    cx.frame();
+}
+
+#[test]
+fn an_active_pose_dips_while_a_press_is_held_and_comes_back_on_release() {
+    let mut cx = TestApp::new();
+    cx.open_window(WINDOW, |_, cx| cx.new(|_| Pressable));
+    let card = node(&cx, "card");
+    assert_eq!(props(&cx, card).active, Some(Pose::default().scale(0.9)), "the backend knows to report presses");
+    assert_eq!(props(&cx, card).transform.scale, 1.);
+
+    press(&mut cx, card, true);
+    let fast = cx.motion().fast.as_secs_f64();
+    step(&mut cx, fast / 2.);
+    let mid = props(&cx, card).transform.scale;
+    assert!(mid < 0.99 && mid > 0.91, "dipping on the platform timing: {mid}");
+    step(&mut cx, fast);
+    assert_eq!(props(&cx, card).transform.scale, 0.9);
+    assert!(!cx.needs_frame(), "held still while pressed");
+
+    press(&mut cx, card, false);
+    step(&mut cx, fast / 2.);
+    assert!(props(&cx, card).transform.scale < 1.);
+    step(&mut cx, fast);
+    assert_eq!(props(&cx, card).transform.scale, 1., "back on release");
+}
+
 struct Presented {
     open: bool,
     away: bool,

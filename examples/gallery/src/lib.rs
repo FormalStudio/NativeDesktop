@@ -422,9 +422,8 @@ impl Render for Gallery {
                             move |id, menu, _, cx| {
                                 let _ = this.update(cx, |g, _| g.menu_row = Some(id.clone()));
                                 match id.strip_prefix("folder:") {
-                                    Some(name) => {
-                                        menu.item_destructive(format!("Remove \u{201c}{name}\u{201d}"), RemoveMenuFolder)
-                                    }
+                                    Some(name) => menu
+                                        .item_destructive(format!("Remove \u{201c}{name}\u{201d}"), RemoveMenuFolder),
                                     None => menu.item("Show Page", ShowMenuPage),
                                 }
                             }

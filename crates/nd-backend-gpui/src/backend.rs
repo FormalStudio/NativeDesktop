@@ -112,6 +112,8 @@ pub struct GpuiBackend {
     pub(crate) form_drawn: Rc<RefCell<HashMap<NodeId, crate::forms::Drawn>>>,
     /// The size each `.on_resize()` div last reported.
     pub(crate) reported_sizes: Rc<RefCell<HashMap<NodeId, (f32, f32)>>>,
+    /// Where each press held on an `.active` div went down, in the window.
+    pub(crate) presses: Rc<RefCell<HashMap<NodeId, gpui::Point<gpui::Pixels>>>>,
     /// nd focus moves the drawn controls have yet to follow, by window. The window's next draw
     /// gives the target GPUI focus, or blurs when nd focus left the drawn controls.
     pub(crate) focus_requests: Rc<RefCell<HashMap<WindowId, Option<NodeId>>>>,
@@ -208,6 +210,7 @@ impl GpuiBackend {
             laid: Rc::default(),
             form_drawn: Rc::default(),
             reported_sizes: Rc::default(),
+            presses: Rc::default(),
             focus_requests: Rc::default(),
             platform_focus: Rc::default(),
             invoker: Rc::default(),
@@ -671,6 +674,7 @@ impl Backend for GpuiBackend {
             crate::media::video_released(&drawn.state);
         }
         self.reported_sizes.borrow_mut().remove(&node);
+        self.presses.borrow_mut().remove(&node);
         self.reveals.borrow_mut().remove(&node);
         self.splits.borrow_mut().remove(&node);
         self.pane_slides.borrow_mut().remove(&node);

@@ -5,6 +5,11 @@ and the one it moves to.
 
 ## Unreleased
 
+- `.active(|p| p.scale(0.97))` gives a `div` a pose to take while a press on it is held, eased on
+  the fast timing, and dropped when the button comes up or the press becomes a drag. Backends
+  report presses as `PressChanged`, and `DivProps` gained `active`. AppKit casts `box_shadow`:
+  the outer shadow with the widest blur, along the view's corners, from a layer under the view
+  when the view clips. The gallery's cards cast a shadow and dip when pressed.
 - A `source_tree` or `source_list` on AppKit raises its rows' menus: a right click or a
   control-click on a row asks for that row's `.context_menu`, leaving the selection as it is, as
   Finder's sidebar does, and a middle click reports `SourceMiddleClicked`. A context menu with no

@@ -24,6 +24,9 @@ use crate::look::{Color, TextLook, ViewLook};
 
 pub(crate) type LayoutHook = Rc<dyn Fn(Size)>;
 
+/// How far a press may move, in points, before it is a drag and its `.active` pose lets go.
+const PRESS_SLOP: f64 = 4.;
+
 #[derive(Default)]
 pub struct RootIvars {
     on_layout: RefCell<Option<LayoutHook>>,
@@ -165,12 +168,20 @@ pub struct LayerIvars {
     hover_emit: RefCell<Option<(nd_ui::events::Emit, crate::events::Wake)>>,
     /// The pointer is over the view, which paints its hover look then.
     hovered: Cell<bool>,
+    /// Presses are reported here (`.active`).
+    press_emit: RefCell<Option<(nd_ui::events::Emit, crate::events::Wake)>>,
+    /// Where a held press went down, in the window, until it comes up or turns into a drag.
+    press_at: Cell<Option<NSPoint>>,
     tracking: RefCell<Option<Retained<objc2_app_kit::NSTrackingArea>>>,
     /// Where a hero in flight lives in the tree while it is drawn on the window's frame view.
     lifted: RefCell<Option<Home>>,
     /// The border of a shape Core Animation cannot round (corners of different radii), drawn
     /// along the mask that cuts the layer to it.
     outline: RefCell<Option<Retained<objc2_quartz_core::CAShapeLayer>>>,
+    /// Casts the shadow of a view whose layer clips (`overflow_hidden()` or a corner mask), which
+    /// would cut its own shadow away: a layer under it in the superview's layer, holding its
+    /// frame, transform and opacity.
+    caster: RefCell<Option<Retained<objc2_quartz_core::CALayer>>>,
 }
 
 /// A lifted hero's place in the tree: its parent, and the sibling above it.
@@ -193,9 +204,12 @@ impl Default for LayerIvars {
             stage: Cell::new(0),
             hover_emit: RefCell::new(None),
             hovered: Cell::new(false),
+            press_emit: RefCell::new(None),
+            press_at: Cell::new(None),
             tracking: RefCell::new(None),
             lifted: RefCell::new(None),
             outline: RefCell::new(None),
+            caster: RefCell::new(None),
         }
     }
 }
@@ -253,6 +267,7 @@ define_class!(
                 }
                 return;
             }
+            self.press(Some(event.locationInWindow()));
             if crate::gestures::mouse(self, event, PointerPhase::Down) {
                 return;
             }
@@ -261,6 +276,12 @@ define_class!(
 
         #[unsafe(method(mouseDragged:))]
         fn mouse_dragged(&self, event: &NSEvent) {
+            if let Some(at) = self.ivars().press_at.get() {
+                let to = event.locationInWindow();
+                if (to.x - at.x).hypot(to.y - at.y) > PRESS_SLOP {
+                    self.press(None);
+                }
+            }
             if !crate::gestures::mouse(self, event, PointerPhase::Move) {
                 let _: () = unsafe { msg_send![super(self), mouseDragged: event] };
             }
@@ -268,6 +289,7 @@ define_class!(
 
         #[unsafe(method(mouseUp:))]
         fn mouse_up(&self, event: &NSEvent) {
+            self.press(None);
             if !crate::gestures::mouse(self, event, PointerPhase::Up) {
                 let _: () = unsafe { msg_send![super(self), mouseUp: event] };
             }
@@ -369,6 +391,12 @@ define_class!(
             let _: () = unsafe { msg_send![super(self), updateTrackingAreas] };
         }
 
+        #[unsafe(method(viewDidMoveToSuperview))]
+        fn view_did_move_to_superview(&self) {
+            let _: () = unsafe { msg_send![super(self), viewDidMoveToSuperview] };
+            self.place_caster();
+        }
+
         #[unsafe(method(mouseEntered:))]
         fn mouse_entered(&self, _event: &NSEvent) {
             self.set_hovered(true);
@@ -387,11 +415,13 @@ define_class!(
                 _ => frame,
             };
             let _: () = unsafe { msg_send![super(self), setFrame: frame] };
+            self.place_caster();
         }
 
         #[unsafe(method(setFrameSize:))]
         fn set_frame_size(&self, size: NSSize) {
             let _: () = unsafe { msg_send![super(self), setFrameSize: size] };
+            self.place_caster();
             if !self.ivars().props.borrow().transform.is_identity() {
                 self.apply_transform();
             }
@@ -419,9 +449,27 @@ define_class!(
             let radius = radii.iter().copied().fold(0., f64::max);
             layer.setMasksToBounds(props.clips);
             let border = props.border.map(|(width, color)| (f64::from(width), color.ns_color().CGColor()));
+            let masked = !radii.iter().all(|r| *r == 0. || *r == radius);
+            let shadow = props.shadow.map(|shadow| {
+                let spread = f64::from(shadow.spread);
+                let path = objc2_core_graphics::CGMutablePath::new();
+                let rect = NSRect::new(
+                    NSPoint::new(-spread, -spread),
+                    NSSize::new(size.width + 2. * spread, size.height + 2. * spread),
+                );
+                crate::media::chat::rounded(&path, rect, radii.map(|r| if r > 0. { r + spread } else { r }));
+                (shadow, path)
+            });
+            if props.clips || masked {
+                shade(&layer, None);
+                self.cast(shadow, size);
+            } else {
+                shade(&layer, shadow.as_ref());
+                self.cast(None, size);
+            }
             // Core Animation rounds the corners it is told to by one radius; any other shape is a
             // mask, which cuts what is inside it too.
-            if radii.iter().all(|r| *r == 0. || *r == radius) {
+            if !masked {
                 layer.setCornerRadius(radius);
                 layer.setMaskedCorners(corner_mask(radii));
                 // SAFETY: clearing the mask; no other layer uses it.
@@ -450,6 +498,25 @@ define_class!(
         }
     }
 );
+
+/// Casts `shadow` (its look and the shape it falls from) from `layer`, or none.
+fn shade(
+    layer: &objc2_quartz_core::CALayer,
+    shadow: Option<&(crate::look::Shadow, objc2_core_foundation::CFRetained<objc2_core_graphics::CGMutablePath>)>,
+) {
+    let Some((shadow, path)) = shadow else {
+        layer.setShadowOpacity(0.);
+        layer.setShadowPath(None);
+        return;
+    };
+    layer.setShadowColor(Some(&shadow.color.ns_color().CGColor()));
+    layer.setShadowOpacity(1.);
+    // A CSS blur radius is twice the standard deviation of its blur; Core Animation's radius is
+    // about the deviation.
+    layer.setShadowRadius(f64::from(shadow.blur) / 2.);
+    layer.setShadowOffset(NSSize::new(f64::from(shadow.offset.0), f64::from(shadow.offset.1)));
+    layer.setShadowPath(Some(path));
+}
 
 /// The corners with a radius, all four when none has one (so a later radius rounds them all).
 fn corner_mask(radii: [f64; 4]) -> objc2_quartz_core::CACornerMask {
@@ -548,6 +615,7 @@ impl NdLayerView {
             self.lift(props.hero && !props.transform.is_identity());
             self.apply_transform();
         }
+        self.place_caster();
         if had_hover != self.tracks_hover() {
             self.updateTrackingAreas();
         }
@@ -561,6 +629,25 @@ impl NdLayerView {
         if had != self.tracks_hover() {
             self.updateTrackingAreas();
         }
+    }
+
+    /// Reports presses through `emit` (`.active`); `None` stops.
+    pub(crate) fn set_press_target(&self, target: Option<(nd_ui::events::Emit, crate::events::Wake)>) {
+        if target.is_none() {
+            self.press(None);
+        }
+        *self.ivars().press_emit.borrow_mut() = target;
+    }
+
+    /// A press went down at `at` (in the window), or the one held ended.
+    fn press(&self, at: Option<NSPoint>) {
+        let ivars = self.ivars();
+        let Some((emit, wake)) = ivars.press_emit.borrow().clone() else { return };
+        if ivars.press_at.replace(at).is_some() == at.is_some() {
+            return;
+        }
+        emit.emit(nd_ui::PressChanged { pressed: at.is_some() });
+        wake.wake();
     }
 
     /// The part of the view on screen, where the pointer hovers it.
@@ -596,6 +683,7 @@ impl NdLayerView {
         }
         if self.ivars().props.borrow().hover.is_some() {
             self.setAlphaValue(self.current_look().opacity.into());
+            self.place_caster();
             self.setNeedsDisplay(true);
         }
         if let Some((emit, wake)) = self.ivars().hover_emit.borrow().as_ref() {
@@ -670,7 +758,8 @@ impl NdLayerView {
             }
             return;
         };
-        let outline = self.ivars().outline.borrow_mut().get_or_insert_with(objc2_quartz_core::CAShapeLayer::new).clone();
+        let outline =
+            self.ivars().outline.borrow_mut().get_or_insert_with(objc2_quartz_core::CAShapeLayer::new).clone();
         // The stroke is centred on its path: inset by half the width, it lies inside the mask.
         let half = width / 2.;
         let inner = NSRect::new(
@@ -695,6 +784,70 @@ impl NdLayerView {
         let Some(layer) = self.layer() else { return };
         let (s, tx, ty) = self.affine();
         layer.setAffineTransform(objc2_core_foundation::CGAffineTransform { a: s, b: 0., c: 0., d: s, tx, ty });
+        self.place_caster();
+    }
+
+    /// Casts `shadow` from the caster under the view, of a view `size` big; `None` takes the
+    /// caster away. The caster is cut out where the view is, so nothing of it shows through a
+    /// translucent view, and a caster AppKit reorders above its view still only shades around it.
+    fn cast(
+        &self,
+        shadow: Option<(crate::look::Shadow, objc2_core_foundation::CFRetained<objc2_core_graphics::CGMutablePath>)>,
+        size: NSSize,
+    ) {
+        let Some(shadow) = shadow else {
+            if let Some(caster) = self.ivars().caster.borrow_mut().take() {
+                caster.removeFromSuperlayer();
+            }
+            return;
+        };
+        let caster = self.ivars().caster.borrow_mut().get_or_insert_with(objc2_quartz_core::CALayer::new).clone();
+        shade(&caster, Some(&shadow));
+        let look = shadow.0;
+        let reach = f64::from(look.blur + look.spread.abs() + look.offset.0.abs().max(look.offset.1.abs())) * 2.;
+        let cut = objc2_core_graphics::CGMutablePath::new();
+        let around =
+            NSRect::new(NSPoint::new(-reach, -reach), NSSize::new(size.width + 2. * reach, size.height + 2. * reach));
+        // SAFETY: a null transform adds the rect as given.
+        unsafe { objc2_core_graphics::CGMutablePath::add_rect(Some(&cut), std::ptr::null(), around) };
+        crate::media::chat::rounded(&cut, NSRect::new(NSPoint::ZERO, size), self.shown_radii(size));
+        let mask = objc2_quartz_core::CAShapeLayer::new();
+        mask.setPath(Some(&cut));
+        // SAFETY: a constant Core Animation exports.
+        mask.setFillRule(unsafe { objc2_quartz_core::kCAFillRuleEvenOdd });
+        // SAFETY: the mask is a fresh layer used by no other layer.
+        unsafe { caster.setMask(Some(&mask)) };
+        self.place_caster();
+    }
+
+    /// The corner radii the view is drawn with at `size`.
+    fn shown_radii(&self, size: NSSize) -> [f64; 4] {
+        let scale = self.ivars().radius_scale.get();
+        self.current_look().corner_radii.map(|r| f64::from(r * scale).min(size.width.min(size.height) / 2.).max(0.))
+    }
+
+    /// Puts the caster under the view, on its frame, transform and opacity, in one step with
+    /// animation off: Core Animation would otherwise ease every change behind the view.
+    fn place_caster(&self) {
+        let Some(caster) = self.ivars().caster.borrow().clone() else { return };
+        let (Some(layer), Some(parent)) = (self.layer(), unsafe { self.superview() }.and_then(|s| s.layer())) else {
+            caster.removeFromSuperlayer();
+            return;
+        };
+        objc2_quartz_core::CATransaction::begin();
+        objc2_quartz_core::CATransaction::setDisableActions(true);
+        caster.setBounds(layer.bounds());
+        caster.setAnchorPoint(layer.anchorPoint());
+        caster.setPosition(layer.position());
+        caster.setAffineTransform(layer.affineTransform());
+        caster.setOpacity(layer.opacity());
+        caster.setHidden(layer.isHidden());
+        caster.setGeometryFlipped(layer.isGeometryFlipped());
+        if caster.superlayer().is_none_or(|s| !std::ptr::eq(&*s, &*parent)) {
+            caster.removeFromSuperlayer();
+            parent.insertSublayer_below(&caster, Some(&layer));
+        }
+        objc2_quartz_core::CATransaction::commit();
     }
 
     /// The scale and translation of the layer's transform, in the superview's space.

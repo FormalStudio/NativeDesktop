@@ -1,5 +1,6 @@
-//! The tiles page: cards in a tile grid that open on a click and reorder by dragging, each
-//! title cut to one line and each summary to two, and boxes with corners of different radii.
+//! The tiles page: cards in a tile grid that dip while pressed, open on a click and reorder by
+//! dragging, each title cut to one line and each summary to two, and boxes with corners of
+//! different radii.
 
 use nd::prelude::*;
 
@@ -32,24 +33,27 @@ impl Render for TilesPage {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
         let (raised, border, secondary) = (theme.surface.raised, theme.border.subtle, theme.text.secondary);
-        let tiles = self.order.iter().filter_map(|id| CARDS.iter().find(|c| c.0 == *id)).map(|&(id, title, summary)| {
-            let card = v_flex()
-                .id(format!("card-{id}"))
-                .size_full()
-                .p_3()
-                .gap_1()
-                .rounded_lg()
-                .bg(raised)
-                .border_1()
-                .border_color(border)
-                .child(text(title).font_weight(FontWeight::SEMIBOLD).truncate())
-                .child(text(summary).text_color(secondary).line_clamp(2).text_ellipsis())
-                .on_tap(cx.listener(move |this, _: &TapEvent, _, cx| {
-                    this.last = format!("Opened {title}").into();
-                    cx.notify();
-                }));
-            tile(id, card)
-        });
+        let tiles =
+            self.order.iter().filter_map(|id| CARDS.iter().find(|c| c.0 == *id)).map(|&(id, title, summary)| {
+                let card = v_flex()
+                    .id(format!("card-{id}"))
+                    .size_full()
+                    .p_3()
+                    .gap_1()
+                    .rounded_lg()
+                    .bg(raised)
+                    .border_1()
+                    .border_color(border)
+                    .shadow_sm()
+                    .active(|p| p.scale(0.97))
+                    .child(text(title).font_weight(FontWeight::SEMIBOLD).truncate())
+                    .child(text(summary).text_color(secondary).line_clamp(2).text_ellipsis())
+                    .on_tap(cx.listener(move |this, _: &TapEvent, _, cx| {
+                        this.last = format!("Opened {title}").into();
+                        cx.notify();
+                    }));
+                tile(id, card)
+            });
         let shape = |id: &str| div().id(id.to_owned()).size(px(72.)).bg(theme.accent).border_2().border_color(border);
         v_flex()
             .gap_4()
@@ -81,7 +85,8 @@ impl Render for TilesPage {
                             .rounded_tl(px(4.))
                             .rounded_tr(px(16.))
                             .rounded_br(px(32.))
-                            .rounded_bl(px(8.)),
+                            .rounded_bl(px(8.))
+                            .shadow_md(),
                     ),
             )
     }

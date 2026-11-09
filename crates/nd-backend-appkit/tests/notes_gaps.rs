@@ -1,7 +1,8 @@
 //! Tier 2: what a notes app of cards needed on AppKit. A click lands on what is drawn under it,
 //! offset and scaled elements and tile grid tiles included; text cut to one line ends in an
 //! ellipsis and clamped text keeps its lines; corners of different radii round each corner; a
-//! right click on a source tree row asks for that row's menu and leaves the selection alone.
+//! right click on a source tree row asks for that row's menu and leaves the selection alone; a
+//! card casts its shadow, clipped or not, and dips while a press on it is held.
 //! Prints `ND_NOTES_GAPS_OK`.
 
 mod harness;
@@ -39,6 +40,7 @@ mod gaps {
         cut_text(&rig, &mut c);
         corners(&rig, &mut c);
         row_menus(&rig, &mut c);
+        shadows_and_presses(&rig, &mut c);
         if c.0 == 0 {
             println!("ND_NOTES_GAPS_OK");
             std::process::exit(0);
@@ -125,7 +127,10 @@ mod gaps {
         rig.pump();
         let frame = |id: &str| rig.view(win, id).frame().size;
         let (short, one, two, all) = (frame("short"), frame("one"), frame("two"), frame("all"));
-        c.check(one.height == short.height, &format!("truncate: one line tall ({} against {})", one.height, short.height));
+        c.check(
+            one.height == short.height,
+            &format!("truncate: one line tall ({} against {})", one.height, short.height),
+        );
         c.check(one.width == 176., &format!("truncate: as wide as the column ({})", one.width));
         c.check(
             two.height > one.height * 1.5 && two.height < one.height * 2.5,
@@ -178,9 +183,8 @@ mod gaps {
         );
         let mixed = layer("mixed");
         // SAFETY: main thread; the array is read, not kept.
-        let outlined = unsafe { mixed.sublayers() }.is_some_and(|s| {
-            s.iter().any(|l| l.downcast_ref::<objc2_quartz_core::CAShapeLayer>().is_some())
-        });
+        let outlined = unsafe { mixed.sublayers() }
+            .is_some_and(|s| s.iter().any(|l| l.downcast_ref::<objc2_quartz_core::CAShapeLayer>().is_some()));
         c.check(
             mixed.cornerRadius() == 0. && mixed.mask().is_some() && mixed.borderWidth() == 0. && outlined,
             "corners: different radii cut a mask, and the border follows it",
@@ -235,12 +239,90 @@ mod gaps {
         let shown = outline.menuForEvent(&press(NSEventType::RightMouseDown, NSEventModifierFlags::empty()));
         rig.pump();
         c.check(shown.is_none(), "row menu: AppKit shows no menu of its own");
-        c.check(*asked.borrow() == ["trash"], &format!("row menu: a right click asks for the row's ({:?})", asked.borrow()));
+        c.check(
+            *asked.borrow() == ["trash"],
+            &format!("row menu: a right click asks for the row's ({:?})", asked.borrow()),
+        );
         c.check(outline.selectedRow() == 0, "row menu: the selection stays on its row");
         let _ = outline.menuForEvent(&press(NSEventType::LeftMouseDown, NSEventModifierFlags::Control));
         rig.pump();
         c.check(asked.borrow().len() == 2, "row menu: a control-click asks too");
         rig.close(opened);
+    }
+
+    struct Cards;
+
+    impl Render for Cards {
+        fn render(&mut self, _w: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            let card =
+                |id: &str| div().id(id.to_owned()).size(px(80.)).rounded(px(10.)).bg(hsla(0., 0., 1., 1.)).shadow_md();
+            h_flex()
+                .p(px(20.))
+                .gap(px(20.))
+                .child(card("plain").active(|p| p.scale(0.9)))
+                .child(card("clipped").overflow_hidden())
+        }
+    }
+
+    fn shadows_and_presses(rig: &Rig, c: &mut Checks) {
+        use nd_backend_appkit::objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType};
+        use nd_backend_appkit::objc2_foundation::NSProcessInfo;
+        let opened = rig.open("cards", |_| Cards);
+        let win = opened.id();
+        rig.pump();
+        let (plain, clipped) = (rig.view(win, "plain"), rig.view(win, "clipped"));
+        plain.displayIfNeeded();
+        clipped.displayIfNeeded();
+        let layer = plain.layer().expect("layer-backed");
+        c.check(
+            layer.shadowOpacity() > 0. && layer.shadowRadius() > 0. && layer.shadowPath().is_some(),
+            "shadow: a card casts its own",
+        );
+        let clipped_layer = clipped.layer().expect("layer-backed");
+        let parent = unsafe { clipped.superview() }.and_then(|s| s.layer()).expect("parent layer");
+        // SAFETY: main thread; the array is read, not kept.
+        let siblings: Vec<_> = unsafe { parent.sublayers() }.map(|s| s.to_vec()).unwrap_or_default();
+        let at = siblings.iter().position(|l| std::ptr::eq(&**l, &*clipped_layer));
+        let caster = at.and_then(|i| i.checked_sub(1)).map(|i| siblings[i].clone());
+        c.check(clipped_layer.shadowOpacity() == 0., "shadow: a clipped card's own layer casts none");
+        c.check(
+            caster.as_ref().is_some_and(|l| {
+                l.shadowOpacity() > 0. && l.mask().is_some() && l.frame().origin.x == clipped_layer.frame().origin.x
+            }),
+            "shadow: a layer under a clipped card casts it, cut out where the card is",
+        );
+
+        let at = plain.convertPoint_toView(NSPoint::new(40., 40.), None);
+        let event = |kind| {
+            NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
+                kind,
+                at,
+                NSEventModifierFlags::empty(),
+                NSProcessInfo::processInfo().systemUptime(),
+                opened.window.windowNumber(),
+                None,
+                0,
+                1,
+                1.,
+            )
+            .expect("mouse event")
+        };
+        let scale = || plain.layer().expect("layer").affineTransform().a;
+        plain.mouseDown(&event(NSEventType::LeftMouseDown));
+        settle(rig);
+        c.check((scale() - 0.9).abs() < 1e-3, &format!("press: the card dips while held ({})", scale()));
+        plain.mouseUp(&event(NSEventType::LeftMouseUp));
+        settle(rig);
+        c.check((scale() - 1.).abs() < 1e-3, &format!("press: and comes back on release ({})", scale()));
+        rig.close(opened);
+    }
+
+    /// Frames on a clock that moves a tenth of a second each, past any fast animation.
+    fn settle(rig: &Rig) {
+        for _ in 0..6 {
+            rig.app.borrow_mut().advance_clock(0.1);
+            rig.pump();
+        }
     }
 
     fn find<T: nd_backend_appkit::objc2::ClassType + nd_backend_appkit::objc2::DowncastTarget>(

@@ -110,9 +110,11 @@ fn present_div(props: &Props, layout: &StyleRefinement, values: &Values) -> (Pro
 }
 
 /// A div's props and layout as it shows now: its group hover style while a group lights it,
-/// and on its source's frame while a hero goes back.
+/// its active pose while a press on it is held, and on its source's frame while a hero goes
+/// back.
 fn shown(
     lit: &HashSet<NodeId>,
+    pressed: &HashSet<NodeId>,
     away: Option<&Values>,
     id: NodeId,
     props: &Props,
@@ -120,7 +122,8 @@ fn shown(
 ) -> (Props, StyleRefinement) {
     let Some(div) = props.downcast_ref::<DivProps>() else { return (props.clone(), layout.clone()) };
     let hover = div.group_hover.as_ref().filter(|_| lit.contains(&id)).map(|(_, s)| s);
-    if hover.is_none() && away.is_none() {
+    let active = div.active.filter(|_| pressed.contains(&id));
+    if hover.is_none() && active.is_none() && away.is_none() {
         return (props.clone(), layout.clone());
     }
     let mut div = div.clone();
@@ -128,6 +131,18 @@ fn shown(
     if let Some(style) = hover {
         div.style.refine(style);
         layout.refine(style);
+    }
+    if let Some(pose) = active {
+        if let Some(o) = pose.opacity {
+            div.style.opacity = Some(o);
+            layout.opacity = Some(o);
+        }
+        if let Some(offset) = pose.offset {
+            div.transform.offset = offset;
+        }
+        if let Some(scale) = pose.scale {
+            div.transform.scale = scale;
+        }
     }
     if let Some(values) = away {
         animation::present(&mut div.style, &mut div.transform, values);
@@ -252,6 +267,8 @@ pub(crate) struct Tree {
     /// `group_hover` style.
     hovered_groups: HashSet<NodeId>,
     lit: HashSet<NodeId>,
+    /// Nodes with an `.active` pose a press is held on.
+    pressed: HashSet<NodeId>,
     /// Heroes mounted this frame, hidden until their frame is known and they can start from
     /// their source's.
     heroes_pending: Vec<NodeId>,
@@ -427,6 +444,7 @@ impl Tree {
             pending_motion: None,
             hovered_groups: HashSet::new(),
             lit: HashSet::new(),
+            pressed: HashSet::new(),
             heroes_pending: Vec::new(),
             heroes_still_pending: Vec::new(),
             hero_waits: HashMap::new(),
@@ -556,7 +574,8 @@ impl Tree {
                 self.away_done.insert(id);
             }
         }
-        let (shown_props, shown_layout) = shown(&self.lit, self.hero_away.get(&id), id, &el.props, &el.layout);
+        let (shown_props, shown_layout) =
+            shown(&self.lit, &self.pressed, self.hero_away.get(&id), id, &el.props, &el.layout);
         let transform = shown_props.downcast_ref::<DivProps>().map_or_else(Transform::default, |d| d.transform);
         let targets = animation::values(&shown_layout, &transform);
         let laid_out = previous.as_ref().is_some_and(|p| p.flip.is_some() && p.laid_out);
@@ -606,6 +625,16 @@ impl Tree {
         self.relight(now, reduce);
     }
 
+    /// A press on `node` began or ended. One with an `.active` pose moves to it, or back.
+    pub(crate) fn press_changed(&mut self, node: NodeId, pressed: bool, now: f64, reduce: bool) {
+        let active =
+            self.nodes.get(&node).and_then(|n| n.props.downcast_ref::<DivProps>()).is_some_and(|d| d.active.is_some());
+        let changed = if pressed && active { self.pressed.insert(node) } else { self.pressed.remove(&node) };
+        if changed {
+            self.retarget_shown(node, now, reduce);
+        }
+    }
+
     /// Recomputes which nodes hovered groups light, and moves the ones that changed.
     fn relight(&mut self, now: f64, reduce: bool) {
         self.hovered_groups.retain(|g| self.nodes.contains_key(g));
@@ -643,7 +672,7 @@ impl Tree {
         let away = self.hero_away.get(&n).copied();
         let Some(node) = self.nodes.get_mut(&n) else { return };
         let Some(anim) = node.motion.as_mut() else { return };
-        let (props, layout) = shown(&self.lit, away.as_ref(), n, &anim.props, &anim.layout);
+        let (props, layout) = shown(&self.lit, &self.pressed, away.as_ref(), n, &anim.props, &anim.layout);
         let transform = props.downcast_ref::<DivProps>().map_or_else(Transform::default, |d| d.transform);
         let animation = anim.state.animation();
         anim.state.retarget(animation, animation::values(&layout, &transform), now, reduce);
@@ -768,7 +797,8 @@ impl Tree {
     fn present(&mut self, id: NodeId, now: f64) -> Option<Op> {
         let node = self.nodes.get_mut(&id)?;
         let anim = node.motion.as_ref()?;
-        let (shown_props, shown_layout) = shown(&self.lit, self.hero_away.get(&id), id, &anim.props, &anim.layout);
+        let (shown_props, shown_layout) =
+            shown(&self.lit, &self.pressed, self.hero_away.get(&id), id, &anim.props, &anim.layout);
         let (mut props, layout) = present_div(&shown_props, &shown_layout, &anim.state.sample(now));
         if self.away_done.contains(&id) {
             props = hidden(&props);
@@ -1184,6 +1214,7 @@ impl Tree {
                 self.overlays.retain(|o| *o != n);
                 self.animating.remove(&n);
                 self.lit.remove(&n);
+                self.pressed.remove(&n);
                 self.hovered_groups.remove(&n);
                 self.hero_away.remove(&n);
                 self.away_done.remove(&n);

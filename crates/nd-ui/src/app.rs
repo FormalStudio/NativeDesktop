@@ -882,6 +882,17 @@ impl App {
                     }
                 }
             }
+            if let Some(press) = any.downcast_ref::<crate::PressChanged>() {
+                let reduce = self.reduce_motion;
+                for slot in self.windows.values_mut() {
+                    if let (Some(tree), Some(window)) = (slot.tree.as_mut(), slot.window.as_ref())
+                        && tree.contains(event.node)
+                    {
+                        tree.press_changed(event.node, press.pressed, window.now(), reduce);
+                    }
+                }
+                continue;
+            }
             let type_id = any.type_id();
             let found = self.windows.iter().find_map(|(id, slot)| {
                 let tree = slot.tree.as_ref()?;

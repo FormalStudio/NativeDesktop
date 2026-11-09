@@ -1162,6 +1162,7 @@ impl Backend for AppKitBackend {
                 let view = NdLayerView::new(mtm, &ViewLook::of_div(div, state.expose));
                 view.set_gestures(gesture_host(div, emit(), &state.wake));
                 view.set_hover_target(div.tracks_hover.then(|| (emit(), state.wake.clone())));
+                view.set_press_target(div.active.is_some().then(|| (emit(), state.wake.clone())));
                 if div.gestures.scroll.any() {
                     state.scrolls.insert(node, crate::scroll_view::ScrollBox::new(mtm, &view, div.gestures.scroll));
                 }
@@ -1403,6 +1404,9 @@ impl Backend for AppKitBackend {
                 v.set_props(&ViewLook::of_div(div, expose));
                 if props::<DivProps>(&patch.old, "View").tracks_hover != div.tracks_hover {
                     v.set_hover_target(div.tracks_hover.then(|| (events.emitter(node), wake.clone())));
+                }
+                if props::<DivProps>(&patch.old, "View").active.is_some() != div.active.is_some() {
+                    v.set_press_target(div.active.is_some().then(|| (events.emitter(node), wake.clone())));
                 }
                 if props::<DivProps>(&patch.old, "View").gestures != div.gestures {
                     v.set_gestures(gesture_host(div, events.emitter(node), &wake));

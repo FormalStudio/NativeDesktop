@@ -32,9 +32,9 @@ pub use container::ContainerElement;
 pub use drag::{DragEnded, DragItem, DragOutcome, DragOver, DragOverPhase, DragPoint, DragSource, DropSlot, Dropped};
 pub use element::{
     AnyElement, Bezel, Button, ButtonProps, ButtonVariant, ClickEvent, DispatchProps, Div, DivProps, HeroFrom,
-    HoverChanged, InteractiveElement, IntoElement, Key, NativeElement, ParentElement, Resized, RootProps, Scope, Text,
-    TextProps, WindowControls, WindowControlsProps, button, deferred, div, drag_region, h_flex, rich_text, text,
-    v_flex, window_controls,
+    HoverChanged, InteractiveElement, IntoElement, Key, NativeElement, ParentElement, PressChanged, Resized, RootProps,
+    Scope, Text, TextProps, WindowControls, WindowControlsProps, button, deferred, div, drag_region, h_flex, rich_text,
+    text, v_flex, window_controls,
 };
 pub use layout::with_titlebar_insets;
 pub use nd_core::semantic::{Role, SemanticNode, SemanticTree, SemanticWindow};

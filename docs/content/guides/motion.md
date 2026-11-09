@@ -117,6 +117,14 @@ let art = div()
 v_flex().group("card").child(art).child(label(title))
 ```
 
+## Press feedback
+
+`.active(|p| p.scale(0.97))` gives an element a pose to take while a press on it is held: its
+opacity, offset or scale, easing on `Animation::fast()` or the element's own `.animate(..)`. It
+goes back when the button comes up, or as soon as the press moves 4 pt and becomes a drag, so a
+draggable card does not stay dipped. The press still clicks: a tap handler on the same element
+runs on release.
+
 ## Source lists
 
 On the GPUI backend a `source_list` or `source_tree` animates its rows. A folder's

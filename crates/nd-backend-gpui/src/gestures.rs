@@ -726,6 +726,7 @@ mod tests {
             access_key: None,
             group: None,
             group_hover: None,
+            active: None,
             hero: None,
         };
         Node { kind: NodeKind::View, props: Rc::new(props), parent, children }
