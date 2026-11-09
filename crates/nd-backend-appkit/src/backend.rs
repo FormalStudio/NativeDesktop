@@ -1837,12 +1837,12 @@ impl Backend for AppKitBackend {
         }
     }
 
-    fn drag_preview(&mut self, _window: WindowId, node: NodeId, screen: Option<nd_core::Point>) {
+    fn drag_preview(&mut self, _window: WindowId, node: NodeId, preview: nd_ui::DragPreview, reduce: bool) {
         let Ok(state) = self.0.try_borrow() else { return };
         let view = state.nodes.get(&node).and_then(Native::view).map(|v| v.retain());
         let mtm = state.mtm;
         drop(state);
-        crate::drag_preview::show(mtm, view.as_deref(), screen);
+        crate::drag_preview::show(mtm, view.as_deref(), preview, reduce);
     }
 
     fn perform(

@@ -447,6 +447,13 @@ impl SourceTree {
         self
     }
 
+    /// A drag stayed over one row (the same [`DropSlot::on`], so with
+    /// [`drops_onto_rows`](Self::drops_onto_rows)) for [`SPRING_LOAD_DELAY`](nd_ui::SPRING_LOAD_DELAY):
+    /// expand that folder, as Finder's sidebar springs a folder open under a drag.
+    pub fn on_spring_load(self, f: impl Fn(&SpringLoaded, &mut Window, &mut App) + 'static) -> Self {
+        SourceTree(self.0.on_spring_load(f))
+    }
+
     /// A drag was dropped on the list; its `slot` says where among the rows.
     pub fn on_drop(self, f: impl Fn(&Dropped, &mut Window, &mut App) + 'static) -> Self {
         SourceTree(self.0.on(f))

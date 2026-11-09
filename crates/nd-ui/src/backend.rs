@@ -314,10 +314,10 @@ pub trait Backend: Any {
         None
     }
 
-    /// Shows `node` of `window` as a picture under the pointer at `screen` (global points), for
-    /// a drag outside its window; `None` takes it away. A no-op where a window cannot draw
-    /// outside itself.
-    fn drag_preview(&mut self, _window: WindowId, _node: NodeId, _screen: Option<nd_core::Point>) {}
+    /// Shows, moves, lands or takes away the picture of `node` of `window` that a drag carries
+    /// (see [`DragPreview`](crate::DragPreview)). Under `reduce` motion nothing scales or
+    /// travels: the picture fades in and out where it is.
+    fn drag_preview(&mut self, _window: WindowId, _node: NodeId, _preview: crate::DragPreview, _reduce: bool) {}
 
     /// Renders the window's content to a PNG.
     fn capture(&mut self, _window: WindowId) -> Result<crate::semantics::Capture, crate::semantics::ActionError> {

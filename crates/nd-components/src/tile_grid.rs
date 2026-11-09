@@ -12,7 +12,9 @@
 //! Tiles drag as [`DragItem`]s of the grid's kind, so another window's grid or list takes them
 //! too; drags of the grid's [`accepts`](TileGrid::accepts_drops) kinds open a gap where they
 //! would land. The order is the app's: a tile dropped in its own grid reports [`TileMoved`], a
-//! foreign drop reports [`Dropped`] with the slot.
+//! foreign drop reports [`Dropped`] with the slot. A grid in a [`fixed_order`](TileGrid::fixed_order)
+//! (sorted tiles) does not reorder: a dragged tile stays in its slot, dimmed, while a lifted
+//! picture of it follows the pointer to targets elsewhere (a folder tile, a sidebar row).
 
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -108,6 +110,7 @@ pub struct TileGrid {
     gap: f32,
     kind: Option<SharedString>,
     accepts: Vec<SharedString>,
+    fixed_order: bool,
     reflow: Animation,
     on_move: Option<Handler<TileMoved>>,
     on_drop: Option<Handler<Dropped>>,
@@ -125,12 +128,17 @@ pub fn tile_grid(id: impl Into<SharedString>) -> TileGrid {
         gap: 8.,
         kind: None,
         accepts: Vec::new(),
+        fixed_order: false,
         reflow: Animation::natural(),
         on_move: None,
         on_drop: None,
         on_drag_end: None,
     }
 }
+
+/// How much of a tile shows while a picture of it is dragged elsewhere, as Finder dims an
+/// icon being dragged.
+const DRAGGED_OPACITY: f32 = 0.4;
 
 /// Where a tile comes in from and goes out to.
 fn tile_pose(pose: Pose) -> Pose {
@@ -174,6 +182,15 @@ impl TileGrid {
     /// Tiles drag as items of `kind`, reordering within the grid and onto any target taking it.
     pub fn draggable_tiles(mut self, kind: impl Into<SharedString>) -> Self {
         self.kind = Some(kind.into());
+        self
+    }
+
+    /// The tiles keep the order the app gives them (sorted by date or name): a dragged tile
+    /// stays in its slot, dimmed, and a lifted picture of it follows the pointer to targets
+    /// that take the grid's kind (a folder tile with `.accepts_drops`, a sidebar row). The grid
+    /// itself takes none of its own tiles, so a drag over the other tiles does nothing.
+    pub fn fixed_order(mut self) -> Self {
+        self.fixed_order = true;
         self
     }
 
@@ -221,8 +238,12 @@ impl TileGrid {
         }
         let ids: Vec<SharedString> = self.tiles.iter().map(|t| t.id.clone()).collect();
 
-        // Each tile's slot as shown now.
-        let dragged = state.drag.as_ref().filter(|d| ids.contains(&d.id));
+        // Each tile's slot as shown now. A drag that ended while the grid was away (a
+        // spring-loaded folder replaced its page) never told it: that tile is back at rest.
+        if state.drag.is_some() && !app.is_dragging() {
+            app.global_mut::<TileGrids>().0.entry(key.clone()).or_default().drag = None;
+        }
+        let dragged = state.drag.as_ref().filter(|d| ids.contains(&d.id) && app.is_dragging());
         let mut order: Vec<Option<SharedString>> = ids.iter().cloned().map(Some).collect();
         if let Some(d) = dragged
             && let Some(slot) = d.slot
@@ -249,10 +270,13 @@ impl TileGrid {
         let count = order.len();
         let kind = self.kind.clone();
         let mut accepts = self.accepts.clone();
-        accepts.extend(kind.clone());
+        accepts.extend(kind.clone().filter(|_| !self.fixed_order));
         let mut children = Vec::with_capacity(self.tiles.len());
+        let fixed = self.fixed_order;
+        let grid_id = self.id.clone();
         for tile in self.tiles {
-            let follow = dragged.filter(|d| d.id == tile.id);
+            let lifted = dragged.is_some_and(|d| d.id == tile.id);
+            let follow = dragged.filter(|d| d.id == tile.id && !fixed);
             // Tiles sit at their slots in layout, so they are hit and hovered where they are
             // drawn; a dragged one stays at its own slot and follows the pointer by its offset.
             let ((x, y), (dx, dy)) = match follow {
@@ -273,14 +297,23 @@ impl TileGrid {
                 let animation = if follow.is_some() { Animation::linear(Duration::ZERO) } else { self.reflow };
                 el = el.animate(animation).snap_size().animate_layout(glide).enter_from(tile_pose).exit_to(tile_pose);
             }
+            let el = el.when(lifted && fixed, |el| el.opacity(DRAGGED_OPACITY));
             let mut el = el.child(tile.content);
             if let Some(kind) = &kind {
                 let id = tile.id.clone();
+                let grid_key = grid_id.clone();
                 let (begin, end) = (update.clone(), update.clone());
                 let on_end = self.on_drag_end.clone();
                 el = el
                     .draggable(DragItem::new(kind.clone(), tile.id.clone()))
+                    .when(fixed, Div::lift_on_drag)
                     .on_drag(move |e: &DragEvent, window, app| {
+                        // A fixed grid draws nothing per move (the picture follows the pointer
+                        // in the backend), so it renders once, when the tile dims.
+                        let held = || app.global::<TileGrids>().0.get(&(window.id(), grid_key.clone()));
+                        if fixed && held().and_then(|s| s.drag.as_ref()).is_some_and(|d| d.id == id) {
+                            return;
+                        }
                         let id = id.clone();
                         let translation = (e.translation.x, e.translation.y);
                         begin(window, app, &|s| match &mut s.drag {

@@ -271,3 +271,67 @@ fn under_reduce_motion_tiles_dissolve_into_new_slots() {
     assert_eq!(props(&cx, b).style.opacity.unwrap_or(1.), 1.);
     assert!(!cx.backend().is_live(a));
 }
+
+struct Sorted {
+    log: Log,
+}
+
+impl Render for Sorted {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        let (moved, dropped) = (self.log.clone(), self.log.clone());
+        let folder = div().size_full().accepts_drops(["tab"]).on_drop(move |e: &Dropped, _, _| {
+            dropped.borrow_mut().push(format!("into c {}", e.item.id));
+        });
+        let tiles = [tile("a", div().size_full()), tile("b", div().size_full()), tile("c", folder)];
+        div().size_full().child(
+            tile_grid("sorted")
+                .tiles(tiles)
+                .draggable_tiles("tab")
+                .fixed_order()
+                .on_move(move |e: &TileMoved, _, _| moved.borrow_mut().push(format!("move {} {}", e.id, e.index))),
+        )
+    }
+}
+
+fn open_sorted() -> (TestApp, Log) {
+    let log: Log = Rc::default();
+    let l = log.clone();
+    let mut cx = TestApp::new();
+    let w = cx.open_window(Size { width: 480., height: 400. }, move |_, cx| cx.new(|_| Sorted { log: l })).id();
+    cx.backend_mut().set_window_frame(w, Rect::new(0., 0., 480., 400.));
+    settle(&mut cx);
+    (cx, log)
+}
+
+#[test]
+fn a_fixed_order_tile_stays_dimmed_in_its_slot_and_drops_into_a_folder_tile() {
+    let (mut cx, log) = open_sorted();
+    let a = node(&cx, "a");
+    let start = centre(0);
+    drag(&mut cx, a, GesturePhase::Began, start, start);
+    drag(&mut cx, a, GesturePhase::Changed, start, centre(1));
+    assert_eq!(shown(&cx, a), (0., 0.), "it does not follow the pointer");
+    assert_eq!(props(&cx, a).style.opacity, Some(0.4), "it dims");
+    let lifted = cx
+        .backend()
+        .previews()
+        .iter()
+        .any(|(n, p)| *n == a && matches!(p, nd_ui::DragPreview::At { lifted: true, .. }));
+    assert!(lifted, "a lifted picture carries it");
+    drag(&mut cx, a, GesturePhase::Changed, start, centre(2));
+    drag(&mut cx, a, GesturePhase::Ended, start, centre(2));
+    assert_eq!(*log.borrow(), ["into c a"], "only the folder takes it, and nothing reorders");
+    assert_eq!(props(&cx, a).style.opacity.unwrap_or(1.), 1.);
+}
+
+#[test]
+fn a_fixed_order_tile_dropped_on_a_plain_tile_goes_nowhere() {
+    let (mut cx, log) = open_sorted();
+    let b = node(&cx, "b");
+    let start = centre(1);
+    drag(&mut cx, b, GesturePhase::Began, start, start);
+    drag(&mut cx, b, GesturePhase::Changed, start, centre(0));
+    drag(&mut cx, b, GesturePhase::Ended, start, centre(0));
+    assert!(log.borrow().is_empty(), "{:?}", log.borrow());
+    assert_eq!(shown(&cx, b), (122., 0.));
+}

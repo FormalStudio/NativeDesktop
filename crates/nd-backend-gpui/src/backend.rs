@@ -144,6 +144,8 @@ pub struct GpuiBackend {
     refresh_timers: Rc<RefCell<std::collections::HashSet<WindowId>>>,
     /// Each open overlay's subtree as last drawn, and the closed ones still animating out.
     pub(crate) overlay_exits: crate::overlay::Exits,
+    /// Each window's lifted drag picture.
+    pub(crate) drag_pictures: crate::drag_picture::Pictures,
     /// Per-node state of the drawn navigation widgets ([`crate::nav`]).
     pub(crate) drawn: crate::nav::DrawnMap,
     /// Scaffolds whose sidebar the drawn toolbar toggle hid, as AppKit's split view collapses
@@ -230,6 +232,7 @@ impl GpuiBackend {
             scrollbars: crate::scrollbar::Scrollbars::default(),
             refresh_timers: Rc::default(),
             overlay_exits: crate::overlay::Exits::default(),
+            drag_pictures: crate::drag_picture::Pictures::default(),
             drawn: Rc::default(),
             hidden_sidebars: Rc::default(),
             narrow_sidebars: Rc::default(),
@@ -743,6 +746,22 @@ impl Backend for GpuiBackend {
         self.laid.borrow().frame(node)
     }
 
+    fn drag_preview(&mut self, window: WindowId, node: NodeId, preview: nd_ui::DragPreview, reduce: bool) {
+        self.drag_pictures.update(window, node, preview, reduce, || {
+            let state = self.state.borrow();
+            let mut out = HashMap::new();
+            let mut stack = vec![node];
+            while let Some(n) = stack.pop() {
+                if let Some(node) = state.nodes.get(&n) {
+                    stack.extend(node.children.iter().copied());
+                    out.insert(n, node.clone());
+                }
+            }
+            out
+        });
+        self.state.borrow_mut().dirty.insert(window);
+    }
+
     fn drop_slot(
         &mut self,
         node: NodeId,
@@ -767,6 +786,7 @@ impl Backend for GpuiBackend {
             None => {
                 tree.slot = None;
                 tree.onto = None;
+                tree.pointer = None;
                 None
             }
         }

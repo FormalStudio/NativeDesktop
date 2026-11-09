@@ -5,6 +5,20 @@ and the one it moves to.
 
 ## Unreleased
 
+- Drags lift and spring-load, as in Finder. `Div::lift_on_drag()` carries a picture of the
+  element under the pointer, a little larger with a shadow, that shrinks into the target that
+  takes the drop or settles back home; under reduce motion it fades. `on_spring_load` on an
+  element or a source list fires `SpringLoaded` after a drag rests over it for
+  `SPRING_LOAD_DELAY`. `tile_grid(..).fixed_order()` keeps a sorted grid's order: a dragged tile
+  stays in its slot, dimmed, and goes to targets elsewhere. Breaking for backends:
+  `Backend::drag_preview(window, node, DragPreview, reduce)` replaces the screen point with a
+  `DragPreview` (`At`, `Land`, `Gone`). A target no longer hears a drag of itself or of an
+  element inside it, and a target on its way out takes no drops. `nd::test` exports
+  `DragPreview` and `SPRING_LOAD_DELAY`.
+- A drag outlives its source: when a spring-loaded folder replaces the page the source was on,
+  backends feed the window's pointer to `App::drag_pointer(window, at, released)`, which
+  carries the drag on and ends it on release. A source list scrolls while a drag rests near its
+  top or bottom edge, on both backends.
 - `Pane::footer(el)` pins `el` at a sidebar's or inspector's foot, under the rest of the pane,
   for a Trash row or a New Folder button. `SourceTree::fit_rows()` makes a source list as tall
   as its rows with nothing to scroll: on AppKit the scroll view has no scroller, no rubber band

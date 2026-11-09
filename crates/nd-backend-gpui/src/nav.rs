@@ -1079,6 +1079,7 @@ fn row_drag_listener(drawn: &Rc<RefCell<Drawn>>, emit: &Emit, wake: &crate::back
                     t.press = None;
                     t.slot = None;
                     t.onto = None;
+                    t.pointer = None;
                     window.refresh();
                     return;
                 }
@@ -1104,6 +1105,7 @@ fn row_drag_listener(drawn: &Rc<RefCell<Drawn>>, emit: &Emit, wake: &crate::back
                 let Some(press) = t.press.take() else { return };
                 t.slot = None;
                 t.onto = None;
+                t.pointer = None;
                 if press.dragging {
                     emit.emit(drag_source(&press.item, nd_ui::GesturePhase::Ended, event.position, &event.modifiers));
                     wake(cx);
@@ -1581,6 +1583,8 @@ pub(crate) struct TreeDrawn {
     pub slot: Option<(gpui::Point<Pixels>, Pixels)>,
     /// The row a drag over the list lands on, outlined instead of a slot line.
     pub onto: Option<gpui::Bounds<Pixels>>,
+    /// Where a drag over the list is, in the window: near an edge the list scrolls.
+    pub pointer: Option<gpui::Point<Pixels>>,
     /// Each row's artwork load, by id, while the row has artwork.
     pub art: HashMap<SharedString, Rc<RefCell<crate::media::image::Picture>>>,
     pub motion: TreeMotion,
@@ -1618,6 +1622,7 @@ impl TreeDrawn {
         let index = SourceIndex::new(&props.nodes);
         let visible = index.visible(&props.nodes);
         let y = px(at.y);
+        self.pointer = Some(point(px(at.x), y));
         let rows: Vec<(usize, gpui::Bounds<Pixels>)> =
             visible.iter().filter_map(|(i, _)| Some((*i, *self.rows.get(&props.nodes[*i].id)?))).collect();
         let over = rows.iter().find(|(_, b)| y >= b.top() && y < b.bottom());
@@ -1991,16 +1996,23 @@ impl Build<'_> {
                 .entry(id)
                 .or_insert_with(|| Rc::new(RefCell::new(Drawn::Tree(TreeDrawn::default()))))
                 .clone();
-            let (hovered, slot, onto, preview, motion) = match &*drawn.borrow() {
+            let (hovered, slot, onto, preview, motion, pointer) = match &*drawn.borrow() {
                 Drawn::Tree(t) => (
                     t.hovered.clone(),
                     t.slot,
                     t.onto,
                     t.press.as_ref().filter(|p| p.dragging).map(|p| (p.title.clone(), p.at - p.grab, p.width)),
                     t.motion.clone(),
+                    t.pointer,
                 ),
-                _ => (None, None, None, None, TreeMotion::default()),
+                _ => (None, None, None, None, TreeMotion::default(), None),
             };
+            if !props.fit_rows
+                && let Some(pointer) = pointer
+                && self.backend.scrollbars.autoscroll(id, pointer.y)
+            {
+                window.request_animation_frame();
+            }
             let reduce = self.backend.platform_reduce_motion() == Some(true);
             let frame = motion.frame(&props.nodes, props.selected.as_ref(), self.time, reduce);
             let listener = props.drag_kind.is_some().then(|| row_drag_listener(&drawn, &emit, &wake));

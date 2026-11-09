@@ -463,13 +463,45 @@ impl Tree {
         self.nodes.contains_key(&node)
     }
 
+    /// Whether `node` left the tree, or is on its way out (`.exit_to`) and takes no input.
+    pub(crate) fn gone(&self, node: NodeId) -> bool {
+        !self.contains(node) || self.inert.contains(&node)
+    }
+
     /// Nodes that take drags of `kind`, in no particular order.
     pub(crate) fn drop_targets(&self, kind: &str) -> Vec<NodeId> {
-        self.nodes.iter().filter(|(_, n)| n.drag.accepts.iter().any(|k| k == kind)).map(|(id, _)| *id).collect()
+        // Not one on its way out (`.exit_to`), nor anything in it.
+        self.nodes
+            .iter()
+            .filter(|(id, n)| !self.inert.contains(id) && n.drag.accepts.iter().any(|k| k == kind))
+            .map(|(id, _)| *id)
+            .collect()
     }
 
     pub(crate) fn drag_item(&self, node: NodeId) -> Option<crate::DragItem> {
         self.nodes.get(&node)?.drag.item.clone()
+    }
+
+    /// Whether `node`'s drag lifts a picture of it (`.lift_on_drag()`).
+    pub(crate) fn drag_lifts(&self, node: NodeId) -> bool {
+        self.nodes.get(&node).is_some_and(|n| n.drag.lift)
+    }
+
+    /// Whether `node` opens under a drag held over it (`.on_spring_load`).
+    pub(crate) fn springs(&self, node: NodeId) -> bool {
+        self.nodes.get(&node).is_some_and(|n| n.drag.springs)
+    }
+
+    /// Whether `node` is `ancestor` or inside it.
+    pub(crate) fn within(&self, node: NodeId, ancestor: NodeId) -> bool {
+        let mut at = Some(node);
+        while let Some(n) = at {
+            if n == ancestor {
+                return true;
+            }
+            at = self.nodes.get(&n).and_then(|n| n.parent);
+        }
+        false
     }
 
     pub(crate) fn handler(&self, node: NodeId, event: TypeId) -> Option<Handler> {

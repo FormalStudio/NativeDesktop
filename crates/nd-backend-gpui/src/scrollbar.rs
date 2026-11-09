@@ -103,6 +103,11 @@ impl Bar {
     }
 }
 
+/// How close to a scroll view's edge a drag starts it scrolling, and how far it scrolls a
+/// frame at the very edge.
+const AUTOSCROLL_EDGE: f32 = 24.;
+const AUTOSCROLL_STEP: f32 = 12.;
+
 /// Every scroll bar's state, by its scroll view, and the GPUI scroll handle of each view GPUI
 /// scrolls itself.
 #[derive(Clone, Default)]
@@ -118,6 +123,34 @@ impl Scrollbars {
 
     fn handle(&self, id: NodeId) -> gpui::ScrollHandle {
         self.handles.borrow_mut().entry(id).or_default().clone()
+    }
+
+    /// A drag is at `y` (window coordinates) over the scroll view: within [`AUTOSCROLL_EDGE`] of
+    /// its top or bottom it scrolls that way, faster the closer the pointer is, as an
+    /// NSOutlineView does under a drag. Returns whether it moved, so another frame keeps it going.
+    pub fn autoscroll(&self, id: NodeId, y: gpui::Pixels) -> bool {
+        let handle = self.handle(id);
+        let bounds = handle.bounds();
+        let max = handle.max_offset().y;
+        if bounds.size.height <= px(0.) || max <= px(0.) {
+            return false;
+        }
+        let edge = px(AUTOSCROLL_EDGE);
+        let push = if y < bounds.top() + edge {
+            (bounds.top() + edge - y).min(edge)
+        } else if y > bounds.bottom() - edge {
+            -(y - (bounds.bottom() - edge)).min(edge)
+        } else {
+            return false;
+        };
+        let mut offset = handle.offset();
+        let next = (offset.y + px(push / edge * AUTOSCROLL_STEP)).clamp(-max, px(0.));
+        if next == offset.y {
+            return false;
+        }
+        offset.y = next;
+        handle.set_offset(offset);
+        true
     }
 
     /// The pointer moved over the scroll view: the indicator shows. Returns whether that needs

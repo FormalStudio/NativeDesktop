@@ -60,6 +60,9 @@ pub trait KeyRouter {
     fn drag_drop(&self, _at: (f32, f32)) -> bool {
         false
     }
+    /// The primary button moved held (`released` false) or went up, at `at` in window points
+    /// from the top left: `App::drag_pointer`.
+    fn drag_pointer(&self, _at: (f32, f32), _released: bool) {}
 }
 
 #[derive(Default)]
@@ -101,7 +104,16 @@ define_class!(
                     return;
                 }
             }
+            let kind = event.r#type();
+            let pointer = (kind == NSEventType::LeftMouseDragged || kind == NSEventType::LeftMouseUp)
+                .then(|| self.router())
+                .flatten()
+                .map(|router| (router, self.event_point(event)));
             unsafe { msg_send![super(self), sendEvent: event] }
+            // After AppKit's own delivery, so a source still on screen reports first.
+            if let Some((router, at)) = pointer {
+                router.drag_pointer(at, kind == NSEventType::LeftMouseUp);
+            }
         }
 
         // Declared accelerators pre-empt embedded views (ARCHITECTURE.md 6.2): AppKit asks the
@@ -221,10 +233,26 @@ impl NdWindow {
     }
 
     /// Where the drag is, in window points from the top left.
+    fn event_point(&self, event: &NSEvent) -> (f32, f32) {
+        let at = event.locationInWindow();
+        let height = self.contentView().map_or(0., |v| v.frame().size.height);
+        (at.x as f32, (height - at.y) as f32)
+    }
+
     fn drag_point(&self, sender: &ProtocolObject<dyn NSDraggingInfo>) -> (f32, f32) {
         let at = sender.draggingLocation();
         let height = self.contentView().map_or(0., |v| v.frame().size.height);
         (at.x as f32, (height - at.y) as f32)
+    }
+
+    /// Reports the running nd drag where the pointer rests now, as a `draggingUpdated:` would:
+    /// AppKit sends one only when the pointer moves.
+    pub(crate) fn drag_rested(&self) {
+        let at = self.mouseLocationOutsideOfEventStream();
+        let height = self.contentView().map_or(0., |v| v.frame().size.height);
+        if let Some(router) = self.router() {
+            router.drag_over(Some((at.x as f32, (height - at.y) as f32)));
+        }
     }
 
     fn nd_drag_over(&self, sender: &ProtocolObject<dyn NSDraggingInfo>) -> NSDragOperation {

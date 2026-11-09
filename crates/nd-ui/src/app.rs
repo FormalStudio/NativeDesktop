@@ -813,8 +813,14 @@ impl App {
         self.windows.values().filter_map(|w| w.window.as_ref()).map(Window::now).fold(0., f64::max)
     }
 
-    /// True when a frame would do work: a mounted view is dirty or a window needs layout.
+    /// True when a frame would do work: a mounted view is dirty, a window needs layout, or a
+    /// drag waits out a spring-loaded target's delay on the frame clock.
     pub fn needs_frame(&self) -> bool {
+        self.needs_render() || self.drag_needs_frame()
+    }
+
+    /// A frame would do work without the clock moving on.
+    fn needs_render(&self) -> bool {
         self.dirty.iter().any(|e| self.view_windows.contains_key(e))
             || self.windows.values().any(|w| w.window.as_ref().is_some_and(|w| w.focus_request.is_some()))
             || self.windows.values().any(|w| w.tree.as_ref().is_some_and(|t| t.needs_frame()))
@@ -841,6 +847,7 @@ impl App {
         // Whatever is still dirty is not a mounted view (a model), or was notified by a
         // render; models need no frame and renders notifying themselves would loop.
         self.dirty.retain(|e| self.view_windows.contains_key(e));
+        self.drag_frame();
         self.drain_events();
     }
 
@@ -928,7 +935,8 @@ impl App {
         for _ in 0..100 {
             self.flush_effects();
             self.drain_events();
-            if !self.needs_frame() && self.events.is_empty() {
+            // A drag's spring-load delay waits for the clock, which stands still here.
+            if !self.needs_render() && self.events.is_empty() {
                 return;
             }
             self.frame();

@@ -49,6 +49,8 @@ pub(crate) const HERO_PRIORITY: usize = 0;
 pub(crate) const TOAST_PRIORITY: usize = 1;
 pub(crate) const PANEL_PRIORITY: usize = 10;
 const MENU_PRIORITY: usize = usize::MAX;
+/// A drag's picture, over everything but the context menu.
+pub(crate) const DRAG_PRIORITY: usize = MENU_PRIORITY - 1;
 
 /// The gap between an anchor and what it anchors.
 const GAP: f32 = 4.;

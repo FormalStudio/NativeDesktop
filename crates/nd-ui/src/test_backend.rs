@@ -49,7 +49,7 @@ pub struct TestBackend {
     haptics: Vec<nd_gesture::Haptic>,
     commands: Vec<(WindowId, crate::backend::WindowCommand)>,
     windows: HashMap<WindowId, Rect>,
-    previews: Vec<(NodeId, Option<nd_core::Point>)>,
+    previews: Vec<(NodeId, crate::DragPreview)>,
 }
 
 impl Default for TestBackend {
@@ -84,8 +84,8 @@ impl TestBackend {
         self.windows.insert(window, frame);
     }
 
-    /// Drag previews asked for so far: the source and where on screen, `None` to take it away.
-    pub fn previews(&self) -> &[(NodeId, Option<nd_core::Point>)] {
+    /// Drag previews asked for so far: the source and what its picture does.
+    pub fn previews(&self) -> &[(NodeId, crate::DragPreview)] {
         &self.previews
     }
 
@@ -440,8 +440,8 @@ impl Backend for TestBackend {
         Some(crate::semantics::WindowState { key: false, main: false, visible: true, frame: Some(frame) })
     }
 
-    fn drag_preview(&mut self, _window: WindowId, node: NodeId, screen: Option<nd_core::Point>) {
-        self.previews.push((node, screen));
+    fn drag_preview(&mut self, _window: WindowId, node: NodeId, preview: crate::DragPreview, _reduce: bool) {
+        self.previews.push((node, preview));
     }
 
     /// A button answers clicks the way its native control would, by emitting [`ClickEvent`].
