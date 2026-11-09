@@ -20,7 +20,7 @@ use crate::app::{AnyView, App, EntityId};
 use crate::backend::{AvailableSpace, Backend, BoundaryInsets, Constraint, NodeKind, Props, PropsPatch};
 use crate::canvas::{self, CanvasProps, PaintFn};
 use crate::dispatch::DispatchTree;
-use crate::element::{AnyElement, DispatchProps, DivProps, Element, Handler, Key, NodeElement, RootProps};
+use crate::element::{AnyElement, DispatchProps, DivProps, Element, Handler, HeroPart, Key, NodeElement, RootProps};
 use crate::layout::{to_taffy, with_titlebar_insets};
 use crate::overlay::{Modality, OverlayProps, is_overlay};
 use crate::transaction::{MeasureCache, Op, Transaction};
@@ -189,9 +189,10 @@ fn hidden(props: &Props) -> Props {
 }
 
 /// The values that put an element whose frame at rest is `home` (with `targets` there) onto
-/// `source`: its size when given in points, else a scale about its centre.
-fn pose_on(targets: &Values, source: Rect, home: Rect) -> Values {
-    let mut out: Values = [None; 6];
+/// `source`: its size when given in points, else a scale about its centre, and the source's
+/// `look`.
+fn pose_on(targets: &Values, source: Rect, home: Rect, look: &Values) -> Values {
+    let mut out = *look;
     let (ox, oy) = (targets[1].unwrap_or(0.), targets[2].unwrap_or(0.));
     if targets[4].is_some() && targets[5].is_some() {
         out[1] = Some(ox + f64::from(source.origin.x - home.origin.x));
@@ -206,6 +207,25 @@ fn pose_on(targets: &Values, source: Rect, home: Rect) -> Values {
         out[3] = Some(f64::from(source.size.width / home.size.width));
     }
     out
+}
+
+/// A hero in flight: the sizes its parts keep, inside its source's border and inside its own
+/// at home.
+#[derive(Clone, Copy, Debug)]
+struct Flight {
+    source: Size,
+    home: Size,
+}
+
+/// `frame`'s size inside a border `border` points wide.
+fn inside(frame: Rect, border: (f32, f32)) -> Size {
+    Size { width: (frame.size.width - 2. * border.0).max(0.), height: (frame.size.height - 2. * border.1).max(0.) }
+}
+
+/// The border a hero's look draws, as (left, top) like [`border_of`].
+fn look_border(look: &Values) -> (f32, f32) {
+    let w = look[animation::BORDER].unwrap_or(0.) as f32;
+    (w, w)
 }
 
 struct ViewSlot {
@@ -283,6 +303,11 @@ pub(crate) struct Tree {
     hero_away: HashMap<NodeId, Values>,
     /// A hero's frame at rest, for going back from mid-flight.
     hero_home: HashMap<NodeId, Rect>,
+    /// Heroes in flight between a source and home.
+    flights: HashMap<NodeId, Flight>,
+    /// Nodes that are part of a hero (`.hero_part`), with the props and layout they show of
+    /// their own; [`Tree::follow_heroes`] presents them.
+    parts: HashMap<NodeId, (Props, StyleRefinement)>,
     /// Nodes that report their size, laid out at a new one this frame.
     resized: Vec<(NodeId, Size)>,
     /// Nodes whose element is gone, still drawn while their exit pose plays. They stay in
@@ -451,6 +476,8 @@ impl Tree {
             away_pending: Vec::new(),
             hero_away: HashMap::new(),
             hero_home: HashMap::new(),
+            flights: HashMap::new(),
+            parts: HashMap::new(),
             resized: Vec::new(),
             retired: HashSet::new(),
             inert: HashSet::new(),
@@ -564,7 +591,7 @@ impl Tree {
         let (shown_props, shown_layout) =
             shown(&self.lit, &self.pressed, self.hero_away.get(&id), id, &el.props, &el.layout);
         let transform = shown_props.downcast_ref::<DivProps>().map_or_else(Transform::default, |d| d.transform);
-        let targets = animation::values(&shown_layout, &transform);
+        let targets = self.targets(id, hero.is_some(), &shown_layout, &transform);
         let laid_out = previous.as_ref().is_some_and(|p| p.flip.is_some() && p.laid_out);
         let mut state = match previous {
             Some(mut previous) => {
@@ -577,7 +604,7 @@ impl Tree {
         };
         // Reduce motion leaves out a hero's travel: it fades in where it lands.
         if node.is_none() && reduce && hero.as_ref().is_some_and(|h| !h.away) {
-            state.start_from(&[Some(0.), None, None, None, None, None], now, reduce);
+            state.start_from(&animation::only(animation::OPACITY, 0.), now, reduce);
         }
         state.settle(now);
         let base = (el.props.clone(), el.layout.clone());
@@ -657,14 +684,29 @@ impl Tree {
         if self.retired.contains(&n) {
             return;
         }
-        let away = self.hero_away.get(&n).copied();
-        let Some(node) = self.nodes.get_mut(&n) else { return };
-        let Some(anim) = node.motion.as_mut() else { return };
-        let (props, layout) = shown(&self.lit, &self.pressed, away.as_ref(), n, &anim.props, &anim.layout);
-        let transform = props.downcast_ref::<DivProps>().map_or_else(Transform::default, |d| d.transform);
+        let Some(anim) = self.nodes.get(&n).and_then(|n| n.motion.as_ref()) else { return };
+        let (props, layout) = shown(&self.lit, &self.pressed, self.hero_away.get(&n), n, &anim.props, &anim.layout);
+        let div = props.downcast_ref::<DivProps>();
+        let transform = div.map_or_else(Transform::default, |d| d.transform);
+        let targets = self.targets(n, div.is_some_and(|d| d.hero.is_some()), &layout, &transform);
+        let Some(anim) = self.nodes.get_mut(&n).and_then(|n| n.motion.as_mut()) else { return };
         let animation = anim.state.animation();
-        anim.state.retarget(animation, animation::values(&layout, &transform), now, reduce);
+        anim.state.retarget(animation, targets, now, reduce);
         self.animating.insert(n);
+    }
+
+    /// What node `id`, shown with `layout` and `transform`, moves towards: a hero's look too,
+    /// and its flight's end.
+    fn targets(&self, id: NodeId, hero: bool, layout: &StyleRefinement, transform: &Transform) -> Values {
+        let values = animation::values(layout, transform);
+        if !hero {
+            return values;
+        }
+        let mut values = animation::with_look(values, layout, None);
+        if let Some(progress) = self.hero_away.get(&id).and_then(|away| away[animation::PROGRESS]) {
+            values[animation::PROGRESS] = Some(progress);
+        }
+        values
     }
 
     /// Works out where heroes come from and go back to, from the frames the backend drew last.
@@ -695,16 +737,21 @@ impl Tree {
                 }
             }
             self.hero_waits.remove(&id);
+            let look = source.map(|s| self.source_look(&hero, s));
             let Some(node) = self.nodes.get_mut(&id) else { continue };
             let Some(anim) = node.motion.as_mut() else { continue };
-            if let (Some(source), Some(home)) = (source, home) {
+            if let (Some(source), Some(home), Some(look)) = (source, home, look) {
                 self.hero_home.insert(id, home);
-                let from = pose_on(&anim.state.targets(), source, home);
+                let from = pose_on(&anim.state.targets(), source, home, &look);
                 anim.state.start_from(&from, now, reduce);
+                let flight =
+                    Flight { source: inside(source, look_border(&look)), home: inside(home, border_of(&anim.layout)) };
+                self.flights.insert(id, flight);
             } else {
                 // Nothing on screen to come out of: it rises into place as it fades in.
-                let y = anim.state.targets()[2].map(|y| y + HERO_RISE);
-                anim.state.start_from(&[Some(0.), None, y, None, None, None], now, reduce);
+                let mut from = animation::only(animation::OPACITY, 0.);
+                from[2] = anim.state.targets()[2].map(|y| y + HERO_RISE);
+                anim.state.start_from(&from, now, reduce);
             }
             self.animating.insert(id);
         }
@@ -725,13 +772,18 @@ impl Tree {
                 self.fade_away(id, now, reduce, &mut stranded);
                 continue;
             };
+            let look = self.source_look(&hero, source);
             let Some(anim) = self.nodes.get(&id).and_then(|n| n.motion.as_ref()) else { continue };
             let mut base = anim.props.downcast_ref::<DivProps>().map_or_else(Transform::default, |d| d.transform);
             base.scale = 1.;
             let targets = animation::values(&anim.layout, &base);
-            self.hero_away.insert(id, pose_on(&targets, source, home));
-            // From rest it waits for the view around it to fade, then travels home.
-            let at = if moving { now } else { now + tokens.hero_hold(reduce) };
+            let flight =
+                Flight { source: inside(source, look_border(&look)), home: inside(home, border_of(&anim.layout)) };
+            self.hero_away.insert(id, pose_on(&targets, source, home, &look));
+            self.flights.insert(id, flight);
+            // From rest it waits for the view around it to fade, then travels home; parts that
+            // follow the flight fade with it instead.
+            let at = if moving || self.holds_parts(id) { now } else { now + tokens.hero_hold(reduce) };
             self.retarget_shown(id, at, reduce);
         }
         stranded
@@ -740,7 +792,7 @@ impl Tree {
     /// Fades hero `id` out where it is, for one going back with nowhere to travel. It lands when
     /// the fade does, or at once when it already shows nothing.
     fn fade_away(&mut self, id: NodeId, now: f64, reduce: bool, stranded: &mut Vec<NodeId>) {
-        self.hero_away.insert(id, [Some(0.), None, None, None, None, None]);
+        self.hero_away.insert(id, animation::only(animation::OPACITY, 0.));
         self.retarget_shown(id, now, reduce);
         if !self.nodes.get(&id).and_then(|n| n.motion.as_ref()).is_some_and(|m| m.state.is_moving()) {
             stranded.push(id);
@@ -754,6 +806,91 @@ impl Tree {
     fn source_rect(&self, backend: &dyn Backend, hero: &crate::element::HeroFrom) -> Option<Rect> {
         let (node, _) = self.keyed(&hero.id)?;
         backend.probe(node).bounds.filter(|r| r.size.width > 0. && r.size.height > 0.)
+    }
+
+    /// The look a hero takes on its source, laid out at `source`: the source's corner radius,
+    /// border and fill as it shows now, at the start of the flight.
+    fn source_look(&self, hero: &crate::element::HeroFrom, source: Rect) -> Values {
+        let style = self
+            .keyed(&hero.id)
+            .and_then(|(n, _)| self.nodes.get(&n)?.props.downcast_ref::<DivProps>().map(|d| d.style.clone()))
+            .unwrap_or_default();
+        let cap = f64::from(source.size.width.min(source.size.height)) / 2.;
+        let mut look = animation::with_look([None; animation::CHANNELS], &style, Some(cap));
+        look[animation::PROGRESS] = Some(0.);
+        look
+    }
+
+    /// The nearest hero above node `n`.
+    fn hero_above(&self, n: NodeId) -> Option<NodeId> {
+        let mut at = self.nodes.get(&n)?.parent;
+        while let Some(p) = at {
+            let node = self.nodes.get(&p)?;
+            if node.props.downcast_ref::<DivProps>().is_some_and(|d| d.hero.is_some()) {
+                return Some(p);
+            }
+            at = node.parent;
+        }
+        None
+    }
+
+    /// Whether parts follow hero `id`'s flight.
+    fn holds_parts(&self, id: NodeId) -> bool {
+        self.parts.keys().any(|p| self.hero_above(*p) == Some(id))
+    }
+
+    /// Records what part `id` shows of its own, for [`Tree::follow_heroes`] to present.
+    fn remember_part(&mut self, id: NodeId, props: &Props, layout: &StyleRefinement) {
+        if props.downcast_ref::<DivProps>().is_some_and(|d| d.hero_part.is_some()) {
+            self.parts.insert(id, (props.clone(), layout.clone()));
+        } else {
+            self.parts.remove(&id);
+        }
+    }
+
+    /// Presents each part of a hero as its flight has it now: its opacity from the hero's
+    /// progress and, while the hero flies, its size from the flight's end it belongs to. Runs
+    /// last in a frame, over what the render and the motions presented.
+    pub(crate) fn follow_heroes(&mut self, now: f64) {
+        self.flights
+            .retain(|id, _| self.nodes.get(id).and_then(|n| n.motion.as_ref()).is_some_and(|m| m.state.is_flying()));
+        let mut ids: Vec<NodeId> = self.parts.keys().copied().collect();
+        ids.sort();
+        for id in ids {
+            let Some(hero) = self.hero_above(id) else { continue };
+            let Some(anim) = self.nodes.get(&hero).and_then(|n| n.motion.as_ref()) else { continue };
+            let progress = anim.state.sample(now)[animation::PROGRESS].unwrap_or(1.);
+            let flight = self.flights.get(&hero).copied();
+            let (props, layout) = &self.parts[&id];
+            let Some(own) = props.downcast_ref::<DivProps>() else { continue };
+            let Some(part) = own.hero_part else { continue };
+            let opacity = part.opacity(progress as f32);
+            let size = flight.map(|f| match part {
+                HeroPart::Source => f.source,
+                HeroPart::Destination => f.home,
+            });
+            let mut div = own.clone();
+            let mut layout = layout.clone();
+            for style in [&mut div.style, &mut layout] {
+                style.opacity = Some(opacity);
+                if let Some(size) = size {
+                    style.size.width = Some(px(size.width).into());
+                    style.size.height = Some(px(size.height).into());
+                }
+            }
+            let props: Props = Rc::new(div);
+            let Some(node) = self.nodes.get_mut(&id) else { continue };
+            if !node.props.props_eq(&*props) {
+                let patch = PropsPatch { old: mem::replace(&mut node.props, props), new: node.props.clone() };
+                self.tx.push(Op::Update { node: id, patch });
+            }
+            if node.layout != layout {
+                node.layout = layout;
+                let node = &self.nodes[&id];
+                let style = self.taffy_style(&node.layout, &node.props, node.boundary);
+                self.needs_layout |= self.taffy.set_style(node.taffy, style).is_ok();
+            }
+        }
     }
 
     /// Advances every motion in flight to `now`: presented values reach the backend as
@@ -793,11 +930,12 @@ impl Tree {
     /// Node `id` with its motions sampled at `now`: its layout takes the presented values at
     /// once, and the props update comes back for the caller's transaction.
     fn present(&mut self, id: NodeId, now: f64) -> Option<Op> {
-        let node = self.nodes.get_mut(&id)?;
-        let anim = node.motion.as_ref()?;
+        let anim = self.nodes.get(&id)?.motion.as_ref()?;
         let (shown_props, shown_layout) =
             shown(&self.lit, &self.pressed, self.hero_away.get(&id), id, &anim.props, &anim.layout);
         let (props, layout) = present_div(&shown_props, &shown_layout, &anim.state.sample(now));
+        self.remember_part(id, &props, &layout);
+        let node = self.nodes.get_mut(&id)?;
         let op = (!node.props.props_eq(&*props)).then(|| {
             let patch = PropsPatch { old: mem::replace(&mut node.props, props), new: node.props.clone() };
             Op::Update { node: id, patch }
@@ -1089,6 +1227,7 @@ impl Tree {
         if is_overlay(el.kind) {
             self.overlays.push(id);
         }
+        self.remember_part(id, &el.props, &el.layout);
         self.tx.push(Op::Create { node: id, kind: el.kind, props: el.props.clone() });
         let style = self.taffy_style(&el.layout, &el.props, None);
         let taffy = if el.measured { self.taffy.new_leaf_with_context(style, id) } else { self.taffy.new_leaf(style) };
@@ -1213,6 +1352,8 @@ impl Tree {
                 self.hovered_groups.remove(&n);
                 self.hero_away.remove(&n);
                 self.hero_home.remove(&n);
+                self.flights.remove(&n);
+                self.parts.remove(&n);
                 self.retired.remove(&n);
                 self.inert.remove(&n);
                 self.painted_at.remove(&n);
@@ -1355,6 +1496,7 @@ impl Tree {
             };
             el.props = Rc::new(canvas::record(paint, el.layout.clone(), w, h, app));
         }
+        self.remember_part(n, &el.props, &el.layout);
         let node = self.nodes.get_mut(&n).expect("node");
         node.motion = motion;
         node.paint = el.paint.clone();
@@ -1788,6 +1930,7 @@ impl App {
         } else {
             tree.release_orphans(self);
         }
+        tree.follow_heroes(window.now());
         tree.dispatch.settle_scopes();
         let held = std::mem::take(&mut window.focus_if_lost) && tree.dispatch.focused().is_some();
         if let Some(node) = window.focus_request.take().filter(|_| !held).and_then(|id| tree.focus_target(&id)) {

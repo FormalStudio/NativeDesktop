@@ -1,9 +1,32 @@
 //! An expanded view presented over a region: a now-playing screen over the page, a detail over
-//! its list. Inside it a `.hero_with(..)` element (the artwork) travels from its source and back,
-//! so the motion says where the view came from, while the backdrop fades in under it on the same
-//! spring. The rest of the view marks itself `.reveal_with(&state)`: it fades in once the hero
-//! has landed and out before the hero leaves, so nothing draws over the hero in flight. The base
-//! stays mounted, keeping its scroll and state, and is hidden once covered.
+//! its list. Inside it a `.hero_with(..)` element travels from its source and back, so the
+//! motion says where the view came from, while the backdrop fades in under it on the same
+//! spring. The base stays mounted, keeping its scroll and state, and is hidden once covered.
+//!
+//! The hero is either a shared element or a container. A shared element (the artwork) flies
+//! alone: the rest of the view marks itself `.reveal_with(&state)` and fades in once the hero has
+//! landed and out before it leaves, so nothing draws over it in flight. A container (a card
+//! opening into its detail) holds the view: it grows from the source's frame, corner radius,
+//! border and fill to its own, and clips what it holds. Inside it, the source's content marked
+//! `.hero_content()` rides along at the source's size and fades out early in the flight, and the
+//! detail marked `.reveal_with(&state)` is laid out at its final size and fades in as the
+//! source's goes, so the container is never empty.
+//!
+//! ```ignore
+//! // A card opening into its detail: the card's frame is keyed "card:7".
+//! presentation("detail", &self.detail).base(grid).content(
+//!     div()
+//!         .absolute()
+//!         .top_0()
+//!         .left_0()
+//!         .size(px(width), px(height))
+//!         .bg(cx.theme().surface.raised)
+//!         .overflow_hidden()
+//!         .hero_with(&self.detail, "card:7")
+//!         .child(card_face(note).hero_content())
+//!         .child(div().absolute().top_0().left_0().size_full().reveal_with(&self.detail).child(editor)),
+//! )
+//! ```
 //!
 //! ```ignore
 //! // The view keeps one handle; open and close it, then render.
@@ -21,14 +44,14 @@
 //! ```
 //!
 //! Interruptible: closing mid-open turns everything around from where it is. Reduce motion
-//! leaves short fades and no travel.
+//! leaves short fades and no travel: a crossfade from the base to the view.
 
 use std::cell::Cell;
 use std::rc::Rc;
 
 use nd_gpui::gpui::Refineable;
 use nd_ui::prelude::*;
-use nd_ui::{Pace, StyleRefinement};
+use nd_ui::{HeroPart, Pace, StyleRefinement};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum Phase {
@@ -201,9 +224,16 @@ impl IntoElement for PresentationView {
 }
 
 pub trait PresentationExt: Styled + Sized {
-    /// Fades in once a presentation's hero has landed and out before it leaves, so it never
-    /// draws over the hero in flight.
+    /// Beside a shared element, fades in once a presentation's hero has landed and out before
+    /// it leaves, so it never draws over the hero in flight. Inside a container hero it is the
+    /// destination's content ([`HeroPart::Destination`]): laid out at its final size while the
+    /// container grows around it, and fading in as the source's content fades out.
     fn reveal_with(self, state: &Presentation) -> Self;
+
+    /// The source's content inside a container hero ([`HeroPart::Source`]): a card's title and
+    /// preview, pinned to the container's top-left at the card's size, fading out early as the
+    /// container leaves the card and back in as it lands on it.
+    fn hero_content(self) -> Self;
 
     /// The presentation's shared element: it travels from the element keyed `from` as the
     /// presentation opens and back onto it as it closes ([`Div::hero_from`]), and the
@@ -214,7 +244,14 @@ pub trait PresentationExt: Styled + Sized {
 impl PresentationExt for Div {
     fn reveal_with(self, state: &Presentation) -> Self {
         let pace = if state.is_open() { Animation::Themed(Pace::Settled) } else { Animation::fast() };
-        self.opacity(if state.is_open() { 1. } else { 0. }).animate(pace).enter_from(|p| p.opacity(0.))
+        self.opacity(if state.is_open() { 1. } else { 0. })
+            .animate(pace)
+            .enter_from(|p| p.opacity(0.))
+            .hero_part(HeroPart::Destination)
+    }
+
+    fn hero_content(self) -> Self {
+        self.absolute().top_0().left_0().hero_part(HeroPart::Source)
     }
 
     fn hero_with(self, state: &Presentation, from: impl Into<SharedString>) -> Self {
