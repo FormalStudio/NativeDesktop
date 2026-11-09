@@ -27,7 +27,7 @@ pub use matugen::MatugenTheme;
 pub use palette::{Palette, PaletteRefinement, Scheme, SchemePalettes};
 pub use preset::{
     ControlHeights, Fonts, GlassVariant, Material, Materials, Metrics, Motion, Preset, Radii, Spacing, Spring,
-    SystemMetrics, TextStyle, TextStyles, TypeScale, TypeStyle,
+    SystemMetrics, TextStyle, TextStyles, TypeScale, TypeStyle, reduce_motion_or_env,
 };
 pub use refinement::{Appearance, ThemeOverride, ThemeRefinement};
 pub use registry::{NativeTheme, OsTheme, ThemeRegistry};

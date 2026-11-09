@@ -5,8 +5,10 @@
 //! it from where layout had it to where layout puts it now. The retained tree samples every motion at the frame's target time and sends the presented values
 //! to the backend as ordinary props, so both backends animate the same way and a clean window
 //! draws nothing. A new target mid-flight starts from the presented value and, for springs, the
-//! velocity, so motion is interruptible. With reduce motion on, movement (offset, scale, size)
-//! jumps and only opacity still fades.
+//! velocity, so motion is interruptible. With reduce motion on nothing travels: a move that
+//! would show (more than [`DISSOLVE_DISTANCE`] points, or a tenth of a scale) dissolves instead,
+//! fading out where the element was and back in where it lands, an entrance or exit that would
+//! travel only fades, and smaller moves (a hover lift, a press dip) take their place at once.
 
 use std::time::Duration;
 
@@ -113,18 +115,39 @@ impl Default for MotionTokens {
 }
 
 /// The fade reduce motion keeps when the theme zeroed its durations.
-const REDUCED_FADE: Duration = Duration::from_millis(150);
+pub const REDUCED_FADE: Duration = Duration::from_millis(150);
+
+/// Under reduce motion, a move longer than this many points dissolves; a shorter one jumps.
+pub const DISSOLVE_DISTANCE: f64 = 12.;
+/// The same for a change of scale.
+const DISSOLVE_SCALE: f64 = 0.1;
 
 impl MotionTokens {
     /// `animation` with a themed pace replaced by its timing. With reduce motion a themed
-    /// animation is a short fade: movement jumps anyway, opacity still eases.
+    /// animation or a spring is the platform's fast fade on an ease-out: nothing travels, and
+    /// a dissolve or a fade has no velocity to carry.
     pub fn resolve(&self, animation: Animation, reduce: bool) -> Animation {
-        let Animation::Themed(pace) = animation else { return animation };
-        if reduce {
-            let fade = if self.fast.is_zero() { REDUCED_FADE } else { self.fast };
-            return Animation::timed(fade, self.curve);
-        }
         let k = slowdown();
+        if reduce {
+            return match animation {
+                Animation::Themed(_) | Animation::Spring { .. } => {
+                    let fade = if self.fast.is_zero() { REDUCED_FADE } else { self.fast };
+                    Animation::ease_out(fade.mul_f64(k))
+                }
+                Animation::Timed { duration, curve } => Animation::timed(duration.mul_f64(k), curve),
+                Animation::Delayed { delay, duration, curve } => {
+                    Animation::Delayed { delay: delay.mul_f64(k), duration: duration.mul_f64(k), curve }
+                }
+            };
+        }
+        let pace = match animation {
+            Animation::Themed(pace) => pace,
+            Animation::Timed { duration, curve } => return Animation::timed(duration.mul_f64(k), curve),
+            Animation::Delayed { delay, duration, curve } => {
+                return Animation::Delayed { delay: delay.mul_f64(k), duration: duration.mul_f64(k), curve };
+            }
+            Animation::Spring { response, damping } => return Animation::spring(response * k, damping),
+        };
         match pace {
             Pace::Fast => Animation::timed(self.fast.mul_f64(k), self.curve),
             Pace::Normal => Animation::timed(self.normal.mul_f64(k), self.curve),
@@ -150,8 +173,8 @@ impl MotionTokens {
     }
 }
 
-/// `ND_ANIMATION_SLOWDOWN=<factor>` stretches every themed animation, for a test or a person to
-/// watch it frame by frame.
+/// `ND_ANIMATION_SLOWDOWN=<factor>` stretches every animation, themed or given explicitly, for a
+/// test or a person to watch it frame by frame.
 fn slowdown() -> f64 {
     static K: std::sync::LazyLock<f64> = std::sync::LazyLock::new(|| {
         std::env::var("ND_ANIMATION_SLOWDOWN").ok().and_then(|v| v.parse().ok()).filter(|v| *v >= 1.).unwrap_or(1.)
@@ -329,8 +352,29 @@ pub(crate) fn present(style: &mut StyleRefinement, transform: &mut Transform, va
 
 #[derive(Clone, Copy, Debug)]
 enum Motion {
-    Timed { from: f64, to: f64, start: f64, duration: f64, curve: Curve },
+    Timed {
+        from: f64,
+        to: f64,
+        start: f64,
+        duration: f64,
+        curve: Curve,
+    },
     Spring(SpringMotion),
+    /// Shows `from` until `at`, then `to`: a move reduce motion dissolves, switching places
+    /// while the element is faded out.
+    Step {
+        from: f64,
+        to: f64,
+        at: f64,
+    },
+    /// The opacity of a dissolve: from `from` down to nothing by `at`, then up to `to` by `end`.
+    Dip {
+        from: f64,
+        to: f64,
+        start: f64,
+        at: f64,
+        end: f64,
+    },
 }
 
 impl Motion {
@@ -370,13 +414,18 @@ impl Motion {
                 (at(now), (at(now + dt) - at(now)) / dt)
             }
             Motion::Spring(s) => s.sample(now),
+            Motion::Step { from, to, at } => (if now < at { from } else { to }, 0.),
+            Motion::Dip { from, to, start, at, end } => {
+                let ease = |t: f64, a: f64, b: f64| f64::from(Curve::EaseOut.at(((t - a) / (b - a).max(1e-9)) as f32));
+                if now < at { (from * (1. - ease(now, start, at)), 0.) } else { (to * ease(now, at, end), 0.) }
+            }
         }
     }
 
     #[cfg(test)]
     fn target(&self) -> f64 {
         match *self {
-            Motion::Timed { to, .. } => to,
+            Motion::Timed { to, .. } | Motion::Step { to, .. } | Motion::Dip { to, .. } => to,
             Motion::Spring(s) => s.target(),
         }
     }
@@ -385,6 +434,8 @@ impl Motion {
     fn settled(&self, now: f64, epsilon: f64) -> bool {
         match *self {
             Motion::Timed { start, duration, .. } => now >= start + duration,
+            Motion::Step { at, .. } => now >= at,
+            Motion::Dip { end, .. } => now >= end,
             Motion::Spring(s) => {
                 let (x, v) = s.sample(now);
                 (x - s.target()).abs() < epsilon && v.abs() < epsilon * 10.
@@ -404,6 +455,22 @@ fn epsilon(channel: usize) -> f64 {
 
 fn moves(channel: usize) -> bool {
     channel != OPACITY
+}
+
+/// Whether reduce motion dissolves a move of `channel` from `from` to `to` rather than jumping.
+fn shows(channel: usize, from: f64, to: f64) -> bool {
+    let limit = if channel == SCALE { DISSOLVE_SCALE } else { DISSOLVE_DISTANCE };
+    (to - from).abs() > limit
+}
+
+/// How long a dissolve on `animation` fades out, then in: half its time out, all of it in.
+fn dissolve_times(animation: Animation) -> (f64, f64) {
+    let fade = match animation {
+        Animation::Timed { duration, .. } | Animation::Delayed { duration, .. } => duration,
+        _ => REDUCED_FADE,
+    };
+    let fade = fade.as_secs_f64();
+    (fade / 2., fade)
 }
 
 /// One element's motions in flight.
@@ -428,31 +495,77 @@ impl MotionState {
                 None,
                 None,
             ];
-            for (c, from) in from.into_iter().enumerate() {
-                if let (Some(from), Some(to)) = (from, targets[c])
-                    && !(reduce && moves(c))
-                    && from != to
-                {
-                    state.motions[c] = Some(Motion::start(spec.animation, from, to, 0., now));
-                }
-            }
+            state.start_from(&from, now, reduce);
         }
         state
     }
 
+    /// Where channel `c` shows at `now` and how fast it moves.
+    fn current(&self, c: usize, now: f64) -> Option<(f64, f64)> {
+        self.motions[c].map(|m| m.sample(now)).or(self.targets[c].map(|v| (v, 0.)))
+    }
+
+    /// Whether channel `c` holds its old place in a dissolve still fading out.
+    fn holding(&self, c: usize, now: f64) -> bool {
+        matches!(self.motions[c], Some(Motion::Step { at, .. }) if now < at)
+    }
+
+    /// Fades the element out from where its opacity is and back in to `to`, joining a dissolve
+    /// still fading out. Returns when it switches places, or `None` when the animation has no
+    /// time to dissolve in.
+    fn dissolve(&mut self, to: Option<f64>, now: f64) -> Option<f64> {
+        if let Some(Motion::Dip { at, to: ref mut target, .. }) = self.motions[OPACITY]
+            && now < at
+        {
+            *target = to.unwrap_or(1.);
+            return Some(at);
+        }
+        let (out, back) = dissolve_times(self.animation);
+        if out <= 0. {
+            return None;
+        }
+        let from = self.current(OPACITY, now).map_or(1., |(o, _)| o);
+        let at = now + out;
+        self.motions[OPACITY] = Some(Motion::Dip { from, to: to.unwrap_or(1.), start: now, at, end: at + back });
+        Some(at)
+    }
+
     /// The element rendered again with `targets`: channels whose target moved start towards
-    /// it from where they are now.
+    /// it from where they are now. Under reduce motion a move that shows dissolves and a
+    /// smaller one jumps.
     pub fn retarget(&mut self, animation: Animation, targets: Values, now: f64, reduce: bool) {
         self.animation = animation;
+        let mut switch = None;
+        if reduce {
+            let travels = (OFFSET_X..CHANNELS).any(|c| match (self.current(c, now), targets[c]) {
+                (Some((from, _)), Some(to)) if targets[c] != self.targets[c] => {
+                    shows(c, from, to) || self.holding(c, now)
+                }
+                _ => false,
+            });
+            if travels {
+                switch = self.dissolve(targets[OPACITY], now);
+            }
+        }
         for (c, &target) in targets.iter().enumerate() {
             if target == self.targets[c] {
                 continue;
             }
-            let current = self.motions[c].map(|m| m.sample(now)).or(self.targets[c].map(|v| (v, 0.)));
+            if c == OPACITY
+                && let Some(Motion::Dip { end, to: ref mut dip_to, .. }) = self.motions[OPACITY]
+                && now < end
+                && let Some(to) = target
+            {
+                *dip_to = to;
+                continue;
+            }
+            let current = self.current(c, now);
             self.motions[c] = match (current, target) {
-                (Some((from, velocity)), Some(to)) if !(reduce && moves(c)) && from != to => {
-                    Some(Motion::start(animation, from, to, velocity, now))
-                }
+                (Some((from, velocity)), Some(to)) if from != to => match (reduce && moves(c), switch) {
+                    (false, _) => Some(Motion::start(animation, from, to, velocity, now)),
+                    (true, Some(at)) => Some(Motion::Step { from, to, at }),
+                    (true, None) => None,
+                },
                 _ => None,
             };
         }
@@ -464,9 +577,30 @@ impl MotionState {
     }
 
     /// The element's layout frame moved by `by`: its offset starts from where it showed before
-    /// the move, so it travels on from there to its own offset with the velocity it had.
+    /// the move, so it travels on from there to its own offset with the velocity it had. Under
+    /// reduce motion a move that shows dissolves, and a smaller one jumps.
     pub fn shift(&mut self, animation: Animation, by: (f64, f64), now: f64, reduce: bool) {
         if reduce {
+            let held = self.holding(OFFSET_X, now) || self.holding(OFFSET_Y, now);
+            if !held && !shows(OFFSET_X, 0., by.0) && !shows(OFFSET_Y, 0., by.1) {
+                return;
+            }
+            let previous = self.animation;
+            self.animation = animation;
+            let switch = self.dissolve(self.targets[OPACITY], now);
+            self.animation = previous;
+            let Some(at) = switch else { return };
+            for (c, by) in [(OFFSET_X, by.0), (OFFSET_Y, by.1)] {
+                let Some(to) = self.targets[c] else { continue };
+                let from = match self.motions[c] {
+                    Some(Motion::Step { from, at, .. }) if now < at => from,
+                    Some(m) => m.sample(now).0,
+                    None => to,
+                };
+                if from + by != to {
+                    self.motions[c] = Some(Motion::Step { from: from + by, to, at });
+                }
+            }
             return;
         }
         for (c, by) in [(OFFSET_X, by.0), (OFFSET_Y, by.1)] {
@@ -477,13 +611,18 @@ impl MotionState {
     }
 
     /// Starts towards `pose` from where the element is, for one on its way out. Reduce motion
-    /// leaves its offset and scale where they are and only fades it. False when nothing moves.
+    /// leaves its offset and scale where they are and fades it out instead, to the pose's
+    /// opacity or to nothing. False when nothing moves.
     pub fn exit(&mut self, pose: Pose, now: f64, reduce: bool) -> bool {
         let mut targets = self.targets;
         if let Some(o) = pose.opacity {
             targets[OPACITY] = Some(f64::from(o));
         }
-        if !reduce {
+        if reduce {
+            if pose.opacity.is_none() && (pose.offset.is_some() || pose.scale.is_some()) {
+                targets[OPACITY] = Some(0.);
+            }
+        } else {
             if let Some((x, y)) = pose.offset {
                 targets[OFFSET_X] = Some(f64::from(x));
                 targets[OFFSET_Y] = Some(f64::from(y));
@@ -500,8 +639,17 @@ impl MotionState {
         self.targets
     }
 
-    /// Starts every channel `from` names towards its target, as an enter pose does.
+    /// Starts every channel `from` names towards its target, as an enter pose does. Under
+    /// reduce motion one that would travel fades in where it lands instead, from the pose's
+    /// opacity or from nothing.
     pub fn start_from(&mut self, from: &Values, now: f64, reduce: bool) {
+        let mut from = *from;
+        if reduce
+            && from[OPACITY].is_none()
+            && (OFFSET_X..CHANNELS).any(|c| matches!((from[c], self.targets[c]), (Some(f), Some(t)) if f != t))
+        {
+            from[OPACITY] = Some(0.);
+        }
         for (c, from) in from.iter().enumerate() {
             if let (Some(from), Some(to)) = (*from, self.targets[c])
                 && !(reduce && moves(c))
@@ -634,8 +782,51 @@ mod tests {
         assert!((again - (mid - 10.)).abs() < 1e-9, "no jump: {mid} then {again}");
         assert!((v2 - v).abs() < 1e-6);
         let mut reduced = MotionState::new(spec(anim), opacity(1.), 0., true);
-        reduced.shift(anim, (0., 40.), 0., true);
-        assert!(!reduced.is_moving(), "reduce motion jumps");
+        reduced.shift(anim, (0., 6.), 0., true);
+        assert!(!reduced.is_moving(), "reduce motion jumps a small move");
+    }
+
+    #[test]
+    fn reduce_motion_dissolves_a_move_that_shows() {
+        let fade = MotionTokens::default().resolve(Animation::spring(0.3, 1.), true);
+        assert_eq!(fade, Animation::ease_out(Duration::from_millis(150)), "a spring becomes the fast fade");
+        let mut state = MotionState::new(spec(fade), opacity(1.), 0., true);
+        state.shift(fade, (0., 40.), 0., true);
+        let out = state.sample(0.05);
+        assert_eq!(out[OFFSET_Y], Some(40.), "held where it was while it fades out");
+        assert!(out[OPACITY].unwrap() < 1., "{out:?}");
+        let gone = state.sample(0.075);
+        assert!(gone[OPACITY].unwrap() < 1e-3, "out by the switch: {gone:?}");
+        assert_eq!(gone[OFFSET_Y], Some(0.), "then at its new place");
+        let back = state.sample(0.15);
+        assert!(back[OPACITY].unwrap() > 0. && back[OPACITY].unwrap() < 1., "fading in: {back:?}");
+        state.shift(fade, (0., -3.), 0.02, true);
+        assert_eq!(state.sample(0.03)[OFFSET_Y], Some(37.), "a move mid fade-out keeps the old place");
+        assert!(!state.settle(0.2));
+        assert!(state.settle(0.225), "out for half the fade and in for all of it");
+        assert_eq!(state.sample(0.3), opacity(1.));
+
+        let mut card = MotionState::new(spec(fade), opacity(1.), 0., true);
+        let mut lifted = opacity(1.);
+        lifted[OFFSET_Y] = Some(-3.);
+        card.retarget(fade, lifted, 0., true);
+        assert!(!card.is_moving(), "a hover lift jumps");
+        let mut moved = opacity(1.);
+        moved[OFFSET_X] = Some(200.);
+        card.retarget(fade, moved, 0., true);
+        assert_eq!(card.sample(0.05)[OFFSET_X], Some(0.), "a long move dissolves");
+        assert_eq!(card.sample(0.1)[OFFSET_X], Some(200.));
+    }
+
+    #[test]
+    fn under_reduce_motion_an_entrance_that_travels_fades_in() {
+        let anim = Animation::ease_out(Duration::from_millis(150));
+        let rise = Pose::default().offset(px(0.), px(12.)).scale(0.9);
+        let state = MotionState::new(MotionSpec { enter: Some(rise), ..spec(anim) }, opacity(1.), 0., true);
+        assert_eq!(state.sample(0.)[OPACITY], Some(0.), "from nothing");
+        assert_eq!(state.sample(0.)[OFFSET_Y], Some(0.), "where it lands");
+        assert_eq!(state.sample(0.)[SCALE], Some(1.));
+        assert_eq!(state.sample(0.15)[OPACITY], Some(1.));
     }
 
     #[test]
@@ -646,8 +837,12 @@ mod tests {
         assert!(state.exit(pose, 0., true));
         assert_eq!(state.target(OPACITY), Some(0.));
         assert_eq!(state.target(SCALE), None, "the scale stays");
+        let mut shrink = MotionState::new(spec(anim), opacity(1.), 0., true);
+        assert!(shrink.exit(Pose::default().scale(0.5), 0., true), "a pose that only shrinks fades out");
+        assert_eq!(shrink.target(OPACITY), Some(0.));
+        assert_eq!(shrink.target(SCALE), None);
         let mut still = MotionState::new(spec(anim), opacity(1.), 0., true);
-        assert!(!still.exit(Pose::default().scale(0.5), 0., true), "nothing left to animate");
+        assert!(!still.exit(Pose::default(), 0., true), "nothing left to animate");
     }
 
     #[test]

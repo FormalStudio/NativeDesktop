@@ -25,7 +25,9 @@ pub mod transaction;
 mod tree;
 mod window;
 
-pub use animation::{Animation, AnimationEnded, Curve, MotionTokens, Pace, Pose, Transform};
+pub use animation::{
+    Animation, AnimationEnded, Curve, DISSOLVE_DISTANCE, MotionTokens, Pace, Pose, REDUCED_FADE, Transform,
+};
 pub use app::{AnyView, App, Context, Entity, EntityId, Render, Subscription, WeakEntity};
 pub use canvas::{Canvas, CanvasPath, CanvasProps, CanvasRect, CanvasResized, PaintOp, Painter, PathStep, canvas};
 pub use container::ContainerElement;
@@ -69,8 +71,8 @@ pub mod prelude {
     };
     pub use crate::surface::{SurfaceSource, native_surface};
     pub use crate::{
-        Animation, Canvas, CanvasPath, Curve, LinkClicked, Painter, Pose, RichText, Span, TextColor, canvas, rich_text,
-        span,
+        Animation, AnimationEnded, Canvas, CanvasPath, Curve, LinkClicked, Painter, Pose, RichText, Span, TextColor,
+        canvas, rich_text, span,
     };
     pub use crate::{
         AnyElement, AnyView, App, Button, ClickEvent, Context, Div, Entity, EntityId, FluentBuilder,

@@ -31,7 +31,7 @@ use objc2::{DefinedClass, MainThreadOnly, Message, define_class, msg_send};
 use objc2_app_kit::{
     NSAnimatablePropertyContainer, NSAnimationContext, NSAppearanceCustomization, NSBackingStoreType, NSColor, NSEvent,
     NSEventMask, NSEventModifierFlags, NSEventType, NSPanel, NSPopover, NSPopoverBehavior, NSResponder, NSView,
-    NSViewController, NSWindow, NSWindowOrderingMode, NSWindowStyleMask, NSWorkspace,
+    NSViewController, NSWindow, NSWindowOrderingMode, NSWindowStyleMask,
 };
 use objc2_foundation::{MainThreadMarker, NSPoint, NSRect, NSRectEdge, NSSize};
 
@@ -46,10 +46,6 @@ const TOOLTIP_GAP: f64 = 6.; // nd-lint: allow, AppKit has no tooltip offset to 
 const PANEL_TOP: f64 = 0.18;
 /// How long a panel takes to fade in or out, in seconds.
 const PANEL_FADE: f64 = 0.18;
-
-fn fades() -> bool {
-    !NSWorkspace::sharedWorkspace().accessibilityDisplayShouldReduceMotion()
-}
 
 /// Animates `panel`'s alpha to `to`, then runs `done`.
 fn fade(panel: &NSPanel, to: f64, done: impl Fn() + 'static) {
@@ -214,7 +210,8 @@ impl OverlayNative {
                 if opening {
                     unsafe { owner.addChildWindow_ordered(panel, NSWindowOrderingMode::Above) };
                 }
-                let fade_in = opening && self.props.kind == OverlayKind::Panel && fades();
+                // A fade moves nothing, so it stays with reduce motion on too.
+                let fade_in = opening && self.props.kind == OverlayKind::Panel;
                 if fade_in {
                     panel.setAlphaValue(0.);
                 }
@@ -242,7 +239,7 @@ impl OverlayNative {
                 if let Some(parent) = &parent {
                     parent.removeChildWindow(panel);
                 }
-                if parent.is_some() && self.props.kind == OverlayKind::Panel && panel.isVisible() && fades() {
+                if parent.is_some() && self.props.kind == OverlayKind::Panel && panel.isVisible() {
                     // The panel window outlives the node for the fade: the block holds it.
                     let closing = panel.retain();
                     // Reopened while it faded: it is a child window again and stays up.

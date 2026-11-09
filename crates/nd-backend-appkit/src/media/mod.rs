@@ -18,7 +18,9 @@ mod video;
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 
-use nd_components::media::{AvatarKind, ChatBubbleKind, EqualizerKind, ImageKind, LyricsKind, SeekBarKind, ShelfKind, VideoKind};
+use nd_components::media::{
+    AvatarKind, ChatBubbleKind, EqualizerKind, ImageKind, LyricsKind, SeekBarKind, ShelfKind, VideoKind,
+};
 use nd_ui::prelude::Hsla;
 use objc2::rc::Retained;
 use objc2::{AnyThread, DefinedClass, MainThreadOnly, define_class, msg_send};
@@ -222,7 +224,8 @@ pub(crate) fn ns(color: Hsla) -> Retained<NSColor> {
 }
 
 pub(crate) fn reduce_motion() -> bool {
-    NSWorkspace::sharedWorkspace().accessibilityDisplayShouldReduceMotion()
+    let os = NSWorkspace::sharedWorkspace().accessibilityDisplayShouldReduceMotion();
+    nd_theme::reduce_motion_or_env(Some(os)) == Some(true)
 }
 
 /// The view's backing scale; 2 before it is in a window, the common Retina case.

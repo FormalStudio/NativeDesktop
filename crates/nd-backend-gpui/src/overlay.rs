@@ -430,7 +430,7 @@ impl Build<'_> {
         }
         // Popovers, menus and panels come in with the look's entrance: a short rise and a fade
         // over its normal duration (WinUI's "fast out, slow in", 167 ms; the panel takes the slow
-        // one), or at once when the OS has animations off. Tooltips just appear.
+        // one), or only the fade when the OS has animations off. Tooltips just appear.
         let content = content.children(children);
         let reduce = self.backend.platform_reduce_motion() == Some(true);
         // A cover is the whole window: it fades, it does not rise.
@@ -441,12 +441,20 @@ impl Build<'_> {
         };
         let content = if let Some((t, _)) = exit {
             content.opacity(1. - t).mt(px(rise * t)).into_any_element()
-        } else if passive || reduce || adwaita {
+        } else if passive || adwaita {
             // GTK 4's popovers open at once.
             content.into_any_element()
         } else {
             let fluent = theme.preset == nd_theme::Preset::Fluent;
-            let duration = if props.kind == OverlayKind::Panel { theme.motion.slow } else { theme.motion.normal };
+            // Reduce motion keeps the fade and leaves out the rise.
+            let rise = if reduce { 0. } else { rise };
+            let duration = if reduce {
+                nd_ui::REDUCED_FADE
+            } else if props.kind == OverlayKind::Panel {
+                theme.motion.slow
+            } else {
+                theme.motion.normal
+            };
             let ease: fn(f32) -> f32 = if fluent {
                 |t| crate::forms::look::cubic_bezier([0., 0., 0., 1.], t)
             } else {

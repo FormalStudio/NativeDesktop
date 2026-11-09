@@ -5,6 +5,24 @@ and the one it moves to.
 
 ## Unreleased
 
+- Reduce motion dissolves instead of jumping, as Apple's guidance asks. A move that would show
+  (more than 12 points of offset, size or layout, or a tenth of a scale) fades out where it was
+  and back in where it lands; a smaller one (a hover lift, a press dip) takes its place at once;
+  an entrance or exit whose pose travels fades from or to nothing; a shared element fades in
+  where it lands and out where it is, so a `presentation` crossfades over its base. Paced
+  animations and springs run on the platform's fast duration on an ease-out. `tile_grid` tiles
+  changing slots dissolve and the grid's height jumps. AppKit panels and the GPUI backend's
+  popovers, menus and panels keep their fade (GPUI drops the rise). The GPUI backend now tells
+  `glides` under reduce motion too, so a dissolve starts where the element was.
+- `ND_REDUCE_MOTION=1` or `0` stands in for the system's reduce motion setting on every
+  backend, to watch either mode without changing it.
+- `on_animation_end` waits for the node to be at rest after its frame renders: a value that
+  settles in the frame a render starts it again (the next leg of a crossfade) no longer reports
+  an end.
+- A shared element with no source on screen rises into place as it fades in, and fades out
+  where it is going back.
+- `ND_ANIMATION_SLOWDOWN` stretches explicit animations and springs too, not only paced ones.
+- `AnimationEnded` is in the prelude.
 - `markdown_editor` previews live, as Obsidian and Bear do: outside the paragraphs the selection
   touches (while the area has focus), `#`, emphasis delimiters, backticks and a link's brackets
   and target take no room, a bullet shows as a dot, `- [ ]` and `- [x]` as a box a click ticks

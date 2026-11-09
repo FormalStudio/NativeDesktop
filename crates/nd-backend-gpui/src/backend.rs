@@ -407,6 +407,7 @@ impl GpuiBackend {
     }
 
     pub(crate) fn set_os_reduce_motion(&self, reduce: Option<bool>) {
+        let reduce = nd_theme::reduce_motion_or_env(reduce);
         self.gestures.set_reduce_motion(reduce == Some(true));
         let mut state = self.state.borrow_mut();
         let mut os = state.theme.os().clone();

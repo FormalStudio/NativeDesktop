@@ -16,8 +16,8 @@ gets the platform's timing for it:
 | `Animation::natural()` | interruptible moves, the platform spring | response 0.35 | response 0.2 | response 0.3 |
 
 The curve is `CAMediaTimingFunction`'s default on macOS, ease-out-cubic on GNOME and WinUI's
-entrance curve on Windows. With reduce motion on, every paced animation becomes a short fade:
-offsets, scales and sizes jump, and opacity still eases. `.scale(..)` scales an element about
+entrance curve on Windows. With reduce motion on nothing travels: see
+[Reduce motion](#reduce-motion). `.scale(..)` scales an element about
 its centre on both backends. An element's offset and scale move its hit area with it, so a click
 lands on what is drawn under the pointer. Hover follows the layout box on AppKit.
 
@@ -31,8 +31,33 @@ div()
 has a reason to differ from the platform. `Animation::spring(response, damping)` takes Apple's
 terms; `Animation::spring_physics(stiffness, damping)` takes a hand-written integrator's k and c
 with a mass of 1, so a spec written as "k 420, c 31" carries over as it stands.
-`ND_ANIMATION_SLOWDOWN=8` stretches every paced animation eight times, to watch one frame by
-frame.
+`ND_ANIMATION_SLOWDOWN=8` stretches every animation eight times, paced or given explicitly, to
+watch one frame by frame. `ND_REDUCE_MOTION=1` (or `0`) stands in for the system's reduce motion setting, so either
+mode can be watched without changing it.
+
+## Reduce motion
+
+With the user's reduce motion setting on, nd follows Apple's guidance: movement is replaced by
+dissolves, never by jumps. The rule lives in the motion layer, so every element, component and
+backend gets it alike:
+
+- A paced animation or a spring becomes the platform's fast duration (150 ms on macOS) on an
+  ease-out. Fades keep their timing; only travel goes.
+- A move that would show, more than 12 points (`DISSOLVE_DISTANCE`) or a tenth of a scale,
+  dissolves: the element fades out where it was over half the fade, switches to its new offset,
+  scale, size or layout place while it shows nothing, and fades in there over the whole fade.
+  A further move while it is still fading out keeps it at the old place and joins the same
+  dissolve.
+- A smaller move (a hover lift, a press dip, a few points of reflow while a window resizes)
+  takes its new place at once.
+- An entrance or exit whose pose travels only fades, from or to the pose's opacity, or from
+  or to nothing when the pose has none.
+- A shared element fades in where it lands and fades out where it is when it goes back, so a
+  presentation crossfades over its base.
+
+Size an element by what it draws: a container that only holds its children (a grid's height,
+say) should not animate its size under reduce motion, or the dissolve takes every child with
+it. `cx.reduce_motion()` says whether the setting is on.
 
 ## Entering and leaving
 
@@ -52,7 +77,7 @@ div()
 
 Both run on `.animate`'s animation, a short ease-out without one. The pose's values are the
 element's own: an offset in the pose replaces the element's offset rather than adding to it.
-With reduce motion on, an exit only fades.
+With reduce motion on, an entrance or exit only fades.
 
 ## Layout animation
 
@@ -61,8 +86,8 @@ sibling inserted or removed before it, a grid reflowing for a new width. The tre
 frame with the last one and runs the element's offset from the old place to its own, so the
 glide adds to any offset the element sets itself, and a new move mid-flight turns it from where
 it is. Sizes given in points animate as with `.animate`, which takes the same animation when it
-is not set. Nothing glides on the first layout after mounting, and with reduce motion on,
-layout jumps.
+is not set. Nothing glides on the first layout after mounting, and with reduce motion on, a
+move that shows dissolves.
 
 ```rust
 v_flex().children(notes.iter().map(|note| {
@@ -77,7 +102,9 @@ v_flex().children(notes.iter().map(|note| {
 `tile_grid` uses all three: tiles move to new slots on `.reflow(animation)` (the platform spring
 by default), new tiles fade and grow in, removed ones fade and shrink where they stood, and the
 grid's height follows. The first width it learns places the tiles at once. Tiles sit at their
-slots in layout and glide with `animate_layout`, so they hover where they are drawn too.
+slots in layout and glide with `animate_layout`, so they hover where they are drawn too. Under
+reduce motion tiles changing slots dissolve, new and removed ones only fade, and the grid's
+height jumps.
 
 ## Hover groups
 
@@ -156,7 +183,8 @@ div().size(px(480.)).child(
 ```
 
 The element shows nothing on its first frame, while its own frame is laid out. Then it sits on
-the source for the fast pace and travels. With reduce motion on, it appears in place.
+the source for the fast pace and travels. With reduce motion on, it fades in where it lands, and
+going back it fades out where it is.
 
 ## Presentations
 
@@ -170,7 +198,8 @@ rest of the content, marked `.reveal_with(&state)`, fades in once the hero has l
 (`Pace::Settled`). Closing runs backwards: the revealed content fades first, then the hero
 travels home while the backdrop fades out with it (`Pace::Exit`). The hero is never half
 transparent and nothing draws over it in flight. Closing mid-open turns everything around from
-where it is.
+where it is. With reduce motion on, the backdrop, the hero and the revealed content fade
+together, a crossfade from the base to the presentation and back.
 
 ```rust
 // In the view: self.expanded = Presentation::new();

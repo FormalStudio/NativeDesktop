@@ -222,3 +222,28 @@ fn a_released_tile_slides_home_from_the_pointer() {
     settle(&mut cx);
     assert_eq!(shown(&cx, b), (122., 0.));
 }
+
+#[test]
+fn under_reduce_motion_tiles_dissolve_into_new_slots() {
+    let (mut cx, handle) = open_pinned(&["a", "b", "c"]);
+    cx.set_reduce_motion(true);
+    let (a, b) = (node(&cx, "a"), node(&cx, "b"));
+    let grid = cx.backend().parent(b).expect("grid");
+    let height = cx.backend().frame(grid).expect("laid out").size.height;
+    set_tiles(&mut cx, &handle, &["b", "c"]);
+    assert_eq!(props(&cx, a).transform.scale, 1., "a removed tile does not shrink");
+    assert_eq!(shown(&cx, b), (122., 0.), "a moved tile holds its old slot");
+    cx.advance_clock(0.05);
+    cx.frame();
+    assert_eq!(shown(&cx, b), (122., 0.), "while it fades out");
+    assert!(props(&cx, b).style.opacity.unwrap() < 1.);
+    assert!(props(&cx, a).style.opacity.unwrap() < 1., "the removed one fades");
+    cx.advance_clock(0.05);
+    cx.frame();
+    assert_eq!(shown(&cx, b), (0., 0.), "then shows in the new one");
+    assert!(props(&cx, b).style.opacity.unwrap() < 1., "fading in");
+    assert_eq!(cx.backend().frame(grid).expect("laid out").size.height, height, "one row still");
+    settle(&mut cx);
+    assert_eq!(props(&cx, b).style.opacity.unwrap_or(1.), 1.);
+    assert!(!cx.backend().is_live(a));
+}

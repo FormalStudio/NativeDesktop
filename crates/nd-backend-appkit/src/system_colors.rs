@@ -113,7 +113,7 @@ pub fn os_theme(mtm: MainThreadMarker) -> OsTheme {
         control_small: control_height(mtm, NSControlSize::Small),
         control_regular: control_height(mtm, NSControlSize::Regular),
         control_large: control_height(mtm, NSControlSize::Large),
-        reduce_motion: Some(NSWorkspace::sharedWorkspace().accessibilityDisplayShouldReduceMotion()),
+        reduce_motion: Some(crate::media::reduce_motion()),
     };
     os.fonts = nd_theme::fonts::resolve();
     os

@@ -30,7 +30,7 @@ fn set_open(rig: &mut Rig<Shown>, open: bool) {
 }
 
 #[test]
-fn reduce_motion_never_draws_the_hero_big_after_close() {
+fn reduce_motion_crossfades_the_hero_and_never_brightens_it_after_close() {
     let mut rig = Rig::sized(Size { width: 480., height: 640. }, |_| Shown { expanded: Presentation::new() }, view);
     rig.cx.set_reduce_motion(true);
     set_open(&mut rig, true);
@@ -39,19 +39,26 @@ fn reduce_motion_never_draws_the_hero_big_after_close() {
         rig.cx.frame();
     }
     let cover = rig.node("cover");
-    assert_eq!(rig.props::<DivProps>("cover").style.opacity, None, "shown in place");
+    let open = rig.props::<DivProps>("cover");
+    assert_eq!(open.style.opacity.unwrap_or(1.), 1., "faded in");
+    assert_eq!(open.transform.offset, (0., 0.), "in place");
     set_open(&mut rig, false);
     let mut frames = 0;
+    let mut last = 1.;
     while rig.state().expanded.is_shown() {
         rig.cx.frame();
         if let Some(props) = rig.cx.backend().props(cover) {
-            let opacity = props.downcast_ref::<DivProps>().expect("div").style.opacity;
-            assert_eq!(opacity, Some(0.), "frame {frames} after close draws the cover");
+            let div = props.downcast_ref::<DivProps>().expect("div");
+            let opacity = div.style.opacity.unwrap_or(1.);
+            assert!(opacity <= last + 1e-6, "frame {frames} after close brightens the cover: {last} then {opacity}");
+            assert_eq!(div.transform.offset, (0., 0.), "frame {frames}: no travel");
+            last = opacity;
         }
         rig.cx.advance_clock(FRAME);
         frames += 1;
         assert!(frames < 120, "closes");
     }
+    assert!(last < 1e-3, "faded out before the presentation closed: {last}");
     rig.cx.frame();
     assert!(rig.cx.backend().props(cover).is_none(), "torn down");
 }

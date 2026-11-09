@@ -1,6 +1,6 @@
 //! Element animation on the frame clock and hover, tier 1: presented values reach the backend
 //! as props on each frame, a new target mid-flight continues from where the motion is, and
-//! reduce motion leaves only fades.
+//! reduce motion dissolves instead of moving.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -95,6 +95,29 @@ fn a_changed_target_animates_on_the_frame_clock_and_reports_its_end() {
 }
 
 #[test]
+fn a_motion_restarted_in_the_frame_it_settles_reports_one_end() {
+    let ended = Rc::new(RefCell::new(0));
+    let mut cx = TestApp::new();
+    let handle = open(&mut cx, ended.clone());
+    handle.root().update(&mut cx, |c, cx| {
+        c.shown = true;
+        cx.notify();
+    });
+    cx.frame();
+    cx.advance_clock(0.3);
+    handle.root().update(&mut cx, |c, cx| {
+        c.shown = false;
+        cx.notify();
+    });
+    cx.frame();
+    step(&mut cx, FRAME);
+    assert_eq!(*ended.borrow(), 0, "the first leg ended as the second began: not idle yet");
+    step(&mut cx, 0.3);
+    cx.run_until_idle();
+    assert_eq!(*ended.borrow(), 1);
+}
+
+#[test]
 fn a_reversal_mid_flight_continues_from_where_it_is() {
     let mut cx = TestApp::new();
     let handle = open(&mut cx, Rc::default());
@@ -145,7 +168,7 @@ fn mounted_rows_enter_from_their_pose() {
 }
 
 #[test]
-fn reduce_motion_jumps_movement_and_keeps_the_fade() {
+fn reduce_motion_dissolves_a_move_and_a_resize() {
     let mut cx = TestApp::new();
     cx.set_reduce_motion(true);
     let handle = open(&mut cx, Rc::default());
@@ -155,11 +178,16 @@ fn reduce_motion_jumps_movement_and_keeps_the_fade() {
         cx.notify();
     });
     cx.frame();
+    step(&mut cx, 0.05);
+    let out = props(&cx, card);
+    assert_eq!(out.transform.offset.1, 20., "nothing travels: it holds its old place");
+    assert_eq!(cx.backend().frame(card).unwrap().size.width, 100., "and its old size");
     step(&mut cx, 0.1);
-    let mid = props(&cx, card);
-    assert_eq!(mid.transform.offset.1, 0., "the offset jumped");
-    assert_eq!(cx.backend().frame(card).unwrap().size.width, 200., "the size jumped");
-    assert!(mid.style.opacity.unwrap() < 1., "the fade still runs");
+    let back = props(&cx, card);
+    assert_eq!(back.transform.offset.1, 0., "then shows at the new one");
+    assert_eq!(cx.backend().frame(card).unwrap().size.width, 200.);
+    let o = back.style.opacity.unwrap();
+    assert!(o > 0. && o < 1., "fading in: {o}");
 }
 
 struct Hoverable {
@@ -353,8 +381,85 @@ fn a_hero_comes_in_from_its_source_frame_and_goes_back_to_it() {
     assert!((cx.backend().frame(cover).unwrap().size.width - 40.).abs() < 0.5);
 }
 
+/// Frames on a ticking clock until nothing moves.
+fn settle(cx: &mut TestApp) {
+    for _ in 0..240 {
+        cx.flush_effects();
+        cx.drain_events();
+        if !cx.needs_frame() && cx.events().is_empty() {
+            return;
+        }
+        step(cx, FRAME);
+    }
+    panic!("still moving after four seconds");
+}
+
+/// A hero whose source is not on screen: the presented view opened from somewhere else.
+struct Unsourced {
+    open: bool,
+    away: bool,
+    landed: Rc<RefCell<u32>>,
+}
+
+impl Render for Unsourced {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        let landed = self.landed.clone();
+        div().size_full().when(self.open, |root| {
+            root.child(
+                div()
+                    .id("cover")
+                    .absolute()
+                    .left(px(100.))
+                    .top(px(20.))
+                    .size(px(200.))
+                    .hero_from("nowhere", self.away)
+                    .animate(Animation::linear(Duration::from_millis(200)))
+                    .on_animation_end(move |_, _, _| *landed.borrow_mut() += 1),
+            )
+        })
+    }
+}
+
 #[test]
-fn reduce_motion_shows_a_hero_in_place() {
+fn a_hero_with_no_source_rises_and_fades_in_and_fades_out_going_back() {
+    let mut cx = TestApp::new();
+    let landed = Rc::new(RefCell::new(0));
+    let handle = cx.open_window(WINDOW, {
+        let landed = landed.clone();
+        move |_, cx| cx.new(|_| Unsourced { open: false, away: false, landed })
+    });
+    handle.root().update(&mut cx, |p, cx| {
+        p.open = true;
+        cx.notify();
+    });
+    cx.frame();
+    let cover = node(&cx, "cover");
+    step(&mut cx, FRAME);
+    step(&mut cx, 0.1);
+    let mid = props(&cx, cover);
+    let o = mid.style.opacity.unwrap();
+    assert!(o > 0. && o < 1., "fading in: {o}");
+    assert!(mid.transform.offset.1 > 0. && mid.transform.offset.1 < 16., "rising: {:?}", mid.transform.offset);
+    settle(&mut cx);
+    assert_eq!(props(&cx, cover).transform.offset, (0., 0.));
+    *landed.borrow_mut() = 0;
+    handle.root().update(&mut cx, |p, cx| {
+        p.away = true;
+        cx.notify();
+    });
+    cx.frame();
+    step(&mut cx, FRAME);
+    step(&mut cx, 0.1);
+    let o = props(&cx, cover).style.opacity.unwrap();
+    assert!(o > 0. && o < 1., "fading out where it is: {o}");
+    assert_eq!(props(&cx, cover).transform.offset, (0., 0.));
+    settle(&mut cx);
+    assert_eq!(props(&cx, cover).style.opacity, Some(0.));
+    assert_eq!(*landed.borrow(), 1, "lands when the fade does");
+}
+
+#[test]
+fn reduce_motion_fades_a_hero_in_where_it_lands() {
     let mut cx = TestApp::new();
     cx.set_reduce_motion(true);
     let handle =
@@ -365,50 +470,55 @@ fn reduce_motion_shows_a_hero_in_place() {
     });
     cx.frame();
     let cover = node(&cx, "cover");
-    assert_eq!(props(&cx, cover).style.opacity, None, "not held back");
-    assert_eq!(props(&cx, cover).transform.offset, (0., 0.));
+    assert_eq!(props(&cx, cover).style.opacity, Some(0.), "comes in from nothing");
+    step(&mut cx, 0.1);
+    let mid = props(&cx, cover);
+    let o = mid.style.opacity.unwrap();
+    assert!(o > 0. && o < 1., "fading in: {o}");
+    assert_eq!(mid.transform.offset, (0., 0.), "in place");
+    assert_eq!(mid.transform.scale, 1.);
+    assert_eq!(cx.backend().frame(cover).unwrap().size.width, 200., "at its own size");
+    settle(&mut cx);
+    assert_eq!(props(&cx, cover).style.opacity.unwrap_or(1.), 1.);
 }
 
 #[test]
-fn reduce_motion_lands_a_hero_going_back_at_once() {
+fn reduce_motion_fades_a_hero_going_back_where_it_is_and_lands_once() {
     let mut cx = TestApp::new();
     cx.set_reduce_motion(true);
     let landed = Rc::new(RefCell::new(0));
     let handle = cx.open_window(WINDOW, {
         let landed = landed.clone();
-        move |_, cx| cx.new(|_| Presented { open: true, away: false, landed })
+        move |_, cx| cx.new(|_| Presented { open: false, away: false, landed })
     });
-    cx.run_until_idle();
+    handle.root().update(&mut cx, |p, cx| {
+        p.open = true;
+        cx.notify();
+    });
+    settle(&mut cx);
     let cover = node(&cx, "cover");
     *landed.borrow_mut() = 0;
     handle.root().update(&mut cx, |p, cx| {
         p.away = true;
         cx.notify();
     });
-    cx.run_until_idle();
-    assert_eq!(*landed.borrow(), 1, "a presentation waiting on it can close");
-    assert_eq!(props(&cx, cover).transform.offset, (0., 0.), "no travel");
-    handle.root().update(&mut cx, |_, cx| cx.notify());
-    cx.run_until_idle();
-    assert_eq!(*landed.borrow(), 1, "lands once, not on every render");
-}
-
-#[test]
-fn reduce_motion_hides_a_hero_going_back_in_the_frame_it_goes() {
-    let mut cx = TestApp::new();
-    cx.set_reduce_motion(true);
-    let handle =
-        cx.open_window(WINDOW, |_, cx| cx.new(|_| Presented { open: true, away: false, landed: Rc::default() }));
-    cx.run_until_idle();
-    let cover = node(&cx, "cover");
-    handle.root().update(&mut cx, |p, cx| {
-        p.away = true;
-        cx.notify();
-    });
     cx.frame();
-    assert_eq!(props(&cx, cover).style.opacity, Some(0.), "not left at its expanded frame");
-    step(&mut cx, FRAME);
-    cx.run_until_idle();
+    let mut last = 1.;
+    for frame in 0..30 {
+        step(&mut cx, FRAME);
+        let shown = props(&cx, cover);
+        let o = shown.style.opacity.unwrap_or(1.);
+        assert!(o <= last + 1e-6, "frame {frame} brightens: {last} then {o}");
+        assert_eq!(shown.transform.offset, (0., 0.), "no travel");
+        assert_eq!(cx.backend().frame(cover).unwrap().size.width, 200., "never shrinks onto the thumb");
+        last = o;
+    }
+    settle(&mut cx);
+    assert_eq!(props(&cx, cover).style.opacity, Some(0.), "faded out");
+    assert_eq!(*landed.borrow(), 1, "a presentation waiting on it can close");
+    handle.root().update(&mut cx, |_, cx| cx.notify());
+    settle(&mut cx);
+    assert_eq!(*landed.borrow(), 1, "lands once, not on every render");
     assert_eq!(props(&cx, cover).style.opacity, Some(0.), "stays hidden");
 }
 
@@ -546,17 +656,25 @@ fn an_inserted_element_pushes_its_siblings_down_smoothly() {
 }
 
 #[test]
-fn reduce_motion_jumps_layout_and_only_fades_an_exit() {
+fn reduce_motion_dissolves_layout_and_only_fades_an_exit() {
     let mut cx = TestApp::new();
     cx.set_reduce_motion(true);
     let (handle, _) = notes(&mut cx, &["a", "b", "c"]);
     let (b, c) = (node(&cx, "b"), node(&cx, "c"));
     set_ids(&mut cx, &handle, &["a", "c"]);
-    assert_eq!(shown_y(&cx, c), 20., "the sibling jumps");
+    assert_eq!(shown_y(&cx, c), 40., "the sibling holds its place");
+    step(&mut cx, 0.05);
+    assert_eq!(shown_y(&cx, c), 40.);
+    assert!(props(&cx, c).style.opacity.unwrap() < 1., "while it fades out");
+    let exit = props(&cx, b);
+    assert!(exit.style.opacity.unwrap() < 1., "the exit still fades");
+    assert_eq!(exit.transform.scale, 1., "but does not shrink");
     step(&mut cx, 0.1);
-    let mid = props(&cx, b);
-    assert!(mid.style.opacity.unwrap() < 1., "the exit still fades");
-    assert_eq!(mid.transform.scale, 1., "but does not shrink");
+    assert_eq!(shown_y(&cx, c), 20., "then shows at its new place");
+    let o = props(&cx, c).style.opacity.unwrap();
+    assert!(o > 0. && o < 1., "fading in: {o}");
+    settle(&mut cx);
+    assert_eq!(props(&cx, c).style.opacity.unwrap_or(1.), 1.);
 }
 
 struct LayoutOnly {
@@ -659,9 +777,9 @@ fn a_backend_that_lays_out_itself_holds_an_exit_inside_a_scroll_view() {
 }
 
 #[test]
-fn under_reduce_motion_the_backend_is_told_nothing_glides() {
+fn under_reduce_motion_the_backend_still_holds_a_moved_node_back() {
     let mut cx = TestApp::with_backend(nd_ui::test_backend::TestBackend::new().without_frames());
     cx.set_reduce_motion(true);
     cx.open_window(WINDOW, |_, cx| cx.new(|_| LayoutOnly { top: false }));
-    assert!(!props(&cx, node(&cx, "moving")).glides);
+    assert!(props(&cx, node(&cx, "moving")).glides, "a dissolve starts where it was");
 }

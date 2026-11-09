@@ -269,6 +269,16 @@ pub struct SystemMetrics {
     pub reduce_motion: Option<bool>,
 }
 
+/// `ND_REDUCE_MOTION=1` or `0` in place of the OS's reduce motion setting, to watch either
+/// mode without changing the system's. Backends pass what they read from the OS through it.
+pub fn reduce_motion_or_env(os: Option<bool>) -> Option<bool> {
+    match std::env::var("ND_REDUCE_MOTION").as_deref() {
+        Ok("1" | "true") => Some(true),
+        Ok("0" | "false") => Some(false),
+        _ => os,
+    }
+}
+
 /// Everything in a theme that is not a colour.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Metrics {

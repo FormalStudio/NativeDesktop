@@ -2,7 +2,8 @@
 //! grid takes as many columns as fit tiles of at least the minimum width, up to a maximum, and
 //! sizes tiles to share the width; a short last row keeps the pitch. Tiles move to new slots
 //! (a reflow for a new width, a tile added or removed before them) on the grid's reflow
-//! animation, new tiles fade and grow in, and removed ones fade and shrink where they stood. A
+//! animation, new tiles fade and grow in, and removed ones fade and shrink where they stood
+//! (under reduce motion tiles changing slots dissolve, and new and removed ones only fade). A
 //! dragged tile follows the pointer, takes the slot under it while the others slide aside, and
 //! settles where it is dropped or slides home on Escape or a release elsewhere. Built from
 //! elements, so it is the same on every backend; the tiles' content is the app's.
@@ -298,7 +299,9 @@ impl TileGrid {
             .relative()
             .w_full()
             .h(px(m.height(count)))
-            .when(animate, |d| d.animate(self.reflow))
+            // The grid draws nothing of its own, so under reduce motion its height jumps rather
+            // than dissolving every tile with it.
+            .when(animate && !app.reduce_motion(), |d| d.animate(self.reflow))
             .on_resize(move |e: &Resized, window, app| {
                 let width = e.width;
                 // The height animating reports sizes too; only a new width places the tiles.

@@ -27,8 +27,10 @@ use crate::transaction::{MeasureCache, Op, Transaction};
 use crate::window::{TitlebarInsets, Window};
 use nd_gpui::layout::MinMax;
 
-/// Frames a mounting hero waits for its own frame before it shows in place instead.
+/// Frames a mounting hero waits for its own frame before it rises into place instead.
 const HERO_WAIT_FRAMES: u32 = 4;
+/// How far below its place a hero with no source on screen starts as it fades in, in points.
+const HERO_RISE: f64 = 16.;
 
 mod semantic_walk;
 
@@ -279,8 +281,6 @@ pub(crate) struct Tree {
     /// put the ones going back on their source's frame.
     away_pending: Vec<NodeId>,
     hero_away: HashMap<NodeId, Values>,
-    /// Heroes that went back with reduce motion: hidden from the frame they go, already landed.
-    away_done: HashSet<NodeId>,
     /// A hero's frame at rest, for going back from mid-flight.
     hero_home: HashMap<NodeId, Rect>,
     /// Nodes that report their size, laid out at a new one this frame.
@@ -450,7 +450,6 @@ impl Tree {
             hero_waits: HashMap::new(),
             away_pending: Vec::new(),
             hero_away: HashMap::new(),
-            away_done: HashSet::new(),
             hero_home: HashMap::new(),
             resized: Vec::new(),
             retired: HashSet::new(),
@@ -555,24 +554,12 @@ impl Tree {
         };
         spec.animation = tokens.resolve(spec.animation, reduce);
         let hero = div.hero.clone();
-        // Layout jumps under reduce motion, so the backend must not hold the node back either.
-        if reduce && div.glides {
-            el.props = Rc::new(DivProps { glides: false, ..div.clone() });
-        }
         let away = hero.as_ref().is_some_and(|h| h.away);
         if !away {
             self.hero_away.remove(&id);
-            self.away_done.remove(&id);
             self.away_pending.retain(|n| *n != id);
-        } else if node.is_some()
-            && !self.hero_away.contains_key(&id)
-            && !self.away_done.contains(&id)
-            && !self.away_pending.contains(&id)
-        {
+        } else if node.is_some() && !self.hero_away.contains_key(&id) && !self.away_pending.contains(&id) {
             self.away_pending.push(id);
-            if reduce {
-                self.away_done.insert(id);
-            }
         }
         let (shown_props, shown_layout) =
             shown(&self.lit, &self.pressed, self.hero_away.get(&id), id, &el.props, &el.layout);
@@ -588,6 +575,10 @@ impl Tree {
             None if node.is_some() => MotionState::new(MotionSpec { enter: None, ..spec }, targets, now, reduce),
             None => MotionState::new(spec, targets, now, reduce),
         };
+        // Reduce motion leaves out a hero's travel: it fades in where it lands.
+        if node.is_none() && reduce && hero.as_ref().is_some_and(|h| !h.away) {
+            state.start_from(&[Some(0.), None, None, None, None, None], now, reduce);
+        }
         state.settle(now);
         let base = (el.props.clone(), el.layout.clone());
         if state.is_moving() {
@@ -601,9 +592,6 @@ impl Tree {
         if node.is_none() && hero.is_some_and(|h| !h.away) && !reduce {
             el.props = hidden(&el.props);
             self.heroes_pending.push(id);
-        }
-        if self.away_done.contains(&id) {
-            el.props = hidden(&el.props);
         }
         let flip = spec.layout.map(|a| tokens.resolve(a, reduce));
         self.pending_motion = Some(Animated { state, props: base.0, layout: base.1, exit: spec.exit, flip, laid_out });
@@ -713,28 +701,28 @@ impl Tree {
                 self.hero_home.insert(id, home);
                 let from = pose_on(&anim.state.targets(), source, home);
                 anim.state.start_from(&from, now, reduce);
+            } else {
+                // Nothing on screen to come out of: it rises into place as it fades in.
+                let y = anim.state.targets()[2].map(|y| y + HERO_RISE);
+                anim.state.start_from(&[Some(0.), None, y, None, None, None], now, reduce);
             }
-            // Shown again: moving from its source, or in place when there is none.
             self.animating.insert(id);
         }
         self.heroes_pending.append(&mut self.heroes_still_pending);
         for id in mem::take(&mut self.away_pending) {
             let Some(hero) = self.hero_of(id).filter(|h| h.away) else { continue };
-            // Reduce motion leaves out the travel, so the view around it waits on nothing.
-            if reduce {
-                self.away_done.insert(id);
-                stranded.push(id);
-                continue;
-            }
-            let Some(source) = self.source_rect(backend, &hero) else {
-                stranded.push(id);
+            // Reduce motion leaves out the travel, and a source no longer on screen leaves
+            // nowhere to travel to: it fades out where it is.
+            let source = if reduce { None } else { self.source_rect(backend, &hero) };
+            let Some(source) = source else {
+                self.fade_away(id, now, reduce, &mut stranded);
                 continue;
             };
             let moving = self.nodes.get(&id).and_then(|n| n.motion.as_ref()).is_some_and(|m| m.state.is_moving());
             let probed = backend.probe(id).bounds.filter(|r| r.size.width > 0. && r.size.height > 0.);
             let home = if moving { self.hero_home.get(&id).copied().or(probed) } else { probed };
             let Some(home) = home else {
-                stranded.push(id);
+                self.fade_away(id, now, reduce, &mut stranded);
                 continue;
             };
             let Some(anim) = self.nodes.get(&id).and_then(|n| n.motion.as_ref()) else { continue };
@@ -747,6 +735,16 @@ impl Tree {
             self.retarget_shown(id, at, reduce);
         }
         stranded
+    }
+
+    /// Fades hero `id` out where it is, for one going back with nowhere to travel. It lands when
+    /// the fade does, or at once when it already shows nothing.
+    fn fade_away(&mut self, id: NodeId, now: f64, reduce: bool, stranded: &mut Vec<NodeId>) {
+        self.hero_away.insert(id, [Some(0.), None, None, None, None, None]);
+        self.retarget_shown(id, now, reduce);
+        if !self.nodes.get(&id).and_then(|n| n.motion.as_ref()).is_some_and(|m| m.state.is_moving()) {
+            stranded.push(id);
+        }
     }
 
     fn hero_of(&self, id: NodeId) -> Option<crate::element::HeroFrom> {
@@ -799,10 +797,7 @@ impl Tree {
         let anim = node.motion.as_ref()?;
         let (shown_props, shown_layout) =
             shown(&self.lit, &self.pressed, self.hero_away.get(&id), id, &anim.props, &anim.layout);
-        let (mut props, layout) = present_div(&shown_props, &shown_layout, &anim.state.sample(now));
-        if self.away_done.contains(&id) {
-            props = hidden(&props);
-        }
+        let (props, layout) = present_div(&shown_props, &shown_layout, &anim.state.sample(now));
         let op = (!node.props.props_eq(&*props)).then(|| {
             let patch = PropsPatch { old: mem::replace(&mut node.props, props), new: node.props.clone() };
             Op::Update { node: id, patch }
@@ -1217,7 +1212,6 @@ impl Tree {
                 self.pressed.remove(&n);
                 self.hovered_groups.remove(&n);
                 self.hero_away.remove(&n);
-                self.away_done.remove(&n);
                 self.hero_home.remove(&n);
                 self.retired.remove(&n);
                 self.inert.remove(&n);
@@ -1740,11 +1734,7 @@ impl App {
         tree.drawn_in = self.frames;
         let stranded = tree.place_heroes(&*self.backend, window.now(), self.reduce_motion, &self.motion);
         tree.follow_painted_layout(&*self.backend, window.now(), self.reduce_motion);
-        for node in stranded.into_iter().chain(tree.step_motion(window.now())) {
-            if tree.handler(node, std::any::TypeId::of::<crate::AnimationEnded>()).is_some() {
-                self.events().emitter(node).emit(crate::AnimationEnded);
-            }
-        }
+        let ended: Vec<NodeId> = stranded.into_iter().chain(tree.step_motion(window.now())).collect();
         let root_view = tree.root_view.clone();
         tree.placed.insert(root_view.entity_id());
         if !tree.views.contains_key(&root_view.entity_id()) {
@@ -1779,6 +1769,14 @@ impl App {
                 if self.dirty.contains(&e) && live && !tree.rendered.contains(&e) {
                     tree.rerender_view(e, &mut window, self);
                 }
+            }
+        }
+        // A render this frame may have started the node moving again (the next leg of a
+        // sequence); its end is reported when that one settles.
+        for node in ended {
+            let moving = tree.nodes.get(&node).and_then(|n| n.motion.as_ref()).is_some_and(|m| m.state.is_moving());
+            if !moving && tree.handler(node, std::any::TypeId::of::<crate::AnimationEnded>()).is_some() {
+                self.events().emitter(node).emit(crate::AnimationEnded);
             }
         }
         // Nodes mounted under a hovered group this frame take its hover style too.
