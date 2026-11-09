@@ -254,7 +254,9 @@ impl WindowHost {
         match options.kind {
             nd_ui::WindowKind::Settings => {
                 window.setToolbarStyle(objc2_app_kit::NSWindowToolbarStyle::Preference);
-                let mask = window.styleMask() & !objc2_app_kit::NSWindowStyleMask::Miniaturizable;
+                // Fixed size like the system's settings windows, which also greys out zoom.
+                let mask = window.styleMask()
+                    & !(objc2_app_kit::NSWindowStyleMask::Miniaturizable | objc2_app_kit::NSWindowStyleMask::Resizable);
                 window.setStyleMask(mask);
             }
             nd_ui::WindowKind::Sheet { .. } => {

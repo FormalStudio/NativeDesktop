@@ -30,7 +30,7 @@ other platforms:
 <!-- docs:snippet examples/notes/src/app.rs#sheet -->
 
 `open_settings(cx, build)` opens the settings window. If it's already open, the call brings it
-forward and returns `None`. On macOS, it's a preference-style window, and the app menu's
+forward and returns `None`. On macOS, it's a fixed-size preference-style window, and the app menu's
 **Settings** item (Cmd-,) opens it when the app binds that key.
 
 <!-- docs:snippet examples/chrome/src/lib.rs#settings-window -->
