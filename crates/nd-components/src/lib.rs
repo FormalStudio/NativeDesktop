@@ -16,6 +16,7 @@ pub mod forms;
 pub mod fuzzy;
 pub mod glass;
 pub mod icon;
+pub mod markdown;
 pub mod media;
 pub mod menu;
 pub mod overrides;
@@ -43,6 +44,7 @@ pub use form::{Form, FormProps, FormRow, FormRowProps, FormSection, FormSectionP
 pub use forms::*;
 pub use glass::{Glass, GlassGroup, GlassGroupProps, GlassProps, glass, glass_group};
 pub use icon::{Icon, IconKind, IconProps, IconView, icon, register as register_icon};
+pub use markdown::{Markdown, markdown_editor};
 pub use media::*;
 pub use menu::{ContextMenu, ContextMenuRequested, Menu, MenuItem, MenuKind, MenuRole, primary_menu_items};
 pub use overrides::{HasScope, OnPlatform, Pattern, Patterns, ScopedContainer, SubtreeOverrides, SubtreeScope};

@@ -24,6 +24,26 @@ const TEXT_STYLES: [(&str, TextStyle); 11] = [
     ("Caption 2", TextStyle::Caption2),
 ];
 
+const MARKDOWN: &str = "# Weekend plans
+
+Pack **light**, leave the *laptop* and check the [forecast](https://aemet.es).
+
+## Before Friday
+- [x] Book the ferry
+- [ ] Charge the ~~old~~ camera
+- Groceries
+  1. Bread
+  2. Olives
+
+> Slow is smooth, smooth is fast.
+
+```sh
+rsync -a photos/ backup/
+```
+
+---
+Inline `code` sits in its own well.";
+
 pub struct FormsPage {
     action: SharedString,
     name: String,
@@ -32,6 +52,7 @@ pub struct FormsPage {
     notes: String,
     zone: String,
     search: Entity<TextFieldState>,
+    markdown: Entity<TextFieldState>,
     attachments: bool,
     copy_photos: bool,
     copy_videos: bool,
@@ -55,6 +76,7 @@ pub struct FormsPage {
 impl FormsPage {
     pub fn new(cx: &mut Context<Self>) -> Self {
         let search = cx.new(|_| TextFieldState::default().placeholder("Search settings"));
+        let markdown = cx.new(|_| TextFieldState::default().placeholder("Write in markdown").with_text(MARKDOWN));
         Self {
             action: "None yet".into(),
             name: String::new(),
@@ -63,6 +85,7 @@ impl FormsPage {
             notes: String::new(),
             zone: String::new(),
             search,
+            markdown,
             attachments: true,
             copy_photos: true,
             copy_videos: false,
@@ -367,6 +390,18 @@ impl FormsPage {
             .child(form_row("Storage used").child(progress(Some(0.4)).id("storage").circular().label("Storage used")))
     }
 
+    // docs:begin markdown
+    fn markdown(&self) -> FormSection {
+        form_section()
+            .title("Markdown")
+            .footer("Return continues a list, Tab nests it, \u{2318}B and \u{2318}I wrap the selection.")
+            .child(
+                form_row("Draft")
+                    .child(markdown_editor("markdown", &self.markdown).label("Draft").min_lines(16).w(px(520.))),
+            )
+    }
+    // docs:end markdown
+
     fn text_styles(&self) -> FormSection {
         let styles = TEXT_STYLES.iter().map(|(name, style)| {
             form_row(*name).child(label("The quick brown fox").id(format!("style-{name}")).text_style(*style))
@@ -434,5 +469,6 @@ impl Render for FormsPage {
             .child(self.progress(cx))
             .child(self.text_styles())
             .child(self.rows(cx))
+            .child(self.markdown())
     }
 }

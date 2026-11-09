@@ -16,6 +16,7 @@
 mod choice;
 mod date;
 pub(crate) mod display;
+mod styled;
 mod text;
 mod toggle;
 mod value;

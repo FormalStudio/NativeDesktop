@@ -108,13 +108,23 @@ pub struct FocusScope {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DismissRequested;
 
-/// Per-node roles in the Return and Escape defaults.
+/// Per-node roles in the Return, Tab and Escape defaults.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct KeyRoles {
     /// Activated by Return when no listener handled it (the window's or the scope's default button).
     pub default_button: bool,
     /// Keeps Return for itself while focused (a multi-line text view): the default button waits.
     pub takes_return: bool,
+    /// Keeps Tab and Shift-Tab for itself while focused (an editor that indents with them);
+    /// Control-Tab and Control-Shift-Tab move focus on instead.
+    pub takes_tab: bool,
+}
+
+impl crate::element::DispatchProps {
+    /// Keeps Tab and Shift-Tab while the element is focused ([`KeyRoles::takes_tab`]).
+    pub fn take_tab(&mut self) {
+        self.roles.takes_tab = true;
+    }
 }
 
 struct ScopeEntry {
@@ -561,6 +571,22 @@ impl<C: 'static> DispatchTree<C> {
         if pending {
             self.pending = input;
             return KeyDispatch::Pending;
+        }
+        // A node that keeps Tab gets Tab and Shift-Tab itself, and Control-Tab moves focus on
+        // instead, as it does out of a macOS text view.
+        if self.focused.and_then(|f| self.nodes.get(&f)).is_some_and(|n| n.roles.takes_tab) {
+            let m = &keystroke.modifiers;
+            if keystroke.key == "tab" && m.control && !m.alt && !m.platform {
+                if m.shift {
+                    self.focus_previous()
+                } else {
+                    self.focus_next()
+                }
+                return KeyDispatch::Handled;
+            }
+            if keystroke.key == "tab" && !m.control && !m.alt && !m.platform {
+                return KeyDispatch::Unhandled;
+            }
         }
         for binding in &bindings {
             if self.dispatch_action(binding.action(), cx) {

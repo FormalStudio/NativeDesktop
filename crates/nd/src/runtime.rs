@@ -64,6 +64,7 @@ pub mod prelude {
         radio_group, row, search_field, secure_field, segmented, settings_group, sheet_layout, spinner, stepper,
         switch, switch_row, text_area, text_field,
     };
+    pub use crate::chrome::{Markdown, markdown_editor};
     pub use crate::chrome::{PlayerLayout, PlayerLayoutState, player_layout};
     pub use crate::chrome::{SidebarRevealed, Tile, TileGrid, TileMoved, tile, tile_grid};
     pub use crate::controls::{

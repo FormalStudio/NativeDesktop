@@ -10,7 +10,7 @@ use std::rc::Rc;
 
 use nd_ui::prelude::*;
 use nd_ui::semantics::{Response, SemanticAction, Semantics, WidgetSemantics};
-use nd_ui::{DispatchProps, EntityId, Key, Role, StyleRefinement, deferred};
+use nd_ui::{DispatchProps, EntityId, Key, Role, StyleRefinement, Styler, TextStyler, deferred};
 
 use super::guard;
 use crate::icon::Icon;
@@ -79,6 +79,12 @@ impl TextFieldState {
 
     pub fn placeholder(mut self, placeholder: impl Into<SharedString>) -> Self {
         self.placeholder = Some(placeholder.into());
+        self
+    }
+
+    /// Starts with `text`, as if the app had set it.
+    pub fn with_text(mut self, text: impl Into<SharedString>) -> Self {
+        self.text = text.into();
         self
     }
 
@@ -176,6 +182,10 @@ pub struct TextAreaProps {
     /// Points kept clear at the trailing edge, inside the field's outline: room for a button
     /// laid over it (a chat bar's send button).
     pub trailing_room: f32,
+    /// Styles the text paragraph by paragraph as it changes ([`TextArea::styles`]).
+    pub styles: Option<Styler>,
+    /// The widest the text runs, in points: wider, the text is centred with the rest as margin.
+    pub max_measure: Option<f32>,
     pub label: Option<SharedString>,
     pub enabled: bool,
     pub tooltip: Option<SharedString>,
@@ -396,12 +406,14 @@ pub fn text_area(id: impl Into<SharedString>) -> TextArea {
         accepts_media: false,
         emoji_picker: 0,
         trailing_room: 0.,
+        styles: None,
+        max_measure: None,
         label: None,
         enabled: true,
         tooltip: None,
         style: StyleRefinement::default(),
     };
-    TextInput::new(NativeElement::described::<TextAreaKind>(Key::Id(id.into()), props).focusable())
+    TextInput::new(NativeElement::described::<TextAreaKind>(Key::Id(id.into()), props).focusable().takes_return())
 }
 
 /// A text field with suggestions.
@@ -575,7 +587,6 @@ impl TextArea {
     /// Return submits ([`TextInput::on_submit`]); Shift-Return inserts a line break.
     pub fn submit_on_return(mut self) -> Self {
         self.element.props_mut().submit_on_return = true;
-        self.element = self.element.takes_return();
         self
     }
 
@@ -596,6 +607,24 @@ impl TextArea {
     /// own where it has none); pass a counter the app bumps. The chosen emoji goes in at the caret.
     pub fn emoji_picker(mut self, request: u64) -> Self {
         self.element.props_mut().emoji_picker = request;
+        self
+    }
+
+    /// Styles the text as it changes: `styler` gets one paragraph at a time with the state the
+    /// paragraph before it handed on, so an edit restyles only the paragraphs it touched (and
+    /// the ones after, while that state changes). Styling never moves the caret, the selection
+    /// or the scroll position, and never adds an undo step. A styler's
+    /// [`edit`](TextStyler::edit) may also take Return, Tab, Shift-Tab and Command-B/I.
+    pub fn styles(mut self, styler: impl TextStyler) -> Self {
+        self.element.props_mut().styles = Some(Styler::new(styler));
+        self.element.dispatch_props().take_tab();
+        self
+    }
+
+    /// Keeps the text at most `points` wide, centred in the area, the room either side a
+    /// margin: a document column that stays readable in a wide window.
+    pub fn max_measure(mut self, points: f32) -> Self {
+        self.element.props_mut().max_measure = Some(points.max(1.));
         self
     }
 

@@ -67,7 +67,7 @@ pub use nd_settings::schemars;
 #[cfg(feature = "terminal")]
 pub use nd_terminal as terminal;
 #[cfg(feature = "runtime")]
-pub use nd_ui::{actions, backend, dispatch, events, transaction};
+pub use nd_ui::{actions, backend, dispatch, events, styled_text, transaction};
 #[cfg(feature = "runtime")]
 pub use nd_update as update;
 #[cfg(feature = "runtime")]

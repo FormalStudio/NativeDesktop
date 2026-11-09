@@ -18,12 +18,14 @@ use nd_gpui::gpui::{
     self, App, Bounds, ClipboardItem, CursorStyle, ElementId, FocusHandle, GlobalElementId, InspectorElementId,
     InteractiveElement, IntoElement, KeyDownEvent, Keystroke, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent,
     ParentElement, Pixels, Point, ScrollEvent, ShapedLine, SharedString, StatefulInteractiveElement, Style, Styled,
-    TextRun, UTF16Selection, UnderlineStyle, Window, WrappedLine, anchored, deferred, div, fill, point, px, relative,
-    size,
+    TextRun, UTF16Selection, UnderlineStyle, Window, anchored, deferred, div, fill, point, px, relative, size,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
+use nd_ui::{EditKey, TextEdit};
+
 use super::glyph::{Glyph, glyph};
+use super::paragraphs::{Doc, Frame, Palette};
 use super::{Ctl, FormLook, Sink, with_style};
 use crate::render::Build;
 
@@ -38,10 +40,19 @@ pub(crate) enum Commit {
     Parse(Parser),
 }
 
-enum Layout {
-    Line(Box<ShapedLine>),
-    /// Each hard line with its top, relative to the text origin.
-    Lines(Vec<(WrappedLine, Pixels)>),
+/// Typing within this long of the last keystroke, next to it, undoes with it.
+const UNDO_MERGE: std::time::Duration = std::time::Duration::from_millis(700);
+
+/// One undo step: `inserted` replaced `removed` at `at`; `selection` is what was selected
+/// before it.
+struct Step {
+    at: usize,
+    removed: String,
+    inserted: String,
+    selection: Range<usize>,
+    when: nd_core::time::Instant,
+    /// More typing may join it.
+    open: bool,
 }
 
 pub(crate) struct Editor {
@@ -55,7 +66,17 @@ pub(crate) struct Editor {
     /// The caret moved or the text changed: scroll it into view on the next layout.
     reveal: bool,
     selecting: bool,
-    layout: Option<Layout>,
+    /// A single-line field's shaped text.
+    line: Option<Box<ShapedLine>>,
+    /// A text area's paragraphs, styled and shaped one by one.
+    doc: Doc,
+    /// The theme colours styled runs name, and the column a text area keeps to.
+    palette: Option<Palette>,
+    max_measure: Option<Pixels>,
+    undo: Vec<Step>,
+    redo: Vec<Step>,
+    /// The text composition replaced, and where: what undoing the composed text puts back.
+    composing: Option<(usize, String)>,
     /// Where the text was last painted: the element's bounds and the text origin.
     painted: Option<(Bounds<Pixels>, Point<Pixels>)>,
     line_height: Pixels,
@@ -103,7 +124,13 @@ impl Editor {
             scroll: Point::default(),
             reveal: false,
             selecting: false,
-            layout: None,
+            line: None,
+            doc: Doc::new(),
+            palette: None,
+            max_measure: None,
+            undo: Vec::new(),
+            redo: Vec::new(),
+            composing: None,
             painted: None,
             line_height: px(20.),
             multiline,
@@ -136,10 +163,99 @@ impl Editor {
         self.synced = Some(prop.clone());
         self.dirty = false;
         if self.text != prop.as_ref() {
+            let (old, new_len) = nd_ui::styled_text::changed_range(&self.text, prop);
             self.text = prop.to_string();
+            self.doc.edit(&self.text, old, new_len);
+            self.undo.clear();
+            self.redo.clear();
             let clamp = |o: usize| self.floor(o.min(self.text.len()));
             self.selected = clamp(self.selected.start)..clamp(self.selected.end);
         }
+    }
+
+    /// Replaces `range` with `new` in the text and the paragraphs, nothing more.
+    fn splice(&mut self, range: Range<usize>, new: &str) {
+        self.text.replace_range(range.clone(), new);
+        if self.multiline {
+            self.doc.edit(&self.text, range, new.len());
+        }
+    }
+
+    /// Remembers an edit for undo, folding it into the last step when it is more typing right
+    /// after it.
+    fn record(&mut self, at: usize, removed: String, inserted: &str, selection: Range<usize>) {
+        self.redo.clear();
+        let now = nd_core::time::Instant::now();
+        if let Some(last) = self.undo.last_mut()
+            && removed.is_empty()
+            && last.removed.is_empty()
+            && !inserted.contains('\n')
+            && last.open
+            && last.at + last.inserted.len() == at
+            && now.duration_since(last.when) < UNDO_MERGE
+        {
+            last.inserted.push_str(inserted);
+            last.when = now;
+            return;
+        }
+        let open = removed.is_empty() && !inserted.contains('\n');
+        self.undo.push(Step { at, removed, inserted: inserted.to_owned(), selection, when: now, open });
+    }
+
+    /// Undoes (`back`) or redoes the last step, and reports the text. False with nothing to
+    /// undo or redo, so the key goes on to the app.
+    fn step(&mut self, back: bool, cx: &mut App) -> bool {
+        if !self.editable || self.marked.is_some() {
+            return false;
+        }
+        let Some(step) = (if back { self.undo.pop() } else { self.redo.pop() }) else { return false };
+        let (gone, put) = if back { (&step.inserted, &step.removed) } else { (&step.removed, &step.inserted) };
+        self.splice(step.at..step.at + gone.len(), put);
+        if back {
+            self.selected = step.selection.clone();
+            self.reversed = false;
+            self.reveal = true;
+        } else {
+            self.move_to(step.at + put.len());
+        }
+        self.marked = None;
+        let when = nd_core::time::Instant::now();
+        if back { &mut self.redo } else { &mut self.undo }.push(Step { when, open: false, ..step });
+        self.edited(cx);
+        true
+    }
+
+    /// The styler's edit for `key` in the caret's paragraph, if it makes one.
+    fn styled_edit(&mut self, key: EditKey, cx: &mut App) -> bool {
+        if !self.editable || !self.multiline || self.marked.is_some() {
+            return false;
+        }
+        let Some((start, paragraph, state)) = self.doc.paragraph_at(&self.text, self.selected.start) else {
+            return false;
+        };
+        if self.selected.end > start + paragraph.len() {
+            return false;
+        }
+        let selection = self.selected.start - start..self.selected.end - start;
+        let Some(TextEdit { range, text, selection }) = self.doc.styler().edit(key, paragraph, selection, state) else {
+            return false;
+        };
+        let range = range.start + start..range.end + start;
+        if !range.is_empty() || !text.is_empty() {
+            let removed = self.text[range.clone()].to_owned();
+            let before = self.selected.clone();
+            self.splice(range.clone(), &text);
+            // Its own undo step, even straight after typing.
+            let when = nd_core::time::Instant::now();
+            self.undo.push(Step { at: range.start, removed, inserted: text, selection: before, when, open: false });
+            self.redo.clear();
+            self.edited(cx);
+        }
+        let end = self.text.len();
+        self.selected = (selection.start + start).min(end)..(selection.end + start).min(end);
+        self.reversed = false;
+        self.reveal = true;
+        true
     }
 
     fn floor(&self, mut offset: usize) -> usize {
@@ -221,15 +337,24 @@ impl Editor {
             return;
         }
         let new = if self.multiline { new.to_owned() } else { new.replace(['\n', '\r'], " ") };
-        let before = self.text.clone();
-        self.text.replace_range(range.clone(), &new);
+        let selection = self.selected.clone();
+        let mut removed = self.text[range.clone()].to_owned();
+        // Composition ends: what it replaced is what undo puts back.
+        if let Some((at, original)) = self.composing.take()
+            && at == range.start
+        {
+            removed = original;
+        }
+        let changed = removed != new;
+        self.splice(range.clone(), &new);
         let caret = range.start + new.len();
         self.move_to(caret);
         self.marked = None;
         if self.completes && caret == self.text.len() && !new.is_empty() {
             self.complete();
         }
-        if self.text != before {
+        if changed {
+            self.record(range.start, removed, &new, selection);
             self.edited(cx);
         }
     }
@@ -361,58 +486,37 @@ impl Editor {
 
     /// Where `offset` sits relative to the text origin, top of its line.
     fn position(&self, offset: usize) -> Point<Pixels> {
-        let d = self.text_to_display(offset);
-        match &self.layout {
-            Some(Layout::Line(line)) => point(line.x_for_index(d), px(0.)),
-            Some(Layout::Lines(lines)) => {
-                let mut start = 0;
-                for (line, top) in lines {
-                    if d <= start + line.len() {
-                        let p = line.position_for_index(d - start, self.line_height).unwrap_or_default();
-                        return point(p.x, *top + p.y);
-                    }
-                    start += line.len() + 1;
-                }
-                Point::default()
-            }
-            None => Point::default(),
+        self.caret_box(offset).0
+    }
+
+    /// Where `offset` sits relative to the text origin (top of its line), and the height of
+    /// the caret there.
+    fn caret_box(&self, offset: usize) -> (Point<Pixels>, Pixels) {
+        if self.multiline {
+            return self.doc.caret(offset).map_or((Point::default(), self.line_height), |(p, lh, _)| (p, lh));
         }
+        let d = self.text_to_display(offset);
+        (point(self.line.as_ref().map_or(px(0.), |l| l.x_for_index(d)), px(0.)), self.line_height)
     }
 
     /// The text offset nearest `at`, in window coordinates.
     fn offset_at(&self, at: Point<Pixels>) -> usize {
         let Some((_, origin)) = self.painted else { return 0 };
         let local = at - origin;
-        let d = match &self.layout {
-            Some(Layout::Line(line)) => line.closest_index_for_x(local.x),
-            Some(Layout::Lines(lines)) => {
-                let mut start = 0;
-                let mut found = self.display().len();
-                for (i, (line, top)) in lines.iter().enumerate() {
-                    let bottom = *top + line.size(self.line_height).height;
-                    if local.y < bottom || i + 1 == lines.len() {
-                        let p = point(local.x.max(px(0.)), (local.y - *top).max(px(0.)));
-                        found = start + line.closest_index_for_position(p, self.line_height).unwrap_or_else(|i| i);
-                        break;
-                    }
-                    start += line.len() + 1;
-                }
-                found
-            }
-            None => 0,
-        };
+        if self.multiline {
+            return self.floor(self.doc.offset_at(local).min(self.text.len()));
+        }
+        let d = self.line.as_ref().map_or(0, |l| l.closest_index_for_x(local.x));
         self.display_to_text(d)
     }
 
     /// One line up (`-1`) or down (`1`) from the caret, keeping its x.
-    fn vertical(&self, direction: f32) -> usize {
-        let p = self.position(self.cursor());
-        let Some((_, origin)) = self.painted else { return self.cursor() };
-        let target = origin + point(p.x, p.y + self.line_height * (0.5 + direction));
-        if target.y < origin.y {
-            return 0;
+    fn vertical(&self, direction: i32) -> usize {
+        match self.doc.vertical(self.cursor(), direction) {
+            Some(offset) => self.floor(offset.min(self.text.len())),
+            None if direction < 0 => 0,
+            None => self.text.len(),
         }
-        self.offset_at(target)
     }
 
     /// A key no binding took. Returns whether the field used it.
@@ -453,11 +557,11 @@ impl Editor {
             "home" => go(self, if shortcut { 0 } else { self.line_start(cursor) }),
             "end" => go(self, if shortcut { self.text.len() } else { self.line_end(cursor) }),
             "up" if self.multiline => {
-                let to = if m.platform { 0 } else { self.vertical(-1.) };
+                let to = if m.platform { 0 } else { self.vertical(-1) };
                 go(self, to);
             }
             "down" if self.multiline => {
-                let to = if m.platform { self.text.len() } else { self.vertical(1.) };
+                let to = if m.platform { self.text.len() } else { self.vertical(1) };
                 go(self, to);
             }
             "backspace" => {
@@ -475,7 +579,25 @@ impl Editor {
                 self.replace(range, "", cx);
             }
             "enter" if self.multiline && self.submit_on_return && !m.shift && !m.alt && !shortcut => self.submit(cx),
+            "enter" if self.multiline && !shortcut && !m.shift && !m.alt && self.styled_edit(EditKey::Return, cx) => {}
             "enter" if self.multiline && !shortcut => self.replace(self.selected.clone(), "\n", cx),
+            // nd lets Tab through only to a styled area, which keeps it as a text view does.
+            "tab" if !shortcut && !m.alt => {
+                let key = if m.shift { EditKey::Backtab } else { EditKey::Tab };
+                if self.styled_edit(key, cx) {
+                    return true;
+                }
+                if m.shift || !self.multiline {
+                    return false;
+                }
+                self.replace(self.selected.clone(), "\t", cx);
+            }
+            "b" | "i" if shortcut && !m.shift && !m.alt => {
+                let key = if ks.key == "b" { EditKey::Bold } else { EditKey::Italic };
+                return self.styled_edit(key, cx);
+            }
+            "z" if shortcut && !m.alt => return self.step(!m.shift, cx),
+            "y" if shortcut && !m.alt && !cfg!(target_os = "macos") => return self.step(false, cx),
             "enter" => self.submit(cx),
             // The app abandons its inline edit; Escape still goes on to close a sheet or popover.
             "escape" if !self.multiline && self.editing => {
@@ -579,7 +701,11 @@ impl gpui::InputHandler for Input {
             return;
         }
         let range = range.as_ref().map(|r| e.utf16_to_range(r)).or(e.marked.clone()).unwrap_or(e.selected.clone());
-        e.text.replace_range(range.clone(), text);
+        if e.marked.is_none() {
+            let original = e.text[range.clone()].to_owned();
+            e.composing = Some((range.start, original));
+        }
+        e.splice(range.clone(), text);
         e.marked = (!text.is_empty()).then(|| range.start..range.start + text.len());
         // Composition is provisional: the app hears the text once it is committed.
         let caret = match selected {
@@ -616,8 +742,8 @@ impl gpui::InputHandler for Input {
         }
         let (_, origin) = e.painted?;
         let range = e.utf16_to_range(&range);
-        let (a, b) = (e.position(range.start), e.position(range.end));
-        Some(Bounds::from_corners(origin + a, origin + point(b.x.max(a.x), a.y + e.line_height)))
+        let ((a, height), b) = (e.caret_box(range.start), e.position(range.end));
+        Some(Bounds::from_corners(origin + a, origin + point(b.x.max(a.x), a.y + height)))
     }
 
     fn character_index_for_point(&mut self, at: Point<Pixels>, _: &mut Window, _: &mut App) -> Option<usize> {
@@ -645,6 +771,8 @@ pub(crate) struct Prepainted {
     placeholder: Option<ShapedLine>,
     selection: Vec<Bounds<Pixels>>,
     caret: Option<Bounds<Pixels>>,
+    /// A text area's visible band, relative to the text origin.
+    view: Range<Pixels>,
 }
 
 impl IntoElement for EditorElement {
@@ -703,7 +831,6 @@ impl gpui::Element for EditorElement {
         let style = window.text_style();
         let font = style.font();
         let color = if self.enabled { look.text } else { look.secondary_text };
-        let display = e.display();
         let run = |len: usize, underline: bool| TextRun {
             len,
             font: font.clone(),
@@ -712,6 +839,18 @@ impl gpui::Element for EditorElement {
             underline: underline.then_some(UnderlineStyle { color: Some(color), thickness: px(1.), wavy: false }),
             strikethrough: None,
         };
+        let text_system = window.text_system().clone();
+        let placeholder = match (&self.placeholder, e.text.is_empty()) {
+            (Some(p), true) => {
+                let run = TextRun { color: look.secondary_text, ..run(p.len(), false) };
+                Some(text_system.shape_line(p.clone(), look.text_size, &[run], None))
+            }
+            _ => None,
+        };
+        if e.multiline {
+            return self.prepaint_area(&mut e, bounds, font.clone(), color, placeholder, window);
+        }
+        let display = e.display();
         let runs: Vec<TextRun> = match e.marked.clone() {
             Some(m) => {
                 let (a, b) = (e.text_to_display(m.start), e.text_to_display(m.end));
@@ -729,97 +868,33 @@ impl gpui::Element for EditorElement {
             }
             _ => runs,
         };
-        let text_system = window.text_system().clone();
-        let placeholder = match (&self.placeholder, display.is_empty()) {
-            (Some(p), true) => {
-                let run = TextRun { color: look.secondary_text, ..run(p.len(), false) };
-                Some(text_system.shape_line(p.clone(), look.text_size, &[run], None))
-            }
-            _ => None,
-        };
-        let layout = if e.multiline {
-            let lines = text_system
-                .shape_text(display.clone().into(), look.text_size, &runs, Some(bounds.size.width), None)
-                .unwrap_or_default();
-            let mut top = px(0.);
-            let mut placed = Vec::new();
-            for line in lines {
-                let height = line.size(look.line_height).height.max(look.line_height);
-                placed.push((line, top));
-                top += height;
-            }
-            Layout::Lines(placed)
-        } else {
-            Layout::Line(Box::new(text_system.shape_line(display.clone().into(), look.text_size, &runs, None)))
-        };
-        e.layout = Some(layout);
-
+        let line = text_system.shape_line(display.into(), look.text_size, &runs, None);
+        let width = line.width;
+        e.line = Some(Box::new(line));
         let caret = e.position(e.cursor());
-        if e.multiline {
-            let content = match &e.layout {
-                Some(Layout::Lines(lines)) => {
-                    lines.last().map_or(px(0.), |(l, top)| *top + l.size(look.line_height).height.max(look.line_height))
-                }
-                _ => px(0.),
-            };
-            if e.reveal {
-                if caret.y + look.line_height > e.scroll.y + bounds.size.height {
-                    e.scroll.y = caret.y + look.line_height - bounds.size.height;
-                }
-                if caret.y < e.scroll.y {
-                    e.scroll.y = caret.y;
-                }
+        let room = (bounds.size.width - px(2.)).max(px(0.));
+        if e.reveal {
+            if caret.x - e.scroll.x > room {
+                e.scroll.x = caret.x - room;
             }
-            e.scroll.y = e.scroll.y.min((content - bounds.size.height).max(px(0.))).max(px(0.));
-            e.scroll.x = px(0.);
-            if (content - e.content).abs() > px(0.5) {
-                // The area sizes itself from this on its next build.
-                e.content = content;
-                window.request_animation_frame();
+            if caret.x < e.scroll.x {
+                e.scroll.x = caret.x;
             }
-        } else {
-            let width = match &e.layout {
-                Some(Layout::Line(line)) => line.width,
-                _ => px(0.),
-            };
-            let room = (bounds.size.width - px(2.)).max(px(0.));
-            if e.reveal {
-                if caret.x - e.scroll.x > room {
-                    e.scroll.x = caret.x - room;
-                }
-                if caret.x < e.scroll.x {
-                    e.scroll.x = caret.x;
-                }
-            }
-            e.scroll.x = e.scroll.x.min((width - room).max(px(0.))).max(px(0.));
-            e.scroll.y = px(0.);
         }
+        e.scroll.x = e.scroll.x.min((width - room).max(px(0.))).max(px(0.));
+        e.scroll.y = px(0.);
         e.reveal = false;
         let origin = bounds.origin - e.scroll;
         e.painted = Some((bounds, origin));
-
         let line_height = look.line_height;
         let mut selection = Vec::new();
         if !e.selected.is_empty() {
             let (a, b) = (e.position(e.selected.start), e.position(e.selected.end));
-            if a.y == b.y {
-                selection.push(Bounds::from_corners(origin + a, origin + point(b.x, b.y + line_height)));
-            } else {
-                let right = bounds.size.width;
-                selection.push(Bounds::from_corners(origin + a, origin + point(right, a.y + line_height)));
-                if b.y > a.y + line_height {
-                    selection.push(Bounds::from_corners(
-                        origin + point(px(0.), a.y + line_height),
-                        origin + point(right, b.y),
-                    ));
-                }
-                selection
-                    .push(Bounds::from_corners(origin + point(px(0.), b.y), origin + point(b.x, b.y + line_height)));
-            }
+            selection.push(Bounds::from_corners(origin + a, origin + point(b.x, b.y + line_height)));
         }
         let caret = (self.enabled && e.selected.is_empty() && self.focus.is_focused(window))
             .then(|| Bounds::new(origin + caret, size(px(1.5), line_height)));
-        Prepainted { origin, placeholder, selection, caret }
+        Prepainted { origin, placeholder, selection, caret, view: px(0.)..bounds.size.height }
     }
 
     fn paint(
@@ -838,29 +913,117 @@ impl gpui::Element for EditorElement {
         let look = self.look;
         let mask = gpui::ContentMask { bounds };
         window.with_content_mask(Some(mask), |window| {
+            let e = self.editor.borrow();
+            let origin = prepainted.origin;
+            if e.multiline {
+                e.doc.paint_backgrounds(origin, prepainted.view.clone(), window, cx);
+            }
             for s in prepainted.selection.drain(..) {
                 window.paint_quad(fill(s, look.selection));
             }
             if let Some(p) = prepainted.placeholder.take() {
-                let _ = p.paint(prepainted.origin, look.line_height, gpui::TextAlign::Left, None, window, cx);
+                let at = match e.doc.caret(0).filter(|_| e.multiline) {
+                    Some((p, _, _)) => origin + p,
+                    None => origin,
+                };
+                let _ = p.paint(at, look.line_height, gpui::TextAlign::Left, None, window, cx);
             }
-            let e = self.editor.borrow();
-            match &e.layout {
-                Some(Layout::Line(line)) => {
-                    let _ = line.paint(prepainted.origin, look.line_height, gpui::TextAlign::Left, None, window, cx);
-                }
-                Some(Layout::Lines(lines)) => {
-                    for (line, top) in lines {
-                        let at = prepainted.origin + point(px(0.), *top);
-                        let _ = line.paint(at, look.line_height, gpui::TextAlign::Left, None, window, cx);
-                    }
-                }
-                None => {}
+            if e.multiline {
+                e.doc.paint_text(origin, prepainted.view.clone(), window, cx);
+            } else if let Some(line) = &e.line {
+                let _ = line.paint(origin, look.line_height, gpui::TextAlign::Left, None, window, cx);
             }
             if let Some(caret) = prepainted.caret {
                 window.paint_quad(fill(caret, look.text));
             }
         });
+    }
+}
+
+impl EditorElement {
+    /// A text area: its paragraphs laid out in the column, the caret kept in view, and the
+    /// selection and caret in the caret paragraph's line height.
+    fn prepaint_area(
+        &self,
+        e: &mut Editor,
+        bounds: Bounds<Pixels>,
+        font: gpui::Font,
+        color: gpui::Hsla,
+        placeholder: Option<ShapedLine>,
+        window: &mut Window,
+    ) -> Prepainted {
+        let look = self.look;
+        let width = bounds.size.width;
+        let column = match e.max_measure {
+            Some(measure) if measure < width => ((width - measure) / 2., measure),
+            _ => (px(0.), width),
+        };
+        let palette = e.palette.clone();
+        let Some(palette) = palette else {
+            return Prepainted {
+                origin: bounds.origin,
+                placeholder,
+                selection: Vec::new(),
+                caret: None,
+                view: px(0.)..px(0.),
+            };
+        };
+        let recolor = look.selection_text.filter(|_| !e.selected.is_empty()).map(|fg| (e.selected.clone(), fg));
+        let frame = Frame {
+            column,
+            size: look.text_size,
+            line_height: look.line_height,
+            font,
+            color,
+            palette: &palette,
+            viewport: bounds.size.height,
+            caret: e.cursor(),
+            marked: e.marked.clone(),
+            recolor,
+        };
+        let mut scroll = e.scroll.y;
+        e.doc.layout(&e.text, &frame, &mut scroll, window);
+        let (caret, caret_height) = e.caret_box(e.cursor());
+        if e.reveal {
+            let before = scroll;
+            if caret.y + caret_height > scroll + bounds.size.height {
+                scroll = caret.y + caret_height - bounds.size.height;
+            }
+            if caret.y < scroll {
+                scroll = caret.y;
+            }
+            if scroll != before {
+                // The paragraphs the caret brought into view are shaped before they paint.
+                e.doc.layout(&e.text, &frame, &mut scroll, window);
+            }
+        }
+        let content = e.doc.content;
+        e.scroll.y = scroll.min((content - bounds.size.height).max(px(0.))).max(px(0.));
+        e.scroll.x = px(0.);
+        if (content - e.content).abs() > px(0.5) {
+            // The area sizes itself from this on its next build.
+            e.content = content;
+            window.request_animation_frame();
+        }
+        e.reveal = false;
+        let origin = bounds.origin - e.scroll;
+        e.painted = Some((bounds, origin));
+        let view = e.scroll.y..e.scroll.y + bounds.size.height;
+        let right = column.0 + column.1;
+        let selection = e
+            .doc
+            .selection(e.selected.clone(), right, view.clone())
+            .into_iter()
+            .map(|r| Bounds::new(r.origin + origin, r.size))
+            .collect();
+        let caret = (self.enabled && e.selected.is_empty() && self.focus.is_focused(window)).then(|| {
+            let (at, line_height, font_size) =
+                e.doc.caret(e.cursor()).unwrap_or((Point::default(), look.line_height, look.text_size));
+            // A tall line (a heading, 1.6 leading) keeps the caret near the glyphs' height.
+            let height = line_height.min(font_size * 1.3);
+            Bounds::new(origin + at + point(px(0.), (line_height - height) / 2.), size(px(1.5), height))
+        });
+        Prepainted { origin, placeholder, selection, caret, view }
     }
 }
 
@@ -1176,12 +1339,23 @@ pub(crate) fn text_area(
         completes: false,
     };
     let (ctl, editor) = editor(b, id, &f, || Commit::Text, window, cx);
-    let look = ctl.look;
+    let mut look = ctl.look;
+    // The app's text size sets the area's, its line height scaled with it.
+    if let Some(text_size) = p.style.text.font_size.map(|s| s.to_pixels(look.text_size)) {
+        look.line_height = look.line_height * (text_size / look.text_size);
+        look.text_size = text_size;
+    }
     let name = p.label.clone().or_else(|| p.tooltip.clone()).or_else(|| p.placeholder.clone()).unwrap_or_default();
     let (content, request) = {
         let mut e = editor.borrow_mut();
         e.submit_on_return = p.submit_on_return;
         e.accepts_media = p.accepts_media;
+        e.doc.set_styler(p.styles.as_ref());
+        e.max_measure = p.max_measure.map(px);
+        let palette = Palette::new(&b.theme());
+        if e.palette.as_ref() != Some(&palette) {
+            e.palette = Some(palette);
+        }
         // Each new request opens the picker; the first one seen is where the app started.
         let request = e.emoji.is_some_and(|seen| seen != p.emoji_picker) && p.enabled;
         e.emoji = Some(p.emoji_picker);
@@ -1223,7 +1397,9 @@ pub(crate) fn text_area(
             });
         }
     }
-    let mut area = with_style(area.child(text_element(&ctl, &editor, &f)), &p.style);
+    let mut text = text_element(&ctl, &editor, &f);
+    text.look = look;
+    let mut area = with_style(area.child(text), &p.style);
     // WinUI rounds a text box at the control radius, a composer's too.
     if rounded && b.theme().preset == nd_theme::Preset::Fluent {
         area = area.rounded(b.theme().radius.md);

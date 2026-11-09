@@ -23,6 +23,7 @@ use nd_ui::backend::Props;
 use nd_ui::events::Synced;
 use nd_ui::prelude::SharedString;
 use nd_ui::semantics::{ActionError, Probe, SemanticAction};
+use nd_ui::{EditKey, Styler};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject, Sel};
 use objc2::{AnyThread, DefinedClass, MainThreadOnly, Message, define_class, msg_send, sel};
@@ -34,14 +35,15 @@ use objc2_app_kit::{
     NSForegroundColorAttributeName, NSPasteboard, NSPasteboardType, NSPasteboardTypeFileURL, NSPasteboardTypePNG,
     NSPasteboardTypeTIFF, NSResponder, NSScrollView, NSScroller, NSSearchField, NSSearchFieldCell,
     NSSearchFieldDelegate, NSSecureTextField, NSSecureTextFieldCell, NSStandardKeyBindingResponding, NSText,
-    NSTextDelegate, NSTextField, NSTextFieldBezelStyle, NSTextFieldCell, NSTextFieldDelegate, NSTextView,
-    NSTextViewDelegate, NSView,
+    NSTextDelegate, NSTextField, NSTextFieldBezelStyle, NSTextFieldCell, NSTextFieldDelegate, NSTextStorage,
+    NSTextStorageDelegate, NSTextStorageEditActions, NSTextView, NSTextViewDelegate, NSView,
 };
 use objc2_foundation::{
-    MainThreadMarker, NSArray, NSAttributedString, NSDictionary, NSNotification, NSObject, NSObjectProtocol, NSPoint,
-    NSRect, NSSize, NSString, NSURL,
+    MainThreadMarker, NSArray, NSAttributedString, NSDictionary, NSInteger, NSNotification, NSObject, NSObjectProtocol,
+    NSPoint, NSRange, NSRect, NSSize, NSString, NSURL,
 };
 
+use super::styled::{Styles, composing};
 use super::{Ctx, FormControl, NdControlTarget, apply_common, props, set_accessibility_label};
 use crate::events::defer;
 
@@ -175,6 +177,8 @@ struct Core {
     options: RefCell<Vec<SharedString>>,
     /// Escape abandoned the edit: the end of editing that follows is no commit.
     cancelled: Cell<bool>,
+    /// A text area's styler and the paragraphs it styled.
+    styles: RefCell<Option<Styles>>,
 }
 
 impl Core {
@@ -188,7 +192,51 @@ impl Core {
             pending: RefCell::default(),
             options: RefCell::default(),
             cancelled: Cell::new(false),
+            styles: RefCell::default(),
         })
+    }
+
+    fn area(&self) -> Option<&NSTextView> {
+        match &self.source {
+            Source::Area(t) => Some(t),
+            Source::Field(_) => None,
+        }
+    }
+
+    /// Sets the paragraphs edits restyled, once no input method is composing.
+    fn paint_styles(&self) {
+        let Some(view) = self.area() else { return };
+        if self.styles.borrow().is_none() || composing(view) {
+            return;
+        }
+        let Some(storage) = (unsafe { view.textStorage() }) else { return };
+        if let Some(styles) = self.styles.borrow_mut().as_mut() {
+            styles.apply(view, &storage);
+        }
+    }
+
+    /// The styler's edit for `key` at the selection, made as one undo step. False when it
+    /// makes none and the key is the text view's.
+    fn styled_key(&self, key: EditKey) -> bool {
+        let Some(view) = self.area() else { return false };
+        if !view.isEditable() || composing(view) {
+            return false;
+        }
+        let Some(storage) = (unsafe { view.textStorage() }) else { return false };
+        let edit = self.styles.borrow().as_ref().and_then(|s| s.edit_for(&storage, view.selectedRange(), key));
+        let Some((range, text, selection)) = edit else { return false };
+        if range.length > 0 || !text.is_empty() {
+            let text = NSString::from_str(&text);
+            view.breakUndoCoalescing();
+            if view.shouldChangeTextInRange_replacementString(range, Some(&text)) {
+                storage.replaceCharactersInRange_withString(range, &text);
+                view.didChangeText();
+            }
+            view.breakUndoCoalescing();
+        }
+        view.setSelectedRange(selection);
+        view.scrollRangeToVisible(selection);
+        true
     }
 
     /// The text view the user types into: the field editor while a field is being edited.
@@ -224,6 +272,7 @@ impl Core {
             },
             Source::Area(t) => t.setString(&ns),
         });
+        self.paint_styles();
     }
 
     /// The app's text, applied unless the user is composing.
@@ -248,6 +297,7 @@ impl Core {
 
     /// A user edit: report, emit, wake. With composition over, an app write that waited wins.
     fn edited(&self) {
+        self.paint_styles();
         if !self.composing()
             && let Some(text) = self.pending.take()
         {
@@ -395,11 +445,37 @@ define_class!(
         }
     }
 
+    unsafe impl NSTextStorageDelegate for NdTextDelegate {
+        // Keeps the paragraph cache in step with every character edit; the attributes wait
+        // for the edit to end (`Core::paint_styles`).
+        #[unsafe(method(textStorage:didProcessEditing:range:changeInLength:))]
+        fn did_process_editing(
+            &self,
+            storage: &NSTextStorage,
+            mask: NSTextStorageEditActions,
+            range: NSRange,
+            delta: NSInteger,
+        ) {
+            self.storage_edited(storage, mask, range, delta);
+        }
+    }
+
     unsafe impl NSTextViewDelegate for NdTextDelegate {
         #[unsafe(method(textView:doCommandBySelector:))]
         fn text_view_do_command(&self, text_view: &NSTextView, command: Sel) -> bool {
             let core = &self.ivars().core;
-            if command != sel!(insertNewline:) || !core.submit_on_return.get() {
+            let key = if command == sel!(insertNewline:) && !core.submit_on_return.get() {
+                Some(EditKey::Return)
+            } else if command == sel!(insertTab:) {
+                Some(EditKey::Tab)
+            } else if command == sel!(insertBacktab:) {
+                Some(EditKey::Backtab)
+            } else {
+                None
+            };
+            if let Some(key) = key {
+                core.styled_key(key)
+            } else if command != sel!(insertNewline:) || !core.submit_on_return.get() {
                 false
             } else {
                 let mtm = MainThreadMarker::from(self);
@@ -419,6 +495,15 @@ define_class!(
 );
 
 impl NdTextDelegate {
+    fn storage_edited(&self, storage: &NSTextStorage, mask: NSTextStorageEditActions, range: NSRange, delta: isize) {
+        if !mask.contains(NSTextStorageEditActions::EditedCharacters) {
+            return;
+        }
+        if let Some(styles) = self.ivars().core.styles.borrow_mut().as_mut() {
+            styles.edited(storage, range, delta);
+        }
+    }
+
     fn new(mtm: MainThreadMarker, core: Rc<Core>) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(DelegateIvars { core });
         unsafe { msg_send![super(this), init] }
@@ -874,6 +959,13 @@ define_class!(
         fn read(&self, pboard: &NSPasteboard) -> bool {
             self.take_media(pboard) || unsafe { msg_send![super(self), readSelectionFromPasteboard: pboard] }
         }
+
+        // Command-B and Command-I go to the styler before the menus, while the area has focus.
+        #[unsafe(method(performKeyEquivalent:))]
+        fn perform_key_equivalent(&self, event: &objc2_app_kit::NSEvent) -> bool {
+            self.styled_shortcut(event)
+                || unsafe { msg_send![super(self), performKeyEquivalent: event] }
+        }
     }
 );
 
@@ -885,6 +977,10 @@ pub struct AreaScrollIvars {
     capsule: Cell<Option<f64>>,
     /// Points the clip view leaves free at the trailing edge (`trailing_room`).
     trailing: Cell<f64>,
+    /// The text view's inset from its shape, and the widest its text runs (`max_measure`):
+    /// wider, the horizontal inset grows to centre a column that wide.
+    inset: Cell<NSSize>,
+    measure: Cell<Option<f64>>,
 }
 
 define_class!(
@@ -931,6 +1027,7 @@ define_class!(
                 frame.size.width = (frame.size.width - trailing).max(0.);
                 clip.setFrame(frame);
             }
+            self.place_column();
             self.draw_capsule();
         }
     }
@@ -963,6 +1060,25 @@ impl NdAreaScroll {
 
     fn bezel(&self) -> Option<Retained<NSTextField>> {
         self.ivars().bezel.borrow().clone()
+    }
+
+    /// Sets the text view's inset: the shape's, widened to centre the measure.
+    fn place_column(&self) {
+        let Some(text) = self.documentView().and_then(|v| v.downcast::<NSTextView>().ok()) else { return };
+        let mut inset = self.ivars().inset.get();
+        if let Some(measure) = self.ivars().measure.get() {
+            let padding = unsafe { text.textContainer() }.map_or(0., |c| c.lineFragmentPadding());
+            let width = self.contentView().frame().size.width;
+            inset.width = inset.width.max(((width - measure) / 2. - padding).floor());
+        }
+        if text.textContainerInset() != inset {
+            text.setTextContainerInset(inset);
+        }
+    }
+
+    fn set_inset(&self, inset: NSSize) {
+        self.ivars().inset.set(inset);
+        self.place_column();
     }
 
     /// Lays the clip view out again (the trailing room changed).
@@ -1007,6 +1123,27 @@ fn media_types() -> Vec<&'static NSPasteboardType> {
 }
 
 impl NdAreaView {
+    fn styled_shortcut(&self, event: &objc2_app_kit::NSEvent) -> bool {
+        let focused = self
+            .window()
+            .and_then(|w| w.firstResponder())
+            .is_some_and(|r| std::ptr::eq(&*r as *const NSResponder as *const u8, self as *const Self as *const u8));
+        let keys = NSEventModifierFlags::Command
+            | NSEventModifierFlags::Shift
+            | NSEventModifierFlags::Option
+            | NSEventModifierFlags::Control;
+        if !focused || event.modifierFlags() & keys != NSEventModifierFlags::Command {
+            return false;
+        }
+        let key = match event.charactersIgnoringModifiers().map(|c| c.to_string()).as_deref() {
+            Some("b") => EditKey::Bold,
+            Some("i") => EditKey::Italic,
+            _ => return false,
+        };
+        let Some(core) = self.ivars().core.borrow().as_ref().and_then(std::rc::Weak::upgrade) else { return false };
+        core.styled_key(key)
+    }
+
     fn new(mtm: MainThreadMarker) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(AreaIvars { core: RefCell::new(None), media: Cell::new(false) });
         unsafe { msg_send![super(this), initWithFrame: NSRect::ZERO] }
@@ -1098,6 +1235,14 @@ impl TextAreaControl {
         *text_view.ivars().core.borrow_mut() = Some(Rc::downgrade(&core));
         let delegate = NdTextDelegate::new(mtm, core.clone());
         text_view.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
+        // Measuring reads the layout manager, which moves the view to TextKit 1 for good; doing
+        // it now leaves the storage the styling delegate sits on in place from here on.
+        if let Some(layout) = unsafe { text_view.layoutManager() } {
+            layout.setAllowsNonContiguousLayout(true);
+        }
+        if let Some(storage) = unsafe { text_view.textStorage() } {
+            storage.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
+        }
         let this =
             Self { scroll, text_view, core, _delegate: delegate, enabled: Cell::new(true), props: props.clone() };
         this.apply(None, props);
@@ -1106,9 +1251,16 @@ impl TextAreaControl {
 
     fn apply(&self, old: Option<&TextAreaProps>, new: &TextAreaProps) {
         let tv = &self.text_view;
-        if old.is_none_or(|o| o.placeholder != new.placeholder) {
+        let font_changed = old.is_none_or(|o| o.style.text != new.style.text);
+        if font_changed {
+            let size = NSFont::systemFontSize();
+            let font = crate::look::ns_font(&new.style, size).unwrap_or_else(|| NSFont::systemFontOfSize(size));
+            tv.setFont(Some(&font));
+        }
+        if font_changed || old.is_none_or(|o| o.placeholder != new.placeholder) {
             self.set_placeholder(new.placeholder.as_deref());
         }
+        let restyle = font_changed || old.is_none_or(|o| o.enabled != new.enabled || o.styles != new.styles);
         if old.is_none_or(|o| o.editable != new.editable || o.enabled != new.enabled) {
             tv.setEditable(new.editable && new.enabled);
             tv.setSelectable(new.enabled);
@@ -1133,6 +1285,13 @@ impl TextAreaControl {
         if old.is_none_or(|o| o.style.corner_radii != new.style.corner_radii) {
             self.apply_shape(new);
         }
+        if old.is_none_or(|o| o.max_measure != new.max_measure) {
+            self.scroll.ivars().measure.set(new.max_measure.map(f64::from));
+            self.scroll.place_column();
+        }
+        if restyle {
+            self.set_styler(new.styles.as_ref(), new.enabled);
+        }
         if old.is_some_and(|o| o.emoji_picker != new.emoji_picker) {
             let tv = tv.clone();
             defer(move || {
@@ -1143,6 +1302,32 @@ impl TextAreaControl {
             });
         }
         self.core.apply(&new.text);
+        self.core.paint_styles();
+    }
+
+    /// Takes `styler` (or none), and sets every paragraph again in the area's font and colour.
+    fn set_styler(&self, styler: Option<&Styler>, enabled: bool) {
+        let tv = &self.text_view;
+        let font = tv.font().unwrap_or_else(|| NSFont::systemFontOfSize(NSFont::systemFontSize()));
+        let color = if enabled { NSColor::textColor() } else { NSColor::disabledControlTextColor() };
+        let mut styles = self.core.styles.borrow_mut();
+        let Some(styler) = styler else {
+            if styles.take().is_some()
+                && let Some(storage) = unsafe { tv.textStorage() }
+            {
+                // The runs' attributes go with the styler.
+                let keys: [&objc2_foundation::NSAttributedStringKey; 2] =
+                    unsafe { [NSFontAttributeName, NSForegroundColorAttributeName] };
+                let values: [&AnyObject; 2] = [&font, &color];
+                let attrs = NSDictionary::from_slices(&keys, &values);
+                unsafe { storage.setAttributes_range(Some(&attrs), NSRange::new(0, storage.length())) };
+            }
+            return;
+        };
+        match styles.as_mut() {
+            Some(current) if current.styler() == styler => current.set_base(font, color),
+            _ => *styles = Some(Styles::new(styler.clone(), font, color)),
+        }
     }
 
     /// By default the area wears the rounded bezel of AppKit's text fields, so it matches the
@@ -1160,13 +1345,13 @@ impl TextAreaControl {
             bezel.setEnabled(self.enabled.get());
             self.scroll.set_bezel(Some(bezel));
             // The text keeps clear of the bezel's edge and corners, as a field's text does.
-            self.text_view.setTextContainerInset(NSSize::new(BEZEL_INSET.0, BEZEL_INSET.1));
+            self.scroll.set_inset(NSSize::new(BEZEL_INSET.0, BEZEL_INSET.1));
             return;
         };
         self.scroll.set_bezel(None);
         if radius <= 0. {
             self.scroll.setBorderType(NSBorderType::BezelBorder);
-            self.text_view.setTextContainerInset(NSSize::new(0., 0.));
+            self.scroll.set_inset(NSSize::new(0., 0.));
             return;
         }
         self.scroll.setBorderType(NSBorderType::NoBorder);
@@ -1177,7 +1362,7 @@ impl TextAreaControl {
         let inset = (f64::from(radius) * 0.4).round();
         // One line fills the capsule's height (twice its radius), the text centred in it.
         let vertical = (f64::from(radius) - self.line_height() / 2.).max(6.);
-        self.text_view.setTextContainerInset(NSSize::new(inset, vertical));
+        self.scroll.set_inset(NSSize::new(inset, vertical));
     }
 
     /// NSTextView draws `placeholderAttributedString` while empty; it is not in the public
@@ -1213,6 +1398,9 @@ impl TextAreaControl {
 impl Drop for TextAreaControl {
     fn drop(&mut self) {
         self.text_view.setDelegate(None);
+        if let Some(storage) = unsafe { self.text_view.textStorage() } {
+            storage.setDelegate(None);
+        }
     }
 }
 
