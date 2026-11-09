@@ -1,10 +1,11 @@
 //! `tile_grid()`: tiles in rows the user reorders by dragging, as Arc's pinned favourites. The
 //! grid takes as many columns as fit tiles of at least the minimum width, up to a maximum, and
 //! sizes tiles to share the width; a short last row keeps the pitch. Tiles move to new slots
-//! (a reflow for a new width, a tile added or removed before them) on the grid's reflow
-//! animation, new tiles fade and grow in, and removed ones fade and shrink where they stood
-//! (under reduce motion tiles changing slots dissolve, and new and removed ones only fade). A
-//! dragged tile follows the pointer, takes the slot under it while the others slide aside, and
+//! (new columns for a new width, a tile added or removed before them) on the grid's reflow
+//! animation, while a resize that keeps the columns moves and sizes them with the grid frame
+//! for frame and a tile's size never animates, as in Finder. New tiles fade and grow in, and
+//! removed ones fade and shrink where they stood (under reduce motion tiles changing slots
+//! dissolve, and new and removed ones only fade). A dragged tile follows the pointer, takes the slot under it while the others slide aside, and
 //! settles where it is dropped or slides home on Escape or a release elsewhere. Built from
 //! elements, so it is the same on every backend; the tiles' content is the app's.
 //!
@@ -89,6 +90,8 @@ struct GridState {
     drag: Option<GridDrag>,
     /// Where a drag from elsewhere would land.
     gap: Option<usize>,
+    /// The width and column count tiles were last placed for.
+    placed: Option<(f32, usize)>,
 }
 
 #[derive(Default)]
@@ -209,6 +212,13 @@ impl TileGrid {
         // first measured places.
         let animate = state.width.is_some();
         let m = TileMetrics::new(width, self.max_columns, self.min_width, self.aspect, self.gap);
+        // A new width with the same columns (a window or sidebar resizing) moves every tile with
+        // the grid, frame for frame, as Finder's do; only new columns or slots glide.
+        let resizing = state.placed.is_some_and(|(w, c)| w != width && c == m.columns);
+        let glide = if resizing { Animation::linear(Duration::ZERO) } else { self.reflow };
+        if animate {
+            app.global_mut::<TileGrids>().0.entry(key.clone()).or_default().placed = Some((width, m.columns));
+        }
         let ids: Vec<SharedString> = self.tiles.iter().map(|t| t.id.clone()).collect();
 
         // Each tile's slot as shown now.
@@ -258,9 +268,10 @@ impl TileGrid {
                 .h(px(m.tile.1))
                 .offset(px(dx), px(dy));
             // A dragged tile tracks the pointer at once; its motion stays, so it slides when let go.
+            // Tiles take a new size at once, also when the columns change: only places glide.
             if animate {
                 let animation = if follow.is_some() { Animation::linear(Duration::ZERO) } else { self.reflow };
-                el = el.animate(animation).animate_layout(self.reflow).enter_from(tile_pose).exit_to(tile_pose);
+                el = el.animate(animation).snap_size().animate_layout(glide).enter_from(tile_pose).exit_to(tile_pose);
             }
             let mut el = el.child(tile.content);
             if let Some(kind) = &kind {
@@ -301,7 +312,7 @@ impl TileGrid {
             .h(px(m.height(count)))
             // The grid draws nothing of its own, so under reduce motion its height jumps rather
             // than dissolving every tile with it.
-            .when(animate && !app.reduce_motion(), |d| d.animate(self.reflow))
+            .when(animate && !app.reduce_motion(), |d| d.animate(glide))
             .on_resize(move |e: &Resized, window, app| {
                 let width = e.width;
                 // The height animating reports sizes too; only a new width places the tiles.

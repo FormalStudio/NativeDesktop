@@ -588,10 +588,23 @@ impl Div {
     /// it, a grid reflowing), it glides from where it was with `animation` instead of jumping,
     /// on top of its own offset; a new move mid-flight turns it from where it is. Sizes given
     /// in points animate as with `.animate`, which takes this animation when not set. Not on
-    /// the first layout after mounting.
+    /// the first layout after mounting. A render that gives it an instant animation
+    /// (`Animation::linear(Duration::ZERO)`) has it follow that render's moves at once, a glide
+    /// in flight going on from there: for moves that track the container rather than
+    /// rearrange it.
     pub fn animate_layout(mut self, animation: Animation) -> Self {
         let spec = self.motion.unwrap_or(MotionSpec::new(animation));
         self.motion = Some(MotionSpec { layout: Some(animation), ..spec });
+        self
+    }
+
+    /// Sizes given in points take each render's value at once instead of animating with
+    /// `.animate`, while opacity, offset and scale still move: for an element that tracks its
+    /// container live, as a grid's tiles take the column width through a window or sidebar
+    /// resize. A size already in flight lands where it is asked to be.
+    pub fn snap_size(mut self) -> Self {
+        let spec = self.motion.unwrap_or(MotionSpec::new(Animation::fast()));
+        self.motion = Some(MotionSpec { snap_size: true, ..spec });
         self
     }
 

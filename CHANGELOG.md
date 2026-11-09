@@ -5,6 +5,12 @@ and the one it moves to.
 
 ## Unreleased
 
+- `tile_grid` tiles follow a resize that keeps the column count frame for frame (a sidebar
+  dragged or sliding, a window resizing), as Finder's do, instead of chasing the width on the
+  reflow spring and shrinking mid-resize. New columns still glide the tiles to their slots, and
+  a tile's size never animates. Built on `Div::snap_size()`, which keeps point sizes out of an
+  element's animation, and on `animate_layout` following a render's moves at once when that
+  render passes an instant animation, a glide in flight going on from where it is.
 - Reduce motion dissolves instead of jumping, as Apple's guidance asks. A move that would show
   (more than 12 points of offset, size or layout, or a tenth of a scale) fades out where it was
   and back in where it lands; a smaller one (a hover lift, a press dip) takes its place at once;

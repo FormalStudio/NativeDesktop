@@ -568,6 +568,7 @@ impl Tree {
         let laid_out = previous.as_ref().is_some_and(|p| p.flip.is_some() && p.laid_out);
         let mut state = match previous {
             Some(mut previous) => {
+                previous.state.set_snap_size(spec.snap_size);
                 previous.state.retarget(spec.animation, targets, now, reduce);
                 previous.state
             }

@@ -195,6 +195,12 @@ impl Animation {
         Self::timed(duration, Curve::EaseOut)
     }
 
+    /// Takes no time: a timed animation of zero duration, which lands at once.
+    pub fn is_instant(&self) -> bool {
+        matches!(*self, Animation::Timed { duration, .. } if duration.is_zero())
+            || matches!(*self, Animation::Delayed { delay, duration, .. } if delay.is_zero() && duration.is_zero())
+    }
+
     pub fn ease_in_out(duration: Duration) -> Self {
         Self::timed(duration, Curve::EaseInOut)
     }
@@ -289,11 +295,13 @@ pub(crate) struct MotionSpec {
     pub exit: Option<Pose>,
     /// Moves between layout frames glide on this.
     pub layout: Option<Animation>,
+    /// Sizes take each render's value at once (`.snap_size()`).
+    pub snap_size: bool,
 }
 
 impl MotionSpec {
     pub fn new(animation: Animation) -> Self {
-        Self { animation, enter: None, exit: None, layout: None }
+        Self { animation, enter: None, exit: None, layout: None, snap_size: false }
     }
 }
 
@@ -480,12 +488,16 @@ pub(crate) struct MotionState {
     /// What the element asked for last.
     targets: Values,
     motions: [Option<Motion>; CHANNELS],
+    /// Leaves sizes out: the element shows its own each render.
+    snap_size: bool,
 }
 
 impl MotionState {
     /// A state at rest on `targets`, or coming in from `enter`.
     pub fn new(spec: MotionSpec, targets: Values, now: f64, reduce: bool) -> Self {
-        let mut state = MotionState { animation: spec.animation, targets, motions: [None; CHANNELS] };
+        let mut state =
+            MotionState { animation: spec.animation, targets, motions: [None; CHANNELS], snap_size: spec.snap_size };
+        state.targets = state.own(targets);
         if let Some(pose) = spec.enter {
             let from: Values = [
                 pose.opacity.map(f64::from),
@@ -498,6 +510,21 @@ impl MotionState {
             state.start_from(&from, now, reduce);
         }
         state
+    }
+
+    /// `targets` without the channels this element does not animate.
+    fn own(&self, mut targets: Values) -> Values {
+        if self.snap_size {
+            targets[WIDTH] = None;
+            targets[HEIGHT] = None;
+        }
+        targets
+    }
+
+    /// Whether sizes take each render's value at once; a size in flight stops where it is
+    /// asked to be.
+    pub fn set_snap_size(&mut self, snap: bool) {
+        self.snap_size = snap;
     }
 
     /// Where channel `c` shows at `now` and how fast it moves.
@@ -534,6 +561,7 @@ impl MotionState {
     /// it from where they are now. Under reduce motion a move that shows dissolves and a
     /// smaller one jumps.
     pub fn retarget(&mut self, animation: Animation, targets: Values, now: f64, reduce: bool) {
+        let targets = self.own(targets);
         self.animation = animation;
         let mut switch = None;
         if reduce {
@@ -580,6 +608,10 @@ impl MotionState {
     /// the move, so it travels on from there to its own offset with the velocity it had. Under
     /// reduce motion a move that shows dissolves, and a smaller one jumps.
     pub fn shift(&mut self, animation: Animation, by: (f64, f64), now: f64, reduce: bool) {
+        // No time to glide in: it follows layout, and a glide in flight goes on from there.
+        if animation.is_instant() {
+            return;
+        }
         if reduce {
             let held = self.holding(OFFSET_X, now) || self.holding(OFFSET_Y, now);
             if !held && !shows(OFFSET_X, 0., by.0) && !shows(OFFSET_Y, 0., by.1) {

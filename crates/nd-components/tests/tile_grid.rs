@@ -190,19 +190,43 @@ fn an_added_tile_fades_in_and_pushes_the_rest_along() {
     assert_eq!(shown(&cx, b), (122., 0.));
 }
 
+/// Lays the window out at `width` and renders what the grid makes of it, without advancing
+/// the clock: the frame after the one that resized the grid.
+fn resize(cx: &mut TestApp, handle: &WindowHandle<Pinned>, width: f32) {
+    cx.resize_window(handle.id(), Size { width, height: 400. });
+    cx.frame();
+    cx.drain_events();
+    cx.frame();
+}
+
 #[test]
-fn a_new_width_reflows_on_the_spring() {
+fn a_new_width_with_the_same_columns_moves_tiles_with_the_grid() {
+    // A sidebar sliding or a window resizing: Finder's tiles follow frame for frame rather than
+    // chase the width on a spring.
     let (mut cx, handle) = open_pinned(&["a", "b"]);
     let b = node(&cx, "b");
-    cx.resize_window(handle.id(), Size { width: 300., height: 400. });
-    for _ in 0..3 {
-        cx.drain_events();
-        cx.frame();
+    for width in [440., 380., 300.] {
+        resize(&mut cx, &handle, width);
+        let tile = (width - 24.) / 4.;
+        assert_eq!(shown(&cx, b), (tile + 8., 0.), "at {width}");
+        assert_eq!(cx.backend().frame(b).expect("laid out").size.width, tile, "at {width}");
     }
-    assert!((shown(&cx, b).0 - 122.).abs() < 0.5, "no jump: {:?}", shown(&cx, b));
+    let at = shown(&cx, b);
+    cx.advance_clock(0.016);
+    cx.frame();
+    assert_eq!(shown(&cx, b), at, "nothing left to glide");
+}
+
+#[test]
+fn new_columns_glide_places_and_take_the_size_at_once() {
+    let (mut cx, handle) = open_pinned(&["a", "b"]);
+    let b = node(&cx, "b");
+    resize(&mut cx, &handle, 130.);
+    assert!((shown(&cx, b).0 - 122.).abs() < 0.5, "glides from its old place: {:?}", shown(&cx, b));
+    assert_eq!(cx.backend().frame(b).expect("laid out").size.width, 61., "two 61 pt columns at once");
     assert!(cx.needs_frame(), "moving");
     settle(&mut cx);
-    assert_eq!(shown(&cx, b), (77., 0.), "four 69 pt columns");
+    assert_eq!(shown(&cx, b), (69., 0.));
 }
 
 #[test]
