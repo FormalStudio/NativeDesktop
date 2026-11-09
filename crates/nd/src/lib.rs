@@ -95,7 +95,7 @@ pub mod test {
     pub use nd_ui::semantics::{ActionError, SemanticAction};
     pub use nd_ui::test_app::TestApp;
     pub use nd_ui::test_backend::TestBackend;
-    pub use nd_ui::{ButtonProps, NodeId, Size, TextProps};
+    pub use nd_ui::{ButtonProps, DivProps, NodeId, Size, TextProps};
 
     use nd_core::WindowId;
 

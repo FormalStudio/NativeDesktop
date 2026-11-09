@@ -5,6 +5,8 @@ and the one it moves to.
 
 ## Unreleased
 
+- `nd::test` exports `DivProps`, so an app's tier 1 test can read a div's look from the
+  recording backend (`cx.backend().props(node)`), as it reads `ButtonProps` and `TextProps`.
 - On AppKit a hero's first frame draws it on its source: AppKit put the view's layer transform
   back to identity when it synced the geometry of the hero lifted onto the frame view, so for one
   frame the hero showed at its own place, the card's size in the corner of the page it grows into.
