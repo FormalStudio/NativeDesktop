@@ -16,6 +16,9 @@ and the one it moves to.
   `glides` under reduce motion too, so a dissolve starts where the element was.
 - `ND_REDUCE_MOTION=1` or `0` stands in for the system's reduce motion setting on every
   backend, to watch either mode without changing it.
+- A motion started by a key press or drag step after the window sat idle starts now. AppKit
+  ran those frames on the last frame's clock, and kept the display link's last tick after
+  pausing, so a fade begun from idle was already over on the next tick and looked instant.
 - `on_animation_end` waits for the node to be at rest after its frame renders: a value that
   settles in the frame a render starts it again (the next leg of a crossfade) no longer reports
   an end.

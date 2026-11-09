@@ -152,6 +152,16 @@ impl Host {
             }
         }
     }
+
+    /// A frame run outside the display link (a key, a drag step). Each window's clock reads
+    /// the current time first: one idle since its last frame would otherwise start a motion
+    /// in the past, and the motion would end on the next tick.
+    fn frame_now(&self, app: &mut App) {
+        for (id, window) in self.windows.borrow().iter() {
+            app.tick_window(*id, window.clock().next_frame_time());
+        }
+        app.frame();
+    }
 }
 
 /// Makes `window` a native tab of `group` (ARCHITECTURE.md 5.5): next to the group's key window,
@@ -219,7 +229,7 @@ impl AppRouter {
         if let Ok(mut app) = host.app.try_borrow_mut()
             && app.needs_frame()
         {
-            app.frame();
+            host.frame_now(&mut app);
         }
         host.after_frame();
         result
@@ -242,7 +252,7 @@ impl KeyRouter for AppRouter {
         if let Ok(mut app) = host.app.try_borrow_mut()
             && app.needs_frame()
         {
-            app.frame();
+            host.frame_now(&mut app);
         }
         host.after_frame();
         result

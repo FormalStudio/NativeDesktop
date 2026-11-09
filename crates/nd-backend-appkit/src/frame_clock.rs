@@ -124,6 +124,11 @@ impl FrameClock {
             let hz = (ticks - 1) as f64 / (last - first);
             eprintln!("nd: frame clock {ticks} ticks at {hz:.1} Hz");
         }
+        if !on {
+            // The tick that found no work is not the next frame's: that one runs when something
+            // changes, and reads the time then.
+            self.inner.pending.set(None);
+        }
         link.setPaused(!on);
     }
 
