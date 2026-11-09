@@ -25,6 +25,9 @@ and the one it moves to.
 - A shared element with no source on screen rises into place as it fades in, and fades out
   where it is going back.
 - `ND_ANIMATION_SLOWDOWN` stretches explicit animations and springs too, not only paced ones.
+- Menu roles `CloseWindow` (Close, Cmd-W, in File), `Find` (the standard Find submenu, wired to
+  the text view's find bar) and `Bold` and `Italic` (Cmd-B and Cmd-I through the focused text
+  area). The AppKit Edit menu includes Find, and text areas use the find bar.
 - `AnimationEnded` is in the prelude.
 - `markdown_editor` previews live, as Obsidian and Bear do: outside the paragraphs the selection
   touches (while the area has focus), `#`, emphasis delimiters, backticks and a link's brackets

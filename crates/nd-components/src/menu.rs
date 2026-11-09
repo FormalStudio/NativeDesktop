@@ -21,6 +21,9 @@ pub enum MenuRole {
     Copy,
     Paste,
     SelectAll,
+    /// Close, Command-W: closes the key window as its close button does. The standard File
+    /// menu ends with it.
+    CloseWindow,
     Minimize,
     Zoom,
     BringAllToFront,
@@ -28,6 +31,14 @@ pub enum MenuRole {
     /// Show Sidebar or Hide Sidebar, whichever applies, for a View menu. AppKit titles it from
     /// the window's split view; elsewhere it dispatches `nd::ToggleSidebar`.
     ToggleSidebar,
+    /// The Find submenu of an Edit menu (Find, Find and Replace, Find Next, Find Previous, Use
+    /// Selection for Find): AppKit's find bar over the text area that has focus. The standard
+    /// Edit menu has it.
+    Find,
+    /// Bold and Italic for a Format menu: the focused styled text area's styler wraps the
+    /// selection, as Command-B and Command-I do there.
+    Bold,
+    Italic,
 }
 
 pub enum MenuItem {
@@ -104,7 +115,7 @@ pub enum MenuKind {
     Normal,
     /// The application menu: About, Settings, Services, Hide and Quit come from the OS.
     App,
-    /// Undo, Redo, Cut, Copy, Paste, Select All.
+    /// Undo, Redo, Cut, Copy, Paste, Select All, Find.
     Edit,
     /// Minimize, Zoom, the window list.
     Window,

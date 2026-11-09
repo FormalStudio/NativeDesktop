@@ -1096,6 +1096,31 @@ define_class!(
                 || unsafe { msg_send![super(self), performKeyEquivalent: event] }
         }
 
+        // Format > Bold and Italic, chosen from the menu bar.
+        #[unsafe(method(ndBold:))]
+        fn nd_bold(&self, _sender: Option<&objc2::runtime::AnyObject>) {
+            if let Some(core) = self.core() {
+                core.styled_key(EditKey::Bold);
+            }
+        }
+
+        #[unsafe(method(ndItalic:))]
+        fn nd_italic(&self, _sender: Option<&objc2::runtime::AnyObject>) {
+            if let Some(core) = self.core() {
+                core.styled_key(EditKey::Italic);
+            }
+        }
+
+        #[unsafe(method(validateMenuItem:))]
+        fn validate_menu_item(&self, menu_item: &objc2_app_kit::NSMenuItem) -> bool {
+            let action = menu_item.action();
+            if action == Some(sel!(ndBold:)) || action == Some(sel!(ndItalic:)) {
+                self.isEditable() && self.core().is_some_and(|c| c.styles.borrow().is_some())
+            } else {
+                unsafe { msg_send![super(self), validateMenuItem: menu_item] }
+            }
+        }
+
         // Live preview's code wells, quote bars, rules, bullets and task boxes sit behind the
         // text.
         #[unsafe(method(drawViewBackgroundInRect:))]
@@ -1413,6 +1438,9 @@ impl TextAreaControl {
         scroll.setDocumentView(Some(&text_view));
         text_view.setRichText(false);
         text_view.setAllowsUndo(true);
+        // Edit > Find opens the find bar over the area, as in TextEdit.
+        text_view.setUsesFindBar(true);
+        text_view.setIncrementalSearchingEnabled(true);
         text_view.setFont(Some(&NSFont::systemFontOfSize(NSFont::systemFontSize())));
         let core = Core::new(cx, Source::Area(Retained::into_super(text_view.clone())), false);
         *text_view.ivars().core.borrow_mut() = Some(Rc::downgrade(&core));

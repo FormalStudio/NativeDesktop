@@ -164,6 +164,7 @@ fn role_item(mtm: MainThreadMarker, role: MenuRole, app_name: &str) -> Retained<
         MenuRole::Copy => ("Copy".into(), sel!(copy:), "c", cmd),
         MenuRole::Paste => ("Paste".into(), sel!(paste:), "v", cmd),
         MenuRole::SelectAll => ("Select All".into(), sel!(selectAll:), "a", cmd),
+        MenuRole::CloseWindow => ("Close".into(), sel!(performClose:), "w", cmd),
         MenuRole::Minimize => ("Minimize".into(), sel!(performMiniaturize:), "m", cmd),
         MenuRole::Zoom => ("Zoom".into(), sel!(performZoom:), "", cmd),
         MenuRole::BringAllToFront => ("Bring All to Front".into(), sel!(arrangeInFront:), "", cmd),
@@ -175,10 +176,40 @@ fn role_item(mtm: MainThreadMarker, role: MenuRole, app_name: &str) -> Retained<
         MenuRole::ToggleSidebar => {
             ("Show Sidebar".into(), sel!(toggleSidebar:), "s", cmd | NSEventModifierFlags::Control)
         }
+        MenuRole::Find => return find_menu(mtm),
+        // The text area answers these through the responder chain; nd's text areas take the
+        // keys themselves before the menu sees them.
+        MenuRole::Bold => ("Bold".into(), sel!(ndBold:), "b", cmd),
+        MenuRole::Italic => ("Italic".into(), sel!(ndItalic:), "i", cmd),
     };
     let i = item(mtm, &title, Some(action), key);
     i.setKeyEquivalentModifierMask(mask);
     i
+}
+
+/// Edit > Find, as TextEdit has it: each item asks the focused text view's find bar for an
+/// `NSTextFinderAction`, carried in its tag.
+fn find_menu(mtm: MainThreadMarker) -> Retained<NSMenuItem> {
+    let cmd = NSEventModifierFlags::Command;
+    let find = item(mtm, "Find", None, "");
+    let menu = NSMenu::initWithTitle(NSMenu::alloc(mtm), &NSString::from_str("Find"));
+    // NSTextFinderAction: ShowFindInterface 1, NextMatch 2, PreviousMatch 3, SetSearchString 7,
+    // ShowReplaceInterface 12.
+    let entries: [(&str, &str, NSEventModifierFlags, isize); 5] = [
+        ("Find…", "f", cmd, 1),
+        ("Find and Replace…", "f", cmd | NSEventModifierFlags::Option, 12),
+        ("Find Next", "g", cmd, 2),
+        ("Find Previous", "g", cmd | NSEventModifierFlags::Shift, 3),
+        ("Use Selection for Find", "e", cmd, 7),
+    ];
+    for (title, key, mask, tag) in entries {
+        let i = item(mtm, title, Some(sel!(performTextFinderAction:)), key);
+        i.setKeyEquivalentModifierMask(mask);
+        i.setTag(tag);
+        menu.addItem(&i);
+    }
+    find.setSubmenu(Some(&menu));
+    find
 }
 
 struct Builder<'a> {
@@ -257,6 +288,8 @@ impl Builder<'_> {
                     role(MenuRole::Copy),
                     role(MenuRole::Paste),
                     role(MenuRole::SelectAll),
+                    MenuItem::Separator,
+                    role(MenuRole::Find),
                 ];
                 if !menu.items.is_empty() {
                     items.push(MenuItem::Separator);
@@ -316,11 +349,26 @@ fn context_items(
     ns
 }
 
-/// The menu bar from `menus`, with the app, Edit and Window menus added where the app left
-/// them out, so the system items (Quit, Copy, Minimize) are always there.
+/// The menu bar from `menus`, with the app, File, Edit and Window menus added where the app left
+/// them out, so the system items (Quit, Close, Copy, Minimize) are always there.
 pub fn menu_bar(mtm: MainThreadMarker, mut menus: Vec<Menu>, bindings: &[KeyBinding]) -> Retained<NSMenu> {
     if !menus.iter().any(|m| m.kind == MenuKind::App) {
         menus.insert(0, Menu::app([]));
+    }
+    let has_close = |m: &Menu| m.items.iter().any(|i| matches!(i, MenuItem::Role(MenuRole::CloseWindow)));
+    if !menus.iter().any(has_close) {
+        match menus.iter_mut().find(|m| m.kind == MenuKind::Normal && m.title.as_ref() == "File") {
+            Some(file) => {
+                if !file.items.is_empty() {
+                    file.items.push(MenuItem::Separator);
+                }
+                file.items.push(MenuItem::Role(MenuRole::CloseWindow));
+            }
+            None => {
+                let at = menus.iter().position(|m| m.kind == MenuKind::App).map_or(0, |i| i + 1);
+                menus.insert(at, Menu::new("File").items([MenuItem::Role(MenuRole::CloseWindow)]));
+            }
+        }
     }
     if !menus.iter().any(|m| m.kind == MenuKind::Edit) {
         let at = menus.iter().position(|m| m.kind == MenuKind::App).map_or(0, |i| i + 1);
