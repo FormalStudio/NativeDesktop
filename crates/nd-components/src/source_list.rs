@@ -268,8 +268,9 @@ pub struct SourceActionClicked {
     pub action: SharedString,
 }
 
-/// A right click on row `id`, which the backend selected first where the platform does (not on
-/// macOS). `x`/`y` are in the coordinates of the tree's `node`, as
+/// A right click on row `id`, which stays unselected: selecting a sidebar row navigates, and
+/// GNOME's, Windows' and Finder's sidebars open a row's menu without going there. `x`/`y` are
+/// in the coordinates of the tree's `node`, as
 /// [`ContextMenuRequested`](crate::ContextMenuRequested)'s.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SourceMenuRequested {
@@ -390,9 +391,8 @@ impl SourceTree {
         SourceTree(self.0.on(f))
     }
 
-    /// Each row answers a right click with the menu `build` fills for its id. A row that
-    /// selects is selected first, as GTK and Windows lists do; macOS leaves the selection as it
-    /// is, as Finder's sidebar does.
+    /// Each row answers a right click with the menu `build` fills for its id, leaving the
+    /// selection as it is.
     pub fn context_menu(
         mut self,
         build: impl Fn(&SharedString, ContextMenu, &mut Window, &mut App) -> ContextMenu + 'static,

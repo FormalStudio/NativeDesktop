@@ -11,7 +11,7 @@ use nd_components::{
     TitlebarInset, TitlebarProps, Toolbar, ToolbarItem, ToolbarItemProps, ToolbarProps, ToolbarSystemItem, ToolbarTab,
     ToolbarTabProps,
 };
-use nd_components::{REVEAL_EDGE, SidebarRevealed};
+use nd_components::{PANE_MIN_WIDTH, REVEAL_EDGE, SidebarRevealed};
 use nd_core::NodeId;
 use nd_gpui::gpui::prelude::FluentBuilder as _;
 use nd_gpui::gpui::{
@@ -41,6 +41,23 @@ fn styled(style: &StyleRefinement) -> gpui::Div {
 
 fn props<T: 'static>(node: &Node) -> Option<&T> {
     node.props.downcast_ref::<T>()
+}
+
+/// The least width the content keeps beside an open sidebar: in a narrower scaffold the sidebar
+/// folds away and its toggle lays it over the content, as libadwaita's split views collapse
+/// at a breakpoint and AppKit's split view collapses its sidebar when the window shrinks.
+const NARROW_CONTENT: f32 = 360.;
+
+type Scaffolds = std::rc::Rc<std::cell::RefCell<std::collections::HashSet<NodeId>>>;
+
+/// The sidebar toggle of `scaffold`: a narrow scaffold lays its sidebar over the content or
+/// takes it away again, a wide one shows or hides it beside the content.
+pub(crate) fn toggle_sidebar(scaffold: NodeId, hidden: &Scaffolds, narrow: &Scaffolds, overlaid: &Scaffolds) {
+    let set = if narrow.borrow().contains(&scaffold) { overlaid } else { hidden };
+    let mut set = set.borrow_mut();
+    if !set.remove(&scaffold) {
+        set.insert(scaffold);
+    }
 }
 
 pub(crate) type PaneSlides = std::rc::Rc<std::cell::RefCell<std::collections::HashMap<NodeId, PaneSlide>>>;
@@ -96,6 +113,7 @@ impl Build<'_> {
             // Toolbar first as the title row, then the panes side by side.
             let (bars, panes): (Vec<NodeId>, Vec<NodeId>) =
                 node.children.iter().partition(|c| self.nodes.get(c).is_some_and(is_kind::<Toolbar>));
+            self.fold_narrow_sidebar(id, &panes, window);
             let split = self.split_headers(id, node, &bars);
             let outer = self.split.replace(split);
             let bars: Vec<AnyElement> = bars.iter().map(|c| self.node(*c, window, cx)).collect();
@@ -111,6 +129,12 @@ impl Build<'_> {
             let fluent = theme.preset == nd_theme::Preset::Fluent;
             if p.role == PaneRole::Sidebar && p.collapsed && p.edge_reveal {
                 return Some(self.revealed_sidebar(id, node, p, window, cx));
+            }
+            if p.role == PaneRole::Sidebar
+                && !p.collapsed
+                && node.parent.is_some_and(|s| self.backend.narrow_sidebars.borrow().contains(&s))
+            {
+                return Some(self.overlaid_sidebar(id, node, p, window, cx));
             }
             // Hidden by the toolbar toggle: WinUI's navigation pane folds to an icon rail,
             // elsewhere the sidebar goes.
@@ -482,6 +506,104 @@ impl Build<'_> {
 }
 
 impl Build<'_> {
+    /// Marks `scaffold` narrow while its window leaves the content less than [`NARROW_CONTENT`]
+    /// beside the sidebar among `panes` at its narrowest. Folding and unfolding is immediate, as at a libadwaita
+    /// breakpoint; widening past it drops an overlaid sidebar back into the row.
+    fn fold_narrow_sidebar(&self, scaffold: NodeId, panes: &[NodeId], window: &gpui::Window) {
+        let sidebar = panes.iter().find_map(|c| {
+            let p = self.nodes.get(c).and_then(|n| props::<PaneProps>(n))?;
+            (p.role == PaneRole::Sidebar).then_some((*c, p))
+        });
+        // The breakpoint is the window's width, as libadwaita's are: against the narrowest the
+        // sidebar goes, so dragging it wider never folds it.
+        let narrow = sidebar.is_some_and(|(_, p)| {
+            window.viewport_size().width.as_f32() < p.min_width.unwrap_or(PANE_MIN_WIDTH) + NARROW_CONTENT
+        });
+        let was = self.backend.narrow_sidebars.borrow().contains(&scaffold);
+        if narrow == was {
+            return;
+        }
+        if narrow {
+            self.backend.narrow_sidebars.borrow_mut().insert(scaffold);
+        } else {
+            self.backend.narrow_sidebars.borrow_mut().remove(&scaffold);
+            self.backend.overlaid_sidebars.borrow_mut().remove(&scaffold);
+        }
+        if let Some((pane, _)) = sidebar {
+            self.backend.pane_slides.borrow_mut().remove(&pane);
+        }
+    }
+
+    /// The sidebar of a narrow scaffold: nothing in the row, and while its toggle has it open,
+    /// a panel over the content's leading edge that slides in and out. A press on the content
+    /// beside it closes it, as libadwaita's overlay split view does.
+    fn overlaid_sidebar(
+        &self,
+        id: NodeId,
+        node: &Node,
+        p: &PaneProps,
+        window: &mut gpui::Window,
+        cx: &mut gpui::App,
+    ) -> AnyElement {
+        let Some(scaffold) = node.parent else { return div().into_any_element() };
+        let open = self.backend.overlaid_sidebars.borrow().contains(&scaffold);
+        let theme = self.theme();
+        let shown = match self.pane_slide(id, open, &theme) {
+            Some((shown, _)) => {
+                window.request_animation_frame();
+                shown
+            }
+            None if open => 1.,
+            None => 0.,
+        };
+        let slot = div().relative().flex_none().w(px(0.)).h_full();
+        if shown <= 0. {
+            self.forget_bounds(node);
+            return slot.into_any_element();
+        }
+        let width = self.dragged_width(id, p).or(p.width).or(p.min_width).unwrap_or(220.);
+        let look = self.look();
+        let content = node.children.iter().map(|c| self.node(*c, window, cx)).collect::<Vec<_>>();
+        let panel = styled(&p.style)
+            .id(ElementId::NamedInteger("nd-overlaid-sidebar".into(), id.0))
+            .absolute()
+            .top_0()
+            .left(px((shown - 1.) * width))
+            .h_full()
+            .w(px(width))
+            .flex()
+            .flex_col()
+            .bg(theme.surface.sidebar)
+            .border_r_1()
+            .border_color(look.border)
+            .shadow(vec![gpui::BoxShadow {
+                color: gpui::black().opacity(0.12 * shown),
+                offset: gpui::point(px(0.), px(0.)),
+                blur_radius: px(12.),
+                spread_radius: px(0.),
+                inset: false,
+            }])
+            .occlude()
+            .children(content);
+        let (overlaid, wake) = (self.backend.overlaid_sidebars.clone(), self.wake.clone());
+        let catcher = div()
+            .id(ElementId::NamedInteger("nd-overlaid-sidebar-dismiss".into(), id.0))
+            .absolute()
+            .top_0()
+            .left_0()
+            .h_full()
+            .w(window.viewport_size().width)
+            .occlude()
+            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                overlaid.borrow_mut().remove(&scaffold);
+                cx.stop_propagation();
+                wake(cx);
+                window.refresh();
+            });
+        let layer = div().absolute().top_0().left_0().h_full().when(open, |l| l.child(catcher)).child(panel);
+        slot.child(gpui::deferred(layer).with_priority(1)).into_any_element()
+    }
+
     /// A collapsed `edge_reveal()` sidebar: a strip along the leading edge that slides the
     /// sidebar in as a floating panel over the content while the pointer is on it or the panel.
     /// Takes no room in the row; both paint above the panes after it.
@@ -606,20 +728,39 @@ impl Build<'_> {
         })
     }
 
-    /// Whether `node` sits in a sidebar the toolbar toggle folded to a rail.
+    /// The narrow scaffold whose sidebar `node` sits in: picking a row there takes the overlaid
+    /// sidebar away to show what it picked, as libadwaita apps close theirs.
+    pub(crate) fn narrow_scaffold_of(&self, node: &Node) -> Option<NodeId> {
+        let mut at = node.parent;
+        while let Some(id) = at {
+            let n = self.nodes.get(&id)?;
+            if props::<PaneProps>(n).is_some_and(|p| p.role == PaneRole::Sidebar) {
+                return n.parent.filter(|s| self.backend.narrow_sidebars.borrow().contains(s));
+            }
+            at = n.parent;
+        }
+        None
+    }
+
+    /// Whether `node` sits in a sidebar the toolbar toggle folded to a rail, which only WinUI
+    /// has: elsewhere a hidden sidebar slides away in full, and a narrow scaffold's sidebar
+    /// draws in full over the content.
     pub(crate) fn in_hidden_sidebar(&self, node: &Node) -> bool {
+        if self.theme().preset != nd_theme::Preset::Fluent {
+            return false;
+        }
         let mut at = node.parent;
         while let Some(id) = at {
             let Some(n) = self.nodes.get(&id) else { return false };
             if props::<PaneProps>(n).is_some_and(|p| p.role == PaneRole::Sidebar) {
-                return self.sidebar_hidden(n);
+                let narrow = n.parent.is_some_and(|s| self.backend.narrow_sidebars.borrow().contains(&s));
+                return !narrow && self.sidebar_hidden(n);
             }
             at = n.parent;
         }
         false
     }
 
-    /// Whether the drawn toolbar toggle hid the sidebar of the scaffold `pane` sits in.
     /// While the pane slides open or shut, the share of it shown and its width. `None` once it
     /// rests, and on the first draw: a pane the window opens with is simply there.
     fn pane_slide(&self, id: NodeId, open: bool, theme: &nd_theme::Theme) -> Option<(f32, f32)> {
@@ -657,8 +798,13 @@ impl Build<'_> {
         }
     }
 
+    /// Whether the drawn toolbar toggle hid the sidebar of the scaffold `pane` sits in, or the
+    /// scaffold is too narrow for it beside the content.
     fn sidebar_hidden(&self, pane: &Node) -> bool {
-        pane.parent.is_some_and(|scaffold| self.backend.hidden_sidebars.borrow().contains(&scaffold))
+        pane.parent.is_some_and(|scaffold| {
+            self.backend.hidden_sidebars.borrow().contains(&scaffold)
+                || self.backend.narrow_sidebars.borrow().contains(&scaffold)
+        })
     }
 
     /// The toolbar's sidebar toggle: shows and hides its scaffold's sidebar, as AppKit's
@@ -667,6 +813,7 @@ impl Build<'_> {
         let look = self.look();
         let scaffold = node.parent.and_then(|toolbar| self.nodes.get(&toolbar)).and_then(|toolbar| toolbar.parent);
         let hidden = self.backend.hidden_sidebars.clone();
+        let (narrow, overlaid) = (self.backend.narrow_sidebars.clone(), self.backend.overlaid_sidebars.clone());
         // WinUI's TitleBar pane toggle: 40 wide, 2 px clear of the 48 px bar's edges.
         let (width, height) = match theme.preset {
             nd_theme::Preset::Fluent => (px(40.), px(44.)),
@@ -687,10 +834,7 @@ impl Build<'_> {
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(move |_, window, _| {
                 if let Some(scaffold) = scaffold {
-                    let mut hidden = hidden.borrow_mut();
-                    if !hidden.remove(&scaffold) {
-                        hidden.insert(scaffold);
-                    }
+                    toggle_sidebar(scaffold, &hidden, &narrow, &overlaid);
                 }
                 window.refresh();
             })

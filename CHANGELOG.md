@@ -27,6 +27,16 @@ and the one it moves to.
 - A context menu leaves out a submenu with nothing in it, and the separators that leaves doubled
   or at an edge: AppKit drew its row with a chevron that opened nothing on hover, as a note's
   Move To did with no folder to move to. A menu left with nothing opens nothing, on every backend.
+- On GPUI a window too narrow for its sidebar beside 360 points of content folds the sidebar
+  away, as libadwaita's split views collapse at a breakpoint and AppKit's split view collapses
+  its sidebar. The sidebar toggle then slides it in over the content, and a press on the
+  content beside it closes it. The breakpoint is the window's width against the sidebar's
+  `min_w`, so dragging the sidebar wider never folds it.
+- A right click on a `source_tree` or `source_list` row on GPUI opens its menu without selecting
+  the row: selecting a sidebar row navigates, and the sidebars of Files and Explorer open the menu
+  in place, as Finder's does.
+- A `source_action` with no `label` draws its icon on GPUI, as a flat button in the row's suffix,
+  instead of its tooltip as text.
 - `BoxShadow` is in the prelude, so an app can pass shadows of its own to `.shadow(vec![..])`
   instead of only the `shadow_sm()` to `shadow_2xl()` presets.
 - `nd::test` exports `DivProps`, so an app's tier 1 test can read a div's look from the
