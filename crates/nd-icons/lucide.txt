@@ -27,6 +27,7 @@ file
 file-text
 flag
 folder
+folder-plus
 globe
 hand
 heart

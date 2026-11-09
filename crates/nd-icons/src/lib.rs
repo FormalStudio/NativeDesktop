@@ -114,6 +114,7 @@ icons! {
     FileText "file-text" ["doc.text"] '\u{E8A5}';
     Flag "flag" ["flag"] '\u{E7C1}';
     Folder "folder" ["folder"] '\u{E8B7}';
+    FolderPlus "folder-plus" ["folder.badge.plus"] '\u{E8F4}';
     Globe "globe" ["globe"] '\u{E774}';
     Hand "hand" ["hand.raised"] '\u{ED53}';
     Heart "heart" ["heart"] '\u{EB51}';

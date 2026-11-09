@@ -30,6 +30,7 @@ and the one it moves to.
   area). The AppKit Edit menu includes Find, and text areas use the find bar.
 - The settings window has a fixed size on macOS, as the system's do.
 - `AnimationEnded` is in the prelude.
+- `Icon::FolderPlus`.
 - `markdown_editor` previews live, as Obsidian and Bear do: outside the paragraphs the selection
   touches (while the area has focus), `#`, emphasis delimiters, backticks and a link's brackets
   and target take no room, a bullet shows as a dot, `- [ ]` and `- [x]` as a box a click ticks
