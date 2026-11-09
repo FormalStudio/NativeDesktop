@@ -349,8 +349,8 @@ pub enum TreeInput {
     Press(nd_ui::DragItem, SharedString, gpui::Point<Pixels>),
     /// A row's bounds in the window, as just laid out, by its id.
     Row(SharedString, gpui::Bounds<Pixels>),
-    /// A right click on a row, with whether to select it first and where in the window it landed.
-    Menu(SharedString, bool, gpui::Point<Pixels>),
+    /// A right click on a row, and where in the window it landed.
+    Menu(SharedString, gpui::Point<Pixels>),
     Middle(SharedString),
 }
 
@@ -578,9 +578,10 @@ pub fn source_tree_view(
             marks.text(quiet, secondary, &under, footnote, regular);
         }
         for action in node.actions.iter().filter_map(|a| actions.get(a)).filter(|_| show_actions) {
-            let color = if action.destructive { theme.danger } else { secondary };
-            let label = action.label.clone().unwrap_or_else(|| action.accessible_label());
-            marks.text(&label, color, &under, footnote, regular);
+            if let Some(label) = &action.label {
+                let color = if action.destructive { theme.danger } else { secondary };
+                marks.text(label, color, &under, footnote, regular);
+            }
         }
         let key = node.id.clone();
         // libadwaita's rows start 8 px in and keep no room for a disclosure they do not have.
@@ -682,20 +683,34 @@ pub fn source_tree_view(
                 .iter()
                 .filter_map(|action_id| {
                     let action = actions.get(action_id)?;
-                    let label = action.label.clone().unwrap_or_else(|| action.accessible_label());
                     let color = if action.destructive { theme.danger } else { secondary };
-                    let mut button = div()
+                    let button = div()
                         .id(ElementId::Name(format!("{}-{}", node.id, action.id).into()))
                         .role(gpui::Role::Button)
                         .aria_label(action.accessible_label())
                         .flex_shrink_0()
                         .ml(theme.spacing.xs)
-                        .px(theme.spacing.xs)
                         .rounded(theme.radius.sm)
-                        .text_size(theme.type_scale.footnote)
                         .text_color(color)
-                        .opacity(if show_actions { 1. } else { 0. })
-                        .child(label);
+                        .opacity(if show_actions { 1. } else { 0. });
+                    // The icon as a flat button, as a libadwaita row's suffix; a label stands in
+                    // for it only where the app gave one.
+                    let mut button = match (&action.label, icon_glyph(Some(action.icon))) {
+                        (None, Some(g)) => {
+                            let hover = with_alpha(theme.text.primary, theme.text.primary.a * 0.1);
+                            button
+                                .size(px(24.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .hover(move |s| s.bg(hover))
+                                .child(glyph(g, px(16.), color, px(1.5)))
+                        }
+                        (label, _) => button
+                            .px(theme.spacing.xs)
+                            .text_size(theme.type_scale.footnote)
+                            .child(label.clone().unwrap_or_else(|| action.accessible_label())),
+                    };
                     if show_actions && let Some(on_input) = on_input.clone() {
                         let (key, action) = (key.clone(), action.id.clone());
                         button = button.on_click(move |_, window, cx| {
@@ -832,9 +847,8 @@ pub fn source_tree_view(
             }
             if props.row_menus {
                 let (on_menu, menu_key) = (on_input.clone(), key.clone());
-                let select = selectable && !selected;
                 row = row.on_mouse_down(MouseButton::Right, move |event, window, cx| {
-                    on_menu(TreeInput::Menu(menu_key.clone(), select, event.position), window, cx);
+                    on_menu(TreeInput::Menu(menu_key.clone(), event.position), window, cx);
                     cx.stop_propagation();
                 });
             }
@@ -1991,6 +2005,12 @@ impl Build<'_> {
             let art = self.source_art(&drawn, props, window, cx);
             let tree = drawn.clone();
             let bounds = self.backend.bounds.clone();
+            let folds = self.narrow_scaffold_of(node).map(|s| (s, self.backend.overlaid_sidebars.clone()));
+            let fold = move || {
+                if let Some((scaffold, overlaid)) = &folds {
+                    overlaid.borrow_mut().remove(scaffold);
+                }
+            };
             let on_input: OnInput<TreeInput> = Rc::new(move |input, window, cx| {
                 match input {
                     TreeInput::Press(item, title, at) => {
@@ -2015,15 +2035,18 @@ impl Build<'_> {
                         }
                         return;
                     }
-                    TreeInput::Select(id) => emit.emit(SourceSelected { id }),
-                    TreeInput::Activate(id) => emit.emit(SourceActivated { id }),
+                    TreeInput::Select(id) => {
+                        fold();
+                        emit.emit(SourceSelected { id });
+                    }
+                    TreeInput::Activate(id) => {
+                        fold();
+                        emit.emit(SourceActivated { id });
+                    }
                     TreeInput::Toggle(id, true) => emit.emit(SourceExpanded { id }),
                     TreeInput::Toggle(id, false) => emit.emit(SourceCollapsed { id }),
                     TreeInput::Action(id, action) => emit.emit(SourceActionClicked { id, action }),
-                    TreeInput::Menu(row, select, at) => {
-                        if select {
-                            emit.emit(SourceSelected { id: row.clone() });
-                        }
+                    TreeInput::Menu(row, at) => {
                         let origin = bounds.borrow().get(&id).map_or(nd_core::Point::default(), |b| b.origin);
                         let (x, y) = (at.x.as_f32() - origin.x, at.y.as_f32() - origin.y);
                         emit.emit(SourceMenuRequested { node: id, id: row, x, y });

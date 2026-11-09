@@ -16,7 +16,7 @@ use nd_components::split::Axis;
 use nd_components::*;
 use nd_gpui::gpui::HeadlessAppContext;
 use nd_theme::{OsTheme, Preset, Scheme, Theme, ThemeRegistry};
-use nd_ui::backend::Backend;
+use nd_ui::backend::{Backend, WindowCommand};
 use nd_ui::prelude::*;
 use nd_ui::semantics::{MouseButton, PaintKind, PointerPhase, SyntheticInput};
 use nd_ui::{Keystroke, Point, SemanticNode, TitlebarInsets, WindowId};
@@ -297,10 +297,10 @@ impl OsHooks for EndControls {
 }
 
 fn open_in(kind: Kind, preset: Preset, scheme: Scheme) -> Opened {
-    open_hooked(kind, preset, scheme, false)
+    open_hooked(kind, preset, scheme, false, 800.)
 }
 
-fn open_hooked(kind: Kind, preset: Preset, scheme: Scheme, end_controls: bool) -> Opened {
+fn open_hooked(kind: Kind, preset: Preset, scheme: Scheme, end_controls: bool, width: f32) -> Opened {
     let mut cx = headless();
     let log: Rc<RefCell<Log>> = Rc::default();
     let l = log.clone();
@@ -312,7 +312,7 @@ fn open_hooked(kind: Kind, preset: Preset, scheme: Scheme, end_controls: bool) -
             let backend = app.backend_as::<GpuiBackend>().expect("GPUI backend").clone();
             backend.set_theme(registry_in(preset, scheme));
             app.set_global(Chrome(GpuiChrome::new(backend)));
-            let options = WindowOptions::main("layout").size(size(px(800.), px(560.)));
+            let options = WindowOptions::main("layout").size(size(px(width), px(560.)));
             let options = if matches!(kind, Kind::Bar { .. }) { options.title("Notes") } else { options };
             let handle = app.open_window(options, |_, cx| {
                 cx.new(|_| Scene { kind, log: l, ratio: 0.5, refuse: false, search: None, widths: (220., 260.) })
@@ -449,6 +449,20 @@ impl Opened {
             let _ = handle.update(cx, |_, window, _| window.activate_window());
         });
         self.past_backdrop_fade();
+    }
+
+    fn toggle_sidebar(&mut self) {
+        let window = self.window;
+        self.cx.update(|cx| self.host.update(cx, |app| app.window_command(window, WindowCommand::ToggleSidebar)));
+        self.past_slide();
+    }
+
+    /// Past a pane's slide in or out.
+    fn past_slide(&mut self) {
+        for _ in 0..8 {
+            std::thread::sleep(std::time::Duration::from_millis(60));
+            settle(&mut self.cx, &self.host);
+        }
     }
 
     fn pane_fill(&self) -> Hsla {
@@ -747,7 +761,7 @@ mod gate_m6 {
         let o = open(Kind::FlexibleItem);
         let details = o.node("details").bounds.expect("inspector laid out");
         assert!(details.origin.y < 1., "no empty band over the inspector: {details:?}");
-        let o = open_hooked(Kind::FlexibleItem, Preset::Adwaita, Scheme::Light, true);
+        let o = open_hooked(Kind::FlexibleItem, Preset::Adwaita, Scheme::Light, true, 800.);
         let details = o.node("details").bounds.expect("inspector laid out");
         assert!(details.origin.y >= 46., "the inspector's content clears the controls' row: {details:?}");
         let inspector = o.node("nd-inspector").bounds.expect("inspector laid out");
@@ -851,6 +865,25 @@ mod gate_m6 {
         assert_eq!(sidebar.origin.y, 0., "the sidebar starts at the window's top");
         assert_eq!(content.origin.y, 0., "the content's header bar is its own");
         assert!(search.origin.x >= content.origin.x && search.origin.y < 47., "search heads the content");
+    }
+
+    /// libadwaita's collapsed split view: a window too narrow for the sidebar beside the content
+    /// folds it away, the toggle lays it over the content, and a press on the content beside it
+    /// takes it away again.
+    pub fn gpui_narrow_window_folds_the_sidebar_over_the_content() {
+        let mut o = open_hooked(Kind::Chrome, Preset::Adwaita, Scheme::Light, false, 520.);
+        let content = o.node("nd-content").bounds.expect("content laid out");
+        assert_eq!((content.origin.x, content.size.width), (0., 520.), "the content takes the whole width");
+        assert!(!o.node("folders").visible, "the folded sidebar shows nothing");
+        o.toggle_sidebar();
+        let folders = o.node("folders");
+        assert!(folders.visible, "the toggle lays the sidebar over the content");
+        assert_eq!(folders.bounds.expect("folders laid out").origin.x, 0., "at the window's leading edge");
+        assert_eq!(o.node("nd-content").bounds.expect("content").size.width, 520., "the content keeps its width");
+        o.click(Point { x: 480., y: 300. });
+        o.past_slide();
+        assert!(!o.node("folders").visible, "a press on the content closes it");
+        assert!(o.log.borrow().clicks.is_empty(), "and goes no further");
     }
 
     /// libadwaita's backdrop state: an inactive window's sidebar goes halfway to the window's
@@ -1030,6 +1063,10 @@ fn main() {
         (
             "gate_m6::gpui_toolbar_splits_into_a_header_bar_per_pane",
             gate_m6::gpui_toolbar_splits_into_a_header_bar_per_pane,
+        ),
+        (
+            "gate_m6::gpui_narrow_window_folds_the_sidebar_over_the_content",
+            gate_m6::gpui_narrow_window_folds_the_sidebar_over_the_content,
         ),
         (
             "gate_m6::gpui_an_inactive_window_takes_the_backdrop_look",

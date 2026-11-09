@@ -29,8 +29,8 @@ The Gallery shows one page per component. Select a component in its source list,
   title; with a meter the row grows to fit the caption over the bar ("120 GB free of 500 GB" over
   the used space), and on macOS the outline view gives a captioned row its own height.
   `.context_menu(|id, menu, _, _| menu.item("Eject", Eject))` gives each row its own menu: a
-  right click (or a control-click on macOS) asks for the menu with the row's id. GTK and Windows
-  select the row first; macOS leaves the selection alone, as Finder's and Mail's sidebars do.
+  right click (or a control-click on macOS) asks for the menu with the row's id and leaves the
+  selection alone, as the sidebars of Files, Explorer, Finder and Mail do.
   `.on_middle_click` reports a middle click on a row without selecting it.
 - `sidebar`, `inspector`, `toolbar`: window structure, covered in [Patterns](../concepts/patterns.md).
 - `tab_strip` and `tab_view`: in-window tabs over a stack of pages. Windows that are tabs are a

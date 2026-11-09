@@ -149,6 +149,11 @@ pub struct GpuiBackend {
     /// Scaffolds whose sidebar the drawn toolbar toggle hid, as AppKit's split view collapses
     /// it without the app's state changing.
     pub(crate) hidden_sidebars: Rc<RefCell<std::collections::HashSet<NodeId>>>,
+    /// Scaffolds too narrow for their sidebar beside the content, which then folds away as
+    /// libadwaita's collapsed split views do.
+    pub(crate) narrow_sidebars: Rc<RefCell<std::collections::HashSet<NodeId>>>,
+    /// Narrow scaffolds whose sidebar the toggle laid over the content.
+    pub(crate) overlaid_sidebars: Rc<RefCell<std::collections::HashSet<NodeId>>>,
     /// Toolbar search fields whose libadwaita search bar the header's toggle revealed.
     pub(crate) search_bars: Rc<RefCell<std::collections::HashSet<NodeId>>>,
     /// Sidebars and inspectors sliding open or shut, by pane.
@@ -227,6 +232,8 @@ impl GpuiBackend {
             overlay_exits: crate::overlay::Exits::default(),
             drawn: Rc::default(),
             hidden_sidebars: Rc::default(),
+            narrow_sidebars: Rc::default(),
+            overlaid_sidebars: Rc::default(),
             search_bars: Rc::default(),
             pane_slides: Rc::default(),
             reveals: Rc::default(),
@@ -288,10 +295,7 @@ impl GpuiBackend {
                     })
                 });
             if sidebar {
-                let mut hidden = self.hidden_sidebars.borrow_mut();
-                if !hidden.remove(&id) {
-                    hidden.insert(id);
-                }
+                crate::drawn::toggle_sidebar(id, &self.hidden_sidebars, &self.narrow_sidebars, &self.overlaid_sidebars);
                 state.dirty.insert(window);
                 break;
             }

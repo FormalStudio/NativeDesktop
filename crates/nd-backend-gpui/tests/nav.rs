@@ -286,8 +286,8 @@ mod gate_m6 {
 
     /// A caption over a meter grows its row past the one-line pitch, with the meter clear of
     /// the row's bottom edge, so it never runs into the next row.
-    /// A right click on a row selects it and opens the menu built for its id; a middle click
-    /// reports the row and leaves the selection where it was.
+    /// A right click on a row opens the menu built for its id and a middle click reports the
+    /// row; neither moves the selection, which in a sidebar would navigate.
     pub fn gpui_source_rows_take_menus_and_middle_clicks() {
         use gpui::{Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, PlatformInput};
         use nd_ui::backend::Backend as _;
@@ -329,8 +329,10 @@ mod gate_m6 {
             }
             settle(cx, &host);
         };
+        let paints = host.backend().paints(window).expect("paints");
+        assert!(!paints.iter().any(|p| p.label == "Add Here"), "an icon action draws its icon, not its tooltip");
         click(&mut cx, MouseButton::Right, row(1.));
-        assert_eq!(log.borrow().activated, ["select b", "menu b"], "the row is selected before its menu asks");
+        assert_eq!(log.borrow().activated, ["menu b"], "the menu asks without selecting the row");
         assert!(host.backend().menu_open(window), "the right click opens the row's menu");
         let paints = host.backend().paints(window).expect("paints");
         assert!(paints.iter().any(|p| p.label == "Open b"), "the menu is the one built for b");
@@ -666,7 +668,9 @@ impl Render for Sources {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let (menu_log, middle_log) = (self.log.clone(), self.log.clone());
         source_tree("sources")
-            .items([source_item("a", "Alpha"), source_item("b", "Beta"), source_item("c", "Gamma")])
+            .nodes([source_node("a", "Alpha"), source_node("b", "Beta").actions(["add"]), source_node("c", "Gamma")])
+            .actions([source_action("add", Icon::Plus).tooltip("Add Here")])
+            .action_visibility(ActionVisibility::Always)
             .selected(self.selected.clone())
             .on_select(cx.listener(|this, e: &SourceSelected, _, cx| {
                 this.log.borrow_mut().activated.push(format!("select {}", e.id));
