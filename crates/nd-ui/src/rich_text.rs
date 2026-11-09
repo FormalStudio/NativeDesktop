@@ -45,6 +45,9 @@ pub struct SpanStyle {
     pub scale: Option<f32>,
     /// A fill behind the run. Text areas draw it; `text` and labels leave it out.
     pub background: Option<crate::TextFill>,
+    /// How the run shows while the caret is outside its paragraph. Text areas draw it; `text`
+    /// and labels leave it out.
+    pub conceal: Option<crate::Conceal>,
 }
 
 impl SpanStyle {

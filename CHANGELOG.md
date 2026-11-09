@@ -5,6 +5,18 @@ and the one it moves to.
 
 ## Unreleased
 
+- `markdown_editor` previews live, as Obsidian and Bear do: outside the paragraphs the selection
+  touches (while the area has focus), `#`, emphasis delimiters, backticks and a link's brackets
+  and target take no room, a bullet shows as a dot, `- [ ]` and `- [x]` as a box a click ticks
+  or clears (one undo step, the selection kept), `>` as a bar, `---` as a hairline and a fenced
+  block as a rounded monospace well. The text stays the Markdown, so the caret, selection, copy
+  and undo work on the source, and a keystroke restyles one paragraph. Spans carry the new
+  `SpanStyle::conceal` and paragraphs `ParagraphStyle::block`; `ConcealedText` maps offsets
+  between the source and what shows, and `EditKey::Toggle` asks a styler for a box's edit.
+  AppKit makes concealed glyphs zero-advance control glyphs in its layout manager's delegate and
+  draws the marks and blocks behind the text; GPUI shapes the shown text and maps hit testing,
+  carets and selections back. Markdown takes quiet.md's metrics: 16pt body on a 1.625 leading,
+  headings from 1.625em down, and code at 0.8125em.
 - `BoxShadow` is in the prelude, so an app can pass shadows of its own to `.shadow(vec![..])`
   instead of only the `shadow_sm()` to `shadow_2xl()` presets.
 - `nd::test` exports `DivProps`, so an app's tier 1 test can read a div's look from the

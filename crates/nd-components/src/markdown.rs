@@ -1,8 +1,11 @@
 //! Live-preview markdown in a text area: `markdown_editor(id, &state)`, or
-//! `text_area(id).styles(Markdown)`. The syntax stays in the text, dimmed to the tertiary text
-//! colour, and headings, emphasis, code, quotes, lists, tasks, links and rules take their look
-//! around it. Return continues a list, task or quote and clears an empty one, Tab and Shift-Tab
-//! nest list items, and Command-B and Command-I wrap the selection.
+//! `text_area(id).styles(Markdown)`. The syntax stays in the text and is concealed outside the
+//! paragraph holding the caret: heading hashes, emphasis and code markers, link brackets and
+//! targets go, list markers draw as bullets, task boxes as checkboxes (a click ticks them),
+//! quotes as a bar, rules as a hairline and fenced code as a well. In the caret's paragraph the
+//! syntax shows, dimmed to the tertiary text colour. Return continues a list, task or quote and
+//! clears an empty one, Tab and Shift-Tab nest list items, and Command-B and Command-I wrap the
+//! selection.
 //!
 //! The scanner reads one line at a time, so an edit restyles its own paragraph. A code fence is
 //! the one construct that reaches past its line; it rides in the state handed to the next
@@ -11,7 +14,9 @@
 use std::ops::Range;
 
 use nd_ui::prelude::*;
-use nd_ui::{EditKey, ParagraphStyle, SpanStyle, StyledParagraph, TextEdit, TextFill, TextStyler};
+use nd_ui::{
+    Conceal, EditKey, MARK_WIDTH, ParagraphStyle, SpanStyle, StyledParagraph, TextBlock, TextEdit, TextFill, TextStyler,
+};
 
 use crate::forms::{TextArea, TextFieldState, text_area};
 
@@ -19,15 +24,23 @@ use crate::forms::{TextArea, TextFieldState, text_area};
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Markdown;
 
-/// Body line height, as a multiple of the font size.
-pub const BODY_LEADING: f32 = 1.6;
+/// Body line height, as a multiple of the font size: 26 on 16.
+pub const BODY_LEADING: f32 = 1.625;
 /// The column a markdown editor keeps its text to, in points.
 pub const MEASURE: f32 = 820.;
 /// The body font size a markdown editor starts at, in points.
-pub const BODY_SIZE: f32 = 15.;
+pub const BODY_SIZE: f32 = 16.;
 
-/// Heading sizes as a multiple of the body's, H1 to H6.
-const HEADING_SCALE: [f32; 6] = [1.75, 1.4, 1.2, 1.05, 1., 1.];
+/// Heading sizes as a multiple of the body's, H1 to H6: 26, 22, 20 and 18 on a 16 body.
+const HEADING_SCALE: [f32; 6] = [1.625, 1.375, 1.25, 1.125, 1., 1.];
+/// Room above and below a heading, in body ems.
+const HEADING_BEFORE: [f32; 6] = [1.625, 1.375, 1.25, 1.125, 1.125, 1.];
+const HEADING_AFTER: [f32; 6] = [0.625, 0.5, 0.5, 0.5, 0.5, 0.5];
+/// Code sets at 13 on a 16 body, on a 20 line.
+const CODE_SCALE: f32 = 0.8125;
+const CODE_LEADING: f32 = 1.54;
+/// How far each quote level and its bar step in, in ems.
+const QUOTE_STEP: f32 = 1.;
 
 /// Inside a fence opened with backticks, or with tildes.
 const IN_BACKTICKS: u32 = 1;
@@ -54,6 +67,7 @@ impl TextStyler for Markdown {
             EditKey::Backtab => outdent(line, selection),
             EditKey::Bold => Some(wrap(line, selection, 2)),
             EditKey::Italic => Some(wrap(line, selection, 1)),
+            EditKey::Toggle => toggle(line, selection),
         }
     }
 }
@@ -70,6 +84,12 @@ const LINK: u16 = 1 << 6;
 const OPAQUE: u16 = 1 << 7;
 const MARKER: u16 = 1 << 8;
 const CHECK: u16 = 1 << 9;
+/// Concealed outside the caret's paragraph.
+const HIDE: u16 = 1 << 10;
+/// A bullet's or a task box's run, drawn as its mark while concealed.
+const BULLET: u16 = 1 << 11;
+const TASK: u16 = 1 << 12;
+const TICKED: u16 = 1 << 13;
 
 struct Marks {
     flags: Vec<u16>,
@@ -221,38 +241,44 @@ fn style_line(line: &str, state: u32) -> StyledParagraph {
     let mut marks = Marks::new(len);
     let fenced = fence(line);
     if state != 0 || fenced.is_some() {
-        // Inside a fence, or a fence line: monospaced on the code well.
+        // Inside a fence, or a fence line: monospaced in the code well, the fences hidden.
+        let look = Line { scale: CODE_SCALE, ..Line::default() };
         let closes = match (state, fenced) {
             (IN_BACKTICKS, Some(b'`')) | (IN_TILDES, Some(b'~')) => true,
             (0, _) => false,
             _ => {
-                marks.set(0..len, MONO | FILL);
-                return finish(line, marks, Line::default(), code_paragraph(), state);
+                marks.set(0..len, MONO);
+                return finish(line, marks, look, code_paragraph(), state);
             }
         };
-        marks.set(0..len, MONO | FILL | DIM);
+        marks.set(0..len, MONO | DIM | HIDE);
         let next = match (closes, fenced) {
             (true, _) => 0,
             (false, Some(b'~')) => IN_TILDES,
             _ => IN_BACKTICKS,
         };
-        return finish(line, marks, Line::default(), code_paragraph(), next);
+        return finish(line, marks, look, code_paragraph(), next);
+    }
+    if line.trim().is_empty() {
+        // A blank line between blocks: a gap, not a full line of body text.
+        let paragraph = ParagraphStyle { line_height: Some(1.), ..ParagraphStyle::default() };
+        return finish(line, marks, Line::default(), paragraph, 0);
     }
     if is_rule(line) {
-        marks.set(0..len, DIM | STRIKE);
-        let paragraph = ParagraphStyle { space_before: 0.3, space_after: 0.3, ..body };
+        marks.set(0..len, DIM | HIDE);
+        let paragraph = ParagraphStyle { space_before: 0.25, space_after: 0.25, block: Some(TextBlock::Rule), ..body };
         return finish(line, marks, Line::default(), paragraph, 0);
     }
     if let Some(level) = heading(line) {
         let hashes = line.find('#').unwrap_or(0) + level;
         let marker_end = (hashes + 1).min(len);
-        marks.set(0..marker_end, DIM);
+        marks.set(0..marker_end, DIM | HIDE);
         inline(line, marker_end, &mut marks);
         let look = Line { bold: true, scale: HEADING_SCALE[level - 1], ..Line::default() };
         let paragraph = ParagraphStyle {
-            line_height: Some(1.3),
-            space_before: if level <= 2 { 0.6 } else { 0.4 },
-            space_after: 0.2,
+            line_height: Some(1.4),
+            space_before: HEADING_BEFORE[level - 1],
+            space_after: HEADING_AFTER[level - 1],
             ..ParagraphStyle::default()
         };
         return finish(line, marks, look, paragraph, 0);
@@ -260,29 +286,61 @@ fn style_line(line: &str, state: u32) -> StyledParagraph {
     let prefix = Prefix::read(line);
     let mut look = Line::default();
     let mut paragraph = body;
+    let mut indent = 0.;
     if !prefix.quote.is_empty() {
-        marks.set(prefix.quote.clone(), DIM);
+        marks.set(0..prefix.quote.end, DIM | HIDE);
         look.secondary = true;
-        let depth = line[prefix.quote.clone()].matches('>').count() as f32;
-        paragraph.first_indent = 0.8 * depth;
-        paragraph.head_indent = paragraph.first_indent + ems(&line[prefix.quote.clone()]);
+        let depth = line[prefix.quote.clone()].matches('>').count();
+        indent = QUOTE_STEP * depth as f32;
+        paragraph.block = Some(TextBlock::Quote(depth.min(u8::MAX as usize) as u8));
     }
     if !prefix.marker.is_empty() {
-        marks.set(prefix.marker.clone(), MARKER);
-        paragraph.head_indent = paragraph.first_indent + ems(&line[prefix.quote.start..prefix.end]);
-        if let Some((task, checked)) = &prefix.task {
-            marks.set(task.clone(), CHECK);
-            if *checked {
-                look.done = prefix.end;
+        // Nesting shows as indent, not as the spaces that make it.
+        let lead_start = if prefix.quote.is_empty() { 0 } else { prefix.quote.end };
+        let lead = &line[lead_start..prefix.marker.start];
+        marks.set(lead_start..prefix.marker.start, DIM | HIDE);
+        indent += MARK_WIDTH * nesting_depth(lead) as f32;
+        let bullet = matches!(line.as_bytes()[prefix.marker.start], b'-' | b'*' | b'+');
+        let marker_width = if bullet { MARK_WIDTH } else { ems(&line[prefix.marker.clone()]) };
+        match &prefix.task {
+            Some((task, checked)) => {
+                marks.set(prefix.marker.clone(), DIM | HIDE);
+                marks.set(task.clone(), CHECK | TASK | if *checked { TICKED } else { 0 });
+                if *checked {
+                    look.done = prefix.end;
+                }
             }
+            None if bullet => marks.set(prefix.marker.clone(), DIM | BULLET),
+            None => marks.set(prefix.marker.clone(), MARKER),
         }
+        paragraph.first_indent = indent;
+        paragraph.head_indent = indent + marker_width;
+        paragraph.space_after = 0.25;
+    } else {
+        paragraph.first_indent = indent;
+        paragraph.head_indent = indent;
     }
     inline(line, prefix.end, &mut marks);
     finish(line, marks, look, paragraph, 0)
 }
 
+/// How many levels deep a list item's leading whitespace puts it: a tab is a level, and a
+/// level of spaces is the two or three a marker's width takes.
+fn nesting_depth(lead: &str) -> usize {
+    let tabs = lead.matches('\t').count();
+    let spaces = lead.matches(' ').count();
+    tabs + (spaces as f32 / 2.5).round() as usize
+}
+
+/// Code sits in its well, three quarters of an em in from the well's edge.
 fn code_paragraph() -> ParagraphStyle {
-    ParagraphStyle { line_height: Some(1.45), ..ParagraphStyle::default() }
+    ParagraphStyle {
+        line_height: Some(CODE_LEADING),
+        first_indent: 0.75,
+        head_indent: 0.75,
+        block: Some(TextBlock::Code),
+        ..ParagraphStyle::default()
+    }
 }
 
 /// `#` to `######` and a space (or nothing) after up to three spaces: the level.
@@ -342,14 +400,26 @@ fn run_style(flags: u16, at: usize, look: &Line) -> SpanStyle {
     } else {
         None
     };
+    let conceal = if flags & TASK != 0 {
+        Some(Conceal::Task(flags & TICKED != 0))
+    } else if flags & BULLET != 0 {
+        Some(Conceal::Bullet)
+    } else if flags & HIDE != 0 {
+        Some(Conceal::Hide)
+    } else {
+        None
+    };
+    let mono = flags & MONO != 0;
+    let scale = if mono && look.scale == 0. { CODE_SCALE * 1.08 } else { look.scale };
     SpanStyle {
         bold: look.bold || flags & BOLD != 0,
         italic: flags & ITALIC != 0,
-        mono: flags & MONO != 0,
-        strikethrough: flags & STRIKE != 0 || (done && flags & DIM == 0),
+        mono,
+        strikethrough: flags & STRIKE != 0,
         color,
-        scale: (look.scale > 0. && look.scale != 1.).then_some(look.scale),
+        scale: (scale > 0. && scale != 1.).then_some(scale),
         background: (flags & FILL != 0).then_some(TextFill::Subtle),
+        conceal,
         ..SpanStyle::default()
     }
 }
@@ -362,7 +432,7 @@ fn inline(line: &str, from: usize, marks: &mut Marks) {
     while at < b.len() {
         match b[at] {
             b'\\' if b.get(at + 1).is_some_and(u8::is_ascii_punctuation) => {
-                marks.set(at..at + 1, DIM | OPAQUE);
+                marks.set(at..at + 1, DIM | OPAQUE | HIDE);
                 marks.set(at + 1..at + 2, OPAQUE);
                 at += 2;
             }
@@ -371,9 +441,9 @@ fn inline(line: &str, from: usize, marks: &mut Marks) {
                 let close = find_ticks(b, at + ticks, ticks);
                 match close {
                     Some(close) => {
-                        marks.set(at..at + ticks, DIM | OPAQUE | MONO | FILL);
+                        marks.set(at..at + ticks, DIM | OPAQUE | MONO | HIDE);
                         marks.set(at + ticks..close, OPAQUE | MONO | FILL);
-                        marks.set(close..close + ticks, DIM | OPAQUE | MONO | FILL);
+                        marks.set(close..close + ticks, DIM | OPAQUE | MONO | HIDE);
                         at = close + ticks;
                     }
                     None => at += ticks,
@@ -418,9 +488,9 @@ fn links(line: &str, from: usize, marks: &mut Marks) {
                 && b.get(close + 1) == Some(&b'(')
                 && let Some(end) = (close + 2..b.len()).find(|i| b[*i] == b')')
             {
-                marks.set(at..at + 1, DIM);
+                marks.set(at..at + 1, DIM | HIDE);
                 marks.set(at + 1..close, LINK);
-                marks.set(close..end + 1, DIM | OPAQUE);
+                marks.set(close..end + 1, DIM | OPAQUE | HIDE);
                 at = end + 1;
                 continue;
             }
@@ -430,9 +500,9 @@ fn links(line: &str, from: usize, marks: &mut Marks) {
             && let Some(end) = line[at..].find('>').map(|e| at + e)
             && !line[at..end].contains(' ')
         {
-            marks.set(at..at + 1, DIM | OPAQUE);
+            marks.set(at..at + 1, DIM | OPAQUE | HIDE);
             marks.set(at + 1..end, LINK | OPAQUE);
-            marks.set(end..end + 1, DIM | OPAQUE);
+            marks.set(end..end + 1, DIM | OPAQUE | HIDE);
             at = end + 1;
             continue;
         }
@@ -516,9 +586,9 @@ fn emphasis(line: &str, from: usize, marks: &mut Marks) {
             (_, 2) => BOLD,
             _ => ITALIC,
         };
-        marks.set(open_end - used..open_end, DIM);
+        marks.set(open_end - used..open_end, DIM | HIDE);
         marks.set(open_end..close_start, flag);
-        marks.set(close_start..close_start + used, DIM);
+        marks.set(close_start..close_start + used, DIM | HIDE);
         delims[opener].len -= used;
         delims[closer].start += used;
         delims[closer].len -= used;
@@ -588,6 +658,17 @@ fn outdent(line: &str, selection: Range<usize>) -> Option<TextEdit> {
     Some(TextEdit { range: from..at, text: String::new(), selection })
 }
 
+/// A click on a task box: ticks it or clears it. The selection is the box's run.
+fn toggle(line: &str, selection: Range<usize>) -> Option<TextEdit> {
+    let (task, checked) = Prefix::read(line).task?;
+    if !task.contains(&selection.start) {
+        return None;
+    }
+    let at = task.start + 1;
+    let text = if checked { " " } else { "x" }.to_owned();
+    Some(TextEdit { range: at..at + 1, text, selection: selection.clone() })
+}
+
 /// Command-B (`**`, `width` 2) or Command-I (`*`, 1): wraps the selection, or unwraps it when
 /// the markers already sit round it; with nothing selected, the caret lands between a new pair.
 fn wrap(line: &str, selection: Range<usize>, width: usize) -> TextEdit {
@@ -610,6 +691,8 @@ fn wrap(line: &str, selection: Range<usize>, width: usize) -> TextEdit {
 
 #[cfg(test)]
 mod tests {
+    use nd_ui::ConcealedText;
+
     use super::*;
 
     fn runs(line: &str) -> Vec<(&str, SpanStyle)> {
@@ -622,86 +705,144 @@ mod tests {
         styled.runs.iter().find(|(r, _)| r.start <= start && start < r.end).map(|(_, s)| s.clone()).unwrap_or_default()
     }
 
-    fn dim() -> SpanStyle {
-        SpanStyle { color: Some(TextColor::Tertiary), ..SpanStyle::default() }
+    /// Syntax: tertiary where it shows, hidden where the paragraph is concealed.
+    fn hidden() -> SpanStyle {
+        SpanStyle { color: Some(TextColor::Tertiary), conceal: Some(Conceal::Hide), ..SpanStyle::default() }
     }
 
     #[test]
-    fn headings_scale_by_level_and_dim_their_hashes() {
+    fn headings_scale_by_level_and_hide_their_hashes() {
         let h1 = runs("# Title");
-        assert_eq!(h1[0].0, "# ");
-        assert_eq!(h1[0].1.color, Some(TextColor::Tertiary));
-        assert_eq!((h1[1].0, h1[1].1.bold, h1[1].1.scale), ("Title", true, Some(1.75)));
-        assert_eq!(find("### Three", "Three").scale, Some(1.2));
-        assert_eq!(style_line("## Two", 0).paragraph.line_height, Some(1.3));
+        assert_eq!((h1[0].0, h1[0].1.color, h1[0].1.conceal), ("# ", Some(TextColor::Tertiary), Some(Conceal::Hide)));
+        assert_eq!((h1[1].0, h1[1].1.bold, h1[1].1.scale), ("Title", true, Some(1.625)));
+        assert_eq!(h1[1].1.conceal, None);
+        assert_eq!(find("### Three", "Three").scale, Some(1.25));
+        let two = style_line("## Two", 0).paragraph;
+        assert_eq!((two.line_height, two.space_before, two.space_after), (Some(1.4), 1.375, 0.5));
         assert!(runs("#hashtag").is_empty(), "no space after the hash is text");
     }
 
     #[test]
-    fn emphasis_strong_strike_and_code_mark_their_insides() {
+    fn emphasis_strong_strike_and_code_hide_their_markers() {
         let line = "a **bold** and *it* and ~~gone~~ and `co*de*`";
         assert!(find(line, "bold").bold);
-        assert_eq!(find(line, "**bold"), dim());
+        assert_eq!(find(line, "**bold"), hidden());
         assert!(find(line, "it*").italic);
         assert!(find(line, "gone").strikethrough);
+        assert_eq!(find(line, "~~gone").conceal, Some(Conceal::Hide));
         let code = find(line, "co*de");
-        assert!(code.mono && !code.italic);
+        assert!(code.mono && !code.italic && code.conceal.is_none());
         assert_eq!(code.background, Some(TextFill::Subtle));
+        assert_eq!(find(line, "`co").conceal, Some(Conceal::Hide));
         let both = "***both***";
         let s = find(both, "both");
         assert!(s.bold && s.italic);
         assert!(runs("2 * 3 * 4").is_empty(), "spaced stars are not emphasis");
         assert!(runs("snake_case_name").is_empty(), "underscores inside a word are not emphasis");
         assert!(runs(r"\*not\*").iter().all(|(_, s)| !s.italic));
+        assert_eq!(find(r"\*not", "\\").conceal, Some(Conceal::Hide));
     }
 
     #[test]
-    fn links_take_the_accent_and_dim_their_target() {
+    fn links_take_the_accent_and_hide_their_target() {
         let line = "see [docs](https://nd.dev/a_b_c) or https://x.dev.";
         assert_eq!(find(line, "docs").color, Some(TextColor::Accent));
-        assert_eq!(find(line, "](https").color, Some(TextColor::Tertiary));
+        assert_eq!(find(line, "[docs").conceal, Some(Conceal::Hide));
+        assert_eq!(find(line, "](https"), hidden());
         assert!(!find(line, "b_c").italic);
-        assert_eq!(find(line, "https://x.dev").color, Some(TextColor::Accent));
+        let bare = find(line, "https://x.dev");
+        assert_eq!((bare.color, bare.conceal), (Some(TextColor::Accent), None), "a bare URL shows");
         let period = style_line(line, 0).runs.iter().any(|(r, _)| r.contains(&(line.len() - 1)));
         assert!(!period, "a trailing period is not the URL's");
     }
 
     #[test]
-    fn fences_carry_code_across_lines_until_they_close() {
+    fn fences_carry_code_across_lines_in_one_well() {
         let open = style_line("```rust", 0);
         assert_eq!(open.state, IN_BACKTICKS);
-        assert!(open.runs.iter().all(|(_, s)| s.mono && s.color == Some(TextColor::Tertiary)));
+        assert_eq!(open.paragraph.block, Some(TextBlock::Code));
+        assert!(open.runs.iter().all(|(_, s)| s.mono && s.conceal == Some(Conceal::Hide)));
         let body = style_line("let *x* = 1;", IN_BACKTICKS);
         assert_eq!(body.state, IN_BACKTICKS);
         assert_eq!(body.runs.len(), 1);
-        assert!(body.runs[0].1.mono && !body.runs[0].1.italic);
-        assert_eq!(body.runs[0].1.background, Some(TextFill::Subtle));
+        let code = &body.runs[0].1;
+        assert!(code.mono && !code.italic && code.conceal.is_none() && code.background.is_none());
+        assert_eq!(code.scale, Some(CODE_SCALE));
+        assert_eq!(body.paragraph.block, Some(TextBlock::Code));
+        assert_eq!(style_line("", IN_BACKTICKS).paragraph.block, Some(TextBlock::Code), "a blank line in code");
         assert_eq!(style_line("~~~", IN_BACKTICKS).state, IN_BACKTICKS, "a tilde fence does not close backticks");
         assert_eq!(style_line("```", IN_BACKTICKS).state, 0);
     }
 
     #[test]
-    fn tasks_quotes_lists_and_rules() {
+    fn bullets_and_task_boxes_draw_as_marks() {
+        let item = "- item";
+        assert_eq!(find(item, "- ").conceal, Some(Conceal::Bullet));
+        assert_eq!(find(item, "item"), SpanStyle::default());
+        let p = style_line(item, 0).paragraph;
+        assert_eq!((p.first_indent, p.head_indent), (0., MARK_WIDTH));
+
         let open = "- [ ] buy milk";
-        assert_eq!(find(open, "- ").color, Some(TextColor::Secondary));
+        assert_eq!(find(open, "- ").conceal, Some(Conceal::Hide));
+        assert_eq!(find(open, "[ ]").conceal, Some(Conceal::Task(false)));
         assert_eq!(find(open, "[ ]").color, Some(TextColor::Accent));
         assert_eq!(find(open, "buy"), SpanStyle::default());
         let done = "- [x] buy milk";
+        assert_eq!(find(done, "[x]").conceal, Some(Conceal::Task(true)));
         let text = find(done, "buy");
-        assert!(text.strikethrough && text.color == Some(TextColor::Tertiary));
-        assert!(!find(done, "[x]").strikethrough);
+        assert!(!text.strikethrough && text.color == Some(TextColor::Tertiary), "done text fades");
 
-        let quote = style_line("> quoted", 0);
-        assert!(quote.paragraph.first_indent > 0.);
-        assert_eq!(find("> quoted", ">").color, Some(TextColor::Tertiary));
+        let nested = "    - deep";
+        assert_eq!(find(nested, "    ").conceal, Some(Conceal::Hide));
+        let p = style_line(nested, 0).paragraph;
+        assert_eq!((p.first_indent, p.head_indent), (2. * MARK_WIDTH, 3. * MARK_WIDTH));
+
+        let numbered = "12. twelve";
+        assert_eq!(find(numbered, "12. ").conceal, None, "numbers stay");
+        let p = style_line(numbered, 0).paragraph;
+        assert!(p.head_indent > p.first_indent);
+    }
+
+    #[test]
+    fn quotes_draw_a_bar_and_rules_a_hairline() {
+        let quote = style_line("> > quoted", 0);
+        assert_eq!(quote.paragraph.block, Some(TextBlock::Quote(2)));
+        assert_eq!(quote.paragraph.first_indent, 2. * QUOTE_STEP);
+        assert_eq!(find("> quoted", ">"), hidden());
         assert_eq!(find("> quoted", "quoted").color, Some(TextColor::Secondary));
 
-        let item = style_line("12. twelve", 0);
-        assert!(item.paragraph.head_indent > item.paragraph.first_indent);
-        let rule = find("---", "---");
-        assert!(rule.strikethrough && rule.color == Some(TextColor::Tertiary));
-        assert!(find("- item", "item") == SpanStyle::default());
+        let rule = style_line("---", 0);
+        assert_eq!(rule.paragraph.block, Some(TextBlock::Rule));
+        assert_eq!(find("---", "---"), hidden());
         assert_eq!(style_line("plain", 0).paragraph.line_height, Some(BODY_LEADING));
+        assert_eq!(style_line("", 0).paragraph.line_height, Some(1.), "a blank line is a short gap");
+    }
+
+    #[test]
+    fn a_click_on_a_task_box_ticks_or_clears_it() {
+        let tick = Markdown.edit(EditKey::Toggle, "- [ ] milk", 2..6, 0).unwrap_or_else(|| panic!("tick"));
+        assert_eq!((apply("- [ ] milk", &tick), tick.selection), ("- [x] milk".into(), 2..6));
+        let clear = Markdown.edit(EditKey::Toggle, "  - [X] milk", 4..8, 0).unwrap_or_else(|| panic!("clear"));
+        assert_eq!(apply("  - [X] milk", &clear), "  - [ ] milk");
+        assert_eq!(Markdown.edit(EditKey::Toggle, "- milk", 0..2, 0), None);
+    }
+
+    #[test]
+    fn concealing_keeps_text_and_maps_offsets_back_to_the_source() {
+        let line = "- [x] **done** [link](u)";
+        let shown = ConcealedText::new(line, &style_line(line, 0), "\u{2003}");
+        assert_eq!(shown.text, "\u{2003}done link");
+        let marks: Vec<_> = shown.marks().collect();
+        assert_eq!(marks, [(0, 2..6, Conceal::Task(true))]);
+        let at = |s: &str| shown.text.find(s).unwrap_or_else(|| panic!("{s}"));
+        assert_eq!(shown.source(at("done")), line.find("done").unwrap_or(0));
+        assert_eq!(shown.source(at("link")), line.find("link").unwrap_or(0));
+        assert_eq!(shown.source(0), 2, "the mark's start is its run's");
+        assert_eq!(shown.source(shown.text.len()), line.find("](u)").unwrap_or(0));
+        assert_eq!(shown.shown(line.find("done").unwrap_or(0)), at("done"));
+        assert_eq!(shown.shown(0), at("done") - at("done"), "hidden text shows where the text after it does");
+        let all = ConcealedText::new("---", &style_line("---", 0), "*");
+        assert_eq!((all.text.as_str(), all.source(0)), ("", 3));
     }
 
     fn apply(line: &str, edit: &TextEdit) -> String {

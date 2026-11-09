@@ -21,6 +21,7 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{NSAttributedStringKey, NSDictionary, NSNumber, NSRange};
 
+use super::preview;
 use crate::look::{Color, SystemText};
 use crate::rich::{RunLook, run_font};
 
@@ -218,6 +219,10 @@ impl Styles {
             return;
         };
         let attributes = unsafe { storage.attributesAtIndex_effectiveRange(index, std::ptr::null_mut()) };
+        // Typed text takes the run's look but not its concealment, which the restyle decides.
+        let attributes = objc2_foundation::NSMutableCopying::mutableCopy(&*attributes);
+        attributes.removeObjectForKey(&preview::conceal_key());
+        attributes.removeObjectForKey(&preview::block_key());
         unsafe { view.setTypingAttributes(&attributes) };
     }
 
@@ -282,11 +287,17 @@ fn set_paragraph(
     let base: [&AnyObject; 3] = [&look.font, &look.color, &style];
     let attrs = NSDictionary::from_slices(&[font_key, color_key, paragraph_key], &base);
     unsafe { storage.setAttributes_range(Some(&attrs), NSRange::new(start, len + newline)) };
+    if let Some(block) = ps.block {
+        // Over the line break too, so a run of code paragraphs reads as one well.
+        let value = preview::block_value(block);
+        unsafe { storage.addAttribute_value_range(&preview::block_key(), &value, NSRange::new(start, len + newline)) };
+    }
     if styled.runs.is_empty() {
         return;
     }
     let text = substring(storage, start..start + len);
     let one = NSNumber::new_isize(1);
+    let conceal_key = preview::conceal_key();
     for (range, span) in &styled.runs {
         if *span == SpanStyle::default() || range.start >= range.end || range.end > text.len() {
             continue;
@@ -313,6 +324,12 @@ fn set_paragraph(
         if span.strikethrough {
             keys.push(unsafe { NSStrikethroughStyleAttributeName });
             values.push(Retained::into_super(Retained::into_super(Retained::into_super(one.clone()))));
+        }
+        if let Some(conceal) = span.conceal {
+            keys.push(&conceal_key);
+            values.push(Retained::into_super(Retained::into_super(Retained::into_super(preview::conceal_value(
+                conceal,
+            )))));
         }
         if keys.is_empty() {
             continue;

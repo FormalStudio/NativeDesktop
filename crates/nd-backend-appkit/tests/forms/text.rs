@@ -9,11 +9,11 @@ use nd_backend_appkit::objc2_app_kit::{
     NSSearchField, NSSecureTextField, NSText, NSTextField, NSTextFieldBezelStyle, NSTextView, NSView,
 };
 use nd_backend_appkit::objc2_foundation::{NSRange, NSSize, NSString};
-use nd_components::Icon;
 use nd_components::forms::{
     IconEdge, SelectChanged, TextChanged, TextEvent, TextFieldState, TextSubmitted, combo_box, search_field,
     secure_field, text_area, text_field,
 };
+use nd_components::{Icon, markdown_editor};
 use nd_ui::prelude::*;
 use nd_ui::semantics::SemanticAction;
 use nd_ui::{Role, WindowId};
@@ -36,6 +36,7 @@ struct Texts {
     fruit_changes: Vec<String>,
     bound: Entity<TextFieldState>,
     query: Entity<TextFieldState>,
+    md: Entity<TextFieldState>,
     searches: Vec<String>,
 }
 
@@ -93,6 +94,7 @@ impl Render for Texts {
                 }),
             ))
             .child(text_area("page").borderless().text_size(px(19.)).min_lines(2))
+            .child(markdown_editor("md", &self.md).min_lines(4))
             .child(
                 combo_box("fruit", ["Apple", "Banana", "Cherry"])
                     .text(self.fruit.clone())
@@ -130,6 +132,7 @@ pub fn run(rig: &Rig, c: &mut Checks) {
     let w = rig.open("Text", |cx| {
         let bound = cx.new(|_| TextFieldState::default());
         let query = cx.new(|_| TextFieldState::default());
+        let md = cx.new(|_| TextFieldState::default().with_text("intro\n- [ ] one\n- [x] two\n# Three"));
         Texts {
             name: SharedString::default(),
             name_changes: Vec::new(),
@@ -146,6 +149,7 @@ pub fn run(rig: &Rig, c: &mut Checks) {
             fruit_changes: Vec::new(),
             bound,
             query,
+            md,
             searches: Vec::new(),
         }
     });
@@ -195,6 +199,30 @@ pub fn run(rig: &Rig, c: &mut Checks) {
     c.check(page_scroll.focusRingType() == NSFocusRingType::None, "borderless text_area has no focus ring");
     let page_size = page.font().map_or(0., |f| f.pointSize());
     c.check(page_size == 19., &format!(".text_size() reaches the text area's font ({page_size})"));
+
+    // Live preview: outside the caret's paragraph the syntax takes no room. Each task line
+    // opens on its box, so both texts start one mark in; a hidden `# ` leaves the heading at
+    // the line's start.
+    let md_scroll =
+        rig.view(id, "md").downcast::<NSScrollView>().unwrap_or_else(|_| panic!("markdown editor is a scroll view"));
+    let md =
+        md_scroll.documentView().and_then(|v| v.downcast::<NSTextView>().ok()).unwrap_or_else(|| panic!("text view"));
+    let x_of = |needle: &str| {
+        let source = md.string().to_string();
+        let index = source.find(needle).map_or(0, |i| source[..i].encode_utf16().count());
+        let layout = unsafe { md.layoutManager() }.unwrap_or_else(|| panic!("layout manager"));
+        let glyph = layout.glyphIndexForCharacterAtIndex(index);
+        let line = unsafe { layout.lineFragmentRectForGlyphAtIndex_effectiveRange(glyph, std::ptr::null_mut()) };
+        line.origin.x + layout.locationForGlyphAtIndex(glyph).x
+    };
+    let em = md.font().map_or(0., |f| f.pointSize());
+    let start = x_of("intro");
+    let (one, two, three) = (x_of("one") - start, x_of("two") - start, x_of("Three") - start);
+    c.check(
+        (one - two).abs() < 0.5 && (one - f64::from(nd_ui::MARK_WIDTH) * em).abs() < 1.,
+        &format!("concealed task lines start on their box ({one}, {two}, em {em})"),
+    );
+    c.check(three.abs() < 0.5, &format!("a concealed heading starts at the line's start ({three})"));
 
     // Props.
     c.check(name.placeholderString().is_some_and(|p| p.to_string() == "Name"), "placeholder reaches NSTextField");

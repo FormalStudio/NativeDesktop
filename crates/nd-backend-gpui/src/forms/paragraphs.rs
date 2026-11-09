@@ -4,22 +4,30 @@
 //! or an estimate, so a long document lays out in the time its visible part takes. When a
 //! paragraph above the viewport's top edge changes height as it is shaped, the scroll offset
 //! moves by the same amount, so the text in view stays put.
+//!
+//! A paragraph whose styler conceals runs (live preview) is shaped without them while the
+//! selection is elsewhere: hidden runs go, a mark's run becomes room for the mark, and offsets
+//! map between that text and the source through [`ConcealedText`]. Blocks (code wells, quote
+//! bars, rules) and marks (bullets, task boxes) are painted behind the text.
 
 use std::borrow::Cow;
 use std::ops::Range;
 
 use nd_components::rich::text_color;
 use nd_gpui::gpui::{
-    App, Bounds, Font, FontStyle, FontWeight, Hsla, Pixels, Point, SharedString, StrikethroughStyle, TextAlign,
-    TextRun, UnderlineStyle, Window, WrappedLine, point, px,
+    App, BorderStyle, Bounds, Font, FontStyle, FontWeight, Hsla, PathBuilder, Pixels, Point, SharedString,
+    StrikethroughStyle, TextAlign, TextRun, UnderlineStyle, Window, WrappedLine, fill, point, px, quad, size,
 };
 use nd_theme::Theme;
 use nd_theme::color::with_alpha;
 use nd_ui::styled_text::{ParagraphCache, Styler};
-use nd_ui::{SpanStyle, StyledParagraph, TextColor, TextFill};
+use nd_ui::{Conceal, ConcealedText, SpanStyle, StyledParagraph, TextBlock, TextColor, TextFill};
 
 /// How far past the viewport paragraphs are shaped, so a scroll shows shaped text.
 const OVERDRAW: Pixels = px(600.);
+
+/// What a mark's run shapes as: an em and an en space, [`nd_ui::MARK_WIDTH`] ems.
+const MARK_ROOM: &str = "\u{2003}\u{2002}";
 
 /// The theme colours a styled run can name.
 #[derive(Clone, Debug, PartialEq)]
@@ -32,6 +40,14 @@ pub(crate) struct Palette {
     success: Hsla,
     warning: Hsla,
     subtle: Hsla,
+    /// A code well's fill and edge, a quote's bar and a rule's hairline.
+    well: Hsla,
+    well_edge: Hsla,
+    bar: Hsla,
+    rule: Hsla,
+    /// A ticked task box's fill and tick.
+    tick_fill: Hsla,
+    tick: Hsla,
     mono: SharedString,
 }
 
@@ -47,6 +63,12 @@ impl Palette {
             success: c(TextColor::Success),
             warning: c(TextColor::Warning),
             subtle: with_alpha(theme.text.primary, 0.07),
+            well: with_alpha(theme.text.primary, 0.035),
+            well_edge: with_alpha(theme.text.primary, 0.08),
+            bar: with_alpha(theme.text.primary, 0.25),
+            rule: theme.separator,
+            tick_fill: theme.accent_fill,
+            tick: theme.text.on_accent,
             mono: theme.fonts.mono.family.clone(),
         }
     }
@@ -83,12 +105,27 @@ struct Key {
     /// Composition and the redrawn selection, in the paragraph.
     marked: Option<Range<usize>>,
     recolor: Option<(Range<usize>, Hsla)>,
+    /// Shaped without its concealed runs.
+    concealed: bool,
 }
 
 pub(crate) struct Shaped {
     line: WrappedLine,
     key: Key,
     height: Pixels,
+    /// What a concealed paragraph shaped instead of its text.
+    shown: Option<ConcealedText>,
+}
+
+impl Shaped {
+    /// The shaped line's offset for source offset `local`.
+    fn line_index(&self, local: usize) -> usize {
+        self.shown.as_ref().map_or(local, |s| s.shown(local))
+    }
+
+    fn source_index(&self, index: usize) -> usize {
+        self.shown.as_ref().map_or(index, |s| s.source(index))
+    }
 }
 
 /// One paragraph's place in the last layout, relative to the text origin.
@@ -106,6 +143,8 @@ pub(crate) struct Placed {
     pub size: Pixels,
     /// Height of the text alone.
     pub text_height: Pixels,
+    pub block: Option<TextBlock>,
+    pub concealed: bool,
 }
 
 /// What a layout pass sets text in.
@@ -122,6 +161,8 @@ pub(crate) struct Frame<'a> {
     pub caret: usize,
     pub marked: Option<Range<usize>>,
     pub recolor: Option<(Range<usize>, Hsla)>,
+    /// The selection, while the area has focus: its paragraphs show their concealed runs.
+    pub reveal: Option<Range<usize>>,
 }
 
 pub(crate) struct Doc {
@@ -129,7 +170,15 @@ pub(crate) struct Doc {
     styler: Styler,
     placed: Vec<Placed>,
     pub content: Pixels,
+    /// The last layout's column, font size and palette, which blocks and marks paint with.
+    column: (Pixels, Pixels),
+    size: Pixels,
+    palette: Option<Palette>,
 }
+
+/// A task box's square, in ems, and its corner.
+const TASK_BOX: f32 = 1.0625;
+const TASK_RADIUS: f32 = 0.3;
 
 fn plain(_: &str, _: u32) -> StyledParagraph {
     StyledParagraph::default()
@@ -137,7 +186,15 @@ fn plain(_: &str, _: u32) -> StyledParagraph {
 
 impl Doc {
     pub fn new() -> Self {
-        Self { cache: ParagraphCache::default(), styler: Styler::new(plain), placed: Vec::new(), content: px(0.) }
+        Self {
+            cache: ParagraphCache::default(),
+            styler: Styler::new(plain),
+            placed: Vec::new(),
+            content: px(0.),
+            column: (px(0.), px(0.)),
+            size: px(0.),
+            palette: None,
+        }
     }
 
     /// Takes the area's styler; a different one restyles everything at the next layout.
@@ -189,12 +246,17 @@ impl Doc {
     pub fn layout(&mut self, text: &str, f: &Frame<'_>, scroll: &mut Pixels, window: &mut Window) {
         self.ensure(text);
         self.placed.clear();
+        self.column = f.column;
+        self.size = f.size;
+        if self.palette.as_ref() != Some(f.palette) {
+            self.palette = Some(f.palette.clone());
+        }
         let (left, width) = f.column;
         let mut top = px(0.);
         let mut start = 0;
         for p in self.cache.paragraphs_mut() {
             let len = p.len;
-            let scale = p.styled.scale();
+            let scale = p.styled.scale(len);
             let size = f.size * scale;
             let ps = &p.styled.paragraph;
             let line_height = match ps.line_height {
@@ -215,6 +277,8 @@ impl Doc {
             let lo = *scroll - OVERDRAW;
             let hi = *scroll + f.viewport + OVERDRAW;
             let wanted = (top < hi && top + before + stale + after > lo) || (start..=start + len).contains(&f.caret);
+            let revealed = f.reveal.as_ref().is_some_and(|r| r.start <= start + len && r.end >= start);
+            let concealed = !revealed && p.styled.conceals();
             let mut text_height = stale;
             if wanted {
                 let local = |r: &Range<usize>| {
@@ -229,6 +293,7 @@ impl Doc {
                     palette: f.palette.clone(),
                     marked: f.marked.as_ref().and_then(local),
                     recolor: f.recolor.as_ref().and_then(|(r, c)| Some((local(r)?, *c))),
+                    concealed,
                 };
                 if p.layout.as_ref().is_none_or(|s| s.key != key) {
                     let shaped = shape(&text[start..start + len], &p.styled, key, line_height, window);
@@ -250,6 +315,8 @@ impl Doc {
                 line_height,
                 size,
                 text_height,
+                block: ps.block,
+                concealed,
             });
             top += height;
             start += len + 1;
@@ -262,7 +329,11 @@ impl Doc {
     }
 
     fn line(&self, index: usize) -> Option<&WrappedLine> {
-        self.cache.paragraphs().get(index)?.layout.as_ref().map(|s| &s.line)
+        self.shaped(index).map(|s| &s.line)
+    }
+
+    fn shaped(&self, index: usize) -> Option<&Shaped> {
+        self.cache.paragraphs().get(index)?.layout.as_ref()
     }
 
     /// Where `offset` sits relative to the text origin (top of its line), its line height and
@@ -271,8 +342,11 @@ impl Doc {
         let index = self.index_of(offset);
         let p = self.placed.get(index)?;
         let local = self
-            .line(index)
-            .and_then(|l| l.position_for_index(offset.saturating_sub(p.start).min(p.len), p.line_height))
+            .shaped(index)
+            .and_then(|s| {
+                let i = s.line_index(offset.saturating_sub(p.start).min(p.len));
+                s.line.position_for_index(i, p.line_height)
+            })
             .unwrap_or_default();
         Some((point(p.x + local.x, p.top + p.before + local.y), p.line_height, p.size))
     }
@@ -281,10 +355,11 @@ impl Doc {
     pub fn offset_at(&self, at: Point<Pixels>) -> usize {
         let index = self.placed.partition_point(|p| p.top + p.height <= at.y).min(self.placed.len().saturating_sub(1));
         let Some(p) = self.placed.get(index) else { return 0 };
-        let Some(line) = self.line(index) else { return p.start };
+        let Some(shaped) = self.shaped(index) else { return p.start };
         let y = (at.y - p.top - p.before).clamp(px(0.), (p.text_height - px(1.)).max(px(0.)));
         let x = (at.x - p.x).max(px(0.));
-        p.start + line.closest_index_for_position(point(x, y), p.line_height).unwrap_or_else(|i| i).min(p.len)
+        let i = shaped.line.closest_index_for_position(point(x, y), p.line_height).unwrap_or_else(|i| i);
+        p.start + shaped.source_index(i).min(p.len)
     }
 
     /// One line up (`-1`) or down (`1`) from `offset`, keeping its x. `None` past either end.
@@ -326,7 +401,9 @@ impl Doc {
             let past = range.end > p.start + p.len;
             let lh = p.line_height;
             let y0 = p.top + p.before;
-            let pos = |i: usize| self.line(index).and_then(|l| l.position_for_index(i, lh)).unwrap_or_default();
+            let pos = |i: usize| {
+                self.shaped(index).and_then(|s| s.line.position_for_index(s.line_index(i), lh)).unwrap_or_default()
+            };
             let (pa, pb) = (pos(a), pos(b));
             let end_x = |pb: Point<Pixels>| if past { right } else { p.x + pb.x };
             if pa.y == pb.y {
@@ -352,8 +429,150 @@ impl Doc {
             .filter_map(move |(i, p)| Some((*p, self.line(first + i)?)))
     }
 
-    /// Run backgrounds (a code span's well) of the paragraphs in `view`.
+    /// The task box under `at` (relative to the text origin) in a concealed paragraph: its
+    /// run, in the text.
+    pub fn task_at(&self, at: Point<Pixels>) -> Option<Range<usize>> {
+        let index = self.placed.partition_point(|p| p.top + p.height <= at.y);
+        let p = *self.placed.get(index)?;
+        let shaped = self.shaped(index).filter(|_| p.concealed)?;
+        let shown = shaped.shown.as_ref()?;
+        shown.marks().find_map(|(i, run, mark)| {
+            let Conceal::Task(_) = mark else { return None };
+            let b = self.task_box(&p, shaped, i)?;
+            let hit = Bounds::new(b.origin - point(px(4.), px(4.)), b.size + size(px(8.), px(8.)));
+            hit.contains(&at).then(|| p.start + run.start..p.start + run.end)
+        })
+    }
+
+    /// Where a mark at line offset `i` sits: its room's top left and the line's height.
+    fn mark_at(&self, p: &Placed, shaped: &Shaped, i: usize) -> Option<Point<Pixels>> {
+        let at = shaped.line.position_for_index(i, p.line_height)?;
+        Some(point(p.x + at.x, p.top + p.before + at.y))
+    }
+
+    fn task_box(&self, p: &Placed, shaped: &Shaped, i: usize) -> Option<Bounds<Pixels>> {
+        let at = self.mark_at(p, shaped, i)?;
+        let side = self.size * TASK_BOX;
+        Some(Bounds::new(at + point(px(0.), (p.line_height - side) / 2.), size(side, side)))
+    }
+
+    /// Code wells, quote bars and rules behind the paragraphs in `view`, then the marks.
+    fn paint_blocks(&self, origin: Point<Pixels>, view: &Range<Pixels>, window: &mut Window) {
+        let Some(palette) = &self.palette else { return };
+        let (left, width) = self.column;
+        let em = self.size;
+        let first = self.placed.partition_point(|p| p.top + p.height <= view.start);
+        let mut index = first;
+        while let Some(p) = self.placed.get(index).copied() {
+            if p.top >= view.end {
+                break;
+            }
+            match p.block {
+                Some(TextBlock::Code) => {
+                    // One well over the run of code paragraphs this one belongs to.
+                    let mut start = index;
+                    while start > 0 && self.placed[start - 1].block == Some(TextBlock::Code) {
+                        start -= 1;
+                    }
+                    let mut end = index;
+                    while self.placed.get(end + 1).is_some_and(|n| n.block == Some(TextBlock::Code)) {
+                        end += 1;
+                    }
+                    let (top, last) = (self.placed[start].top, self.placed[end]);
+                    let bounds = Bounds::from_corners(
+                        origin + point(left, top),
+                        origin + point(left + width, last.top + last.height),
+                    );
+                    let radius = em * 0.375;
+                    window.paint_quad(quad(
+                        bounds,
+                        radius,
+                        palette.well,
+                        px(1.),
+                        palette.well_edge,
+                        BorderStyle::Solid,
+                    ));
+                    index = end + 1;
+                    continue;
+                }
+                Some(TextBlock::Quote(depth)) => {
+                    for level in 0..depth {
+                        let x = left + em * level as f32;
+                        let bar = Bounds::new(origin + point(x, p.top), size(px(3.), p.height));
+                        window.paint_quad(quad(bar, px(1.5), palette.bar, px(0.), palette.bar, BorderStyle::Solid));
+                    }
+                }
+                Some(TextBlock::Rule) if p.concealed => {
+                    let y = p.top + p.before + p.line_height / 2.;
+                    window.paint_quad(fill(Bounds::new(origin + point(left, y), size(width, px(1.))), palette.rule));
+                }
+                _ => {}
+            }
+            index += 1;
+        }
+        for (i, p) in self.placed.iter().enumerate().skip(first) {
+            if p.top >= view.end {
+                break;
+            }
+            let Some(shaped) = self.shaped(i).filter(|_| p.concealed) else { continue };
+            let Some(shown) = &shaped.shown else { continue };
+            for (at, _, mark) in shown.marks() {
+                match mark {
+                    Conceal::Bullet => {
+                        let Some(room) = self.mark_at(p, shaped, at) else { continue };
+                        let d = em * 0.34;
+                        let centre = room + point(em * 0.45, p.line_height / 2.);
+                        let dot = Bounds::new(origin + centre - point(d / 2., d / 2.), size(d, d));
+                        window.paint_quad(quad(
+                            dot,
+                            d / 2.,
+                            palette.primary,
+                            px(0.),
+                            palette.primary,
+                            BorderStyle::Solid,
+                        ));
+                    }
+                    Conceal::Task(done) => {
+                        let Some(b) = self.task_box(p, shaped, at) else { continue };
+                        let b = Bounds::new(origin + b.origin, b.size);
+                        let radius = em * TASK_RADIUS;
+                        if done {
+                            window.paint_quad(quad(
+                                b,
+                                radius,
+                                palette.tick_fill,
+                                px(0.),
+                                palette.tick_fill,
+                                BorderStyle::Solid,
+                            ));
+                            let w = b.size.width;
+                            let mut tick = PathBuilder::stroke(em * 0.11);
+                            tick.move_to(b.origin + point(w * 0.26, w * 0.52));
+                            tick.line_to(b.origin + point(w * 0.43, w * 0.69));
+                            tick.line_to(b.origin + point(w * 0.75, w * 0.33));
+                            if let Ok(path) = tick.build() {
+                                window.paint_path(path, palette.tick);
+                            }
+                        } else {
+                            window.paint_quad(quad(
+                                b,
+                                radius,
+                                Hsla::transparent_black(),
+                                px(1.),
+                                palette.bar,
+                                BorderStyle::Solid,
+                            ));
+                        }
+                    }
+                    Conceal::Hide => {}
+                }
+            }
+        }
+    }
+
+    /// Blocks and marks, then run backgrounds (a code span's well), of the paragraphs in `view`.
     pub fn paint_backgrounds(&self, origin: Point<Pixels>, view: Range<Pixels>, window: &mut Window, cx: &mut App) {
+        self.paint_blocks(origin, &view, window);
         for (p, line) in self.visible(&view) {
             let at = origin + point(p.x, p.top + p.before);
             let _ = line.paint_background(at, p.line_height, TextAlign::Left, None, window, cx);
@@ -369,15 +588,54 @@ impl Doc {
 }
 
 fn shape(text: &str, styled: &StyledParagraph, key: Key, line_height: Pixels, window: &mut Window) -> Shaped {
-    let runs = runs(text.len(), styled, &key);
+    let mut runs = runs(text.len(), styled, &key);
+    let shown = key.concealed.then(|| ConcealedText::new(text, styled, MARK_ROOM));
+    let text = match &shown {
+        Some(shown) => {
+            runs = conceal_runs(&runs, shown);
+            shown.text.clone()
+        }
+        None => text.to_owned(),
+    };
     let line = window
         .text_system()
-        .shape_text(SharedString::from(text.to_owned()), key.size, &runs, Some(key.wrap), None)
+        .shape_text(SharedString::from(text), key.size, &runs, Some(key.wrap), None)
         .ok()
         .and_then(|lines| lines.into_iter().next())
         .unwrap_or_default();
     let height = line.size(line_height).height.max(line_height);
-    Shaped { line, key, height }
+    Shaped { line, key, height, shown }
+}
+
+/// The source's runs over what a concealed paragraph shows: kept text keeps its runs, a mark's
+/// room is drawn in no colour, in its run's font.
+fn conceal_runs(runs: &[TextRun], shown: &ConcealedText) -> Vec<TextRun> {
+    let mut out = Vec::new();
+    for (shown_range, source, mark) in shown.pieces() {
+        let mut at = 0;
+        for run in runs {
+            let (a, b) = (at.max(source.start), (at + run.len).min(source.end));
+            at += run.len;
+            if a >= b {
+                continue;
+            }
+            match mark {
+                Some(_) => {
+                    out.push(TextRun {
+                        len: shown_range.len(),
+                        color: Hsla::transparent_black(),
+                        background_color: None,
+                        underline: None,
+                        strikethrough: None,
+                        ..run.clone()
+                    });
+                    break;
+                }
+                None => out.push(TextRun { len: b - a, ..run.clone() }),
+            }
+        }
+    }
+    out
 }
 
 /// The paragraph's runs as text runs covering all `len` bytes, with composition underlined
@@ -450,6 +708,8 @@ fn text_run(len: usize, style: &SpanStyle, key: &Key, marked: bool, recolor: Opt
 
 #[cfg(test)]
 mod tests {
+    use nd_ui::TextStyler;
+
     use super::*;
 
     #[test]
@@ -461,7 +721,7 @@ mod tests {
         doc.ensure(&text);
         // Every paragraph counts as shaped, as after a full layout.
         for p in doc.cache.paragraphs_mut() {
-            p.layout = Some(Shaped { line: WrappedLine::default(), key: key(), height: px(20.) });
+            p.layout = Some(Shaped { line: WrappedLine::default(), key: key(), height: px(20.), shown: None });
         }
         let at = text.len() / 2 + text[text.len() / 2..].find("Body").unwrap_or(0) + 4;
         let before = doc.styled_count();
@@ -500,10 +760,17 @@ mod tests {
                 success: Hsla::default(),
                 warning: Hsla::default(),
                 subtle: Hsla::default(),
+                well: Hsla::default(),
+                well_edge: Hsla::default(),
+                bar: Hsla::default(),
+                rule: Hsla::default(),
+                tick_fill: Hsla::default(),
+                tick: Hsla::default(),
                 mono: SharedString::default(),
             },
             marked: None,
             recolor: None,
+            concealed: false,
         }
     }
 
@@ -521,5 +788,21 @@ mod tests {
         assert_eq!(runs.iter().map(|r| r.len).sum::<usize>(), 8);
         assert!(runs[2].underline.is_some() && runs[2].font.weight == FontWeight(700.));
         assert!(runs[0].underline.is_none());
+    }
+
+    #[test]
+    fn a_concealed_paragraph_shapes_its_shown_text_in_the_source_runs() {
+        let line = "- [x] **done** and `code`";
+        let styled = nd_components::Markdown.style(line, 0);
+        let k = key();
+        let source = runs(line.len(), &styled, &k);
+        let shown = ConcealedText::new(line, &styled, MARK_ROOM);
+        let out = conceal_runs(&source, &shown);
+        assert_eq!(shown.text, format!("{MARK_ROOM}done and code"));
+        assert_eq!(out.iter().map(|r| r.len).sum::<usize>(), shown.text.len(), "the runs cover the shown text");
+        assert_eq!(out[0].len, MARK_ROOM.len());
+        assert_eq!(out[0].color, Hsla::transparent_black(), "the mark's room is not drawn");
+        let bold = out.iter().find(|r| r.font.weight == FontWeight(700.)).map(|r| r.len);
+        assert_eq!(bold, Some("done".len()), "emphasis keeps its look without its stars");
     }
 }

@@ -215,7 +215,7 @@ fn markdown_editor_is_a_bound_styled_area_in_a_column() {
     assert_eq!(body, px(nd_components::markdown::BODY_SIZE).into());
     let styler = props.styles.unwrap_or_else(|| panic!("markdown styles"));
     let heading = styler.style("# Title", 0);
-    assert!(heading.runs.iter().any(|(_, s)| s.bold && s.scale == Some(1.75)));
+    assert!(heading.runs.iter().any(|(_, s)| s.bold && s.scale == Some(1.625)));
     // Its keys: Return continues a list.
     let edit = styler.edit(nd_ui::EditKey::Return, "- milk", 6..6, 0).unwrap_or_else(|| panic!("continues"));
     assert_eq!(edit.text, "\n- ");

@@ -54,7 +54,10 @@ pub use overlay::{
     tooltip,
 };
 pub use rich_text::{LinkClicked, RichText, Span, SpanStyle, TextColor, span};
-pub use styled_text::{EditKey, ParagraphStyle, StyledParagraph, Styler, TextEdit, TextFill, TextStyler};
+pub use styled_text::{
+    Conceal, ConcealedText, EditKey, MARK_WIDTH, ParagraphStyle, StyledParagraph, Styler, TextBlock, TextEdit,
+    TextFill, TextStyler,
+};
 pub use surface::{InputCounts, SurfaceProps, SurfaceSource, native_surface};
 pub use window::{ForeignParent, Titlebar, TitlebarInsets, Window, WindowHandle, WindowKind, WindowOptions};
 

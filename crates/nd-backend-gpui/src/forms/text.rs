@@ -259,6 +259,24 @@ impl Editor {
         true
     }
 
+    /// A click on the task box over `run`: the styler ticks or clears it, and the selection
+    /// stays where it was.
+    fn toggle_task(&mut self, run: Range<usize>, cx: &mut App) -> bool {
+        let before = self.selected.clone();
+        self.selected = run;
+        let toggled = self.styled_edit(EditKey::Toggle, cx);
+        let end = self.text.len();
+        self.selected = before.start.min(end)..before.end.min(end);
+        self.reveal = false;
+        toggled
+    }
+
+    /// The task box under `at`, in window coordinates: its run in the text.
+    fn task_at(&self, at: Point<Pixels>) -> Option<Range<usize>> {
+        let (_, origin) = self.painted?;
+        self.multiline.then(|| self.doc.task_at(at - origin)).flatten()
+    }
+
     fn floor(&self, mut offset: usize) -> usize {
         while !self.text.is_char_boundary(offset) {
             offset -= 1;
@@ -981,6 +999,7 @@ impl EditorElement {
             caret: e.cursor(),
             marked: e.marked.clone(),
             recolor,
+            reveal: self.focus.is_focused(window).then(|| e.selected.clone()),
         };
         let mut scroll = e.scroll.y;
         e.doc.layout(&e.text, &frame, &mut scroll, window);
@@ -1138,6 +1157,18 @@ pub(crate) fn chrome(ctl: &Ctl, editor: &Rc<std::cell::RefCell<Editor>>, f: &Fie
     let down = {
         let (editor, sink) = (editor.clone(), ctl.sink.clone());
         move |event: &MouseDownEvent, window: &mut Window, cx: &mut App| {
+            let mut e = editor.borrow_mut();
+            // Ticking a box leaves focus where it was, so an unfocused area stays concealed.
+            if event.click_count == 1
+                && !event.modifiers.shift
+                && let Some(run) = e.task_at(event.position)
+                && e.toggle_task(run, cx)
+            {
+                drop(e);
+                window.refresh();
+                return;
+            }
+            drop(e);
             sink.take_focus(window, cx);
             let mut e = editor.borrow_mut();
             let at = e.offset_at(event.position);

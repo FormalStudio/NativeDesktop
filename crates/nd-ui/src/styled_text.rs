@@ -25,6 +25,35 @@ pub enum TextFill {
     Custom(Hsla),
 }
 
+/// How a run shows while the selection is outside its paragraph: live preview hides markup
+/// there and shows it again where the caret is. The text keeps the run either way, so caret
+/// movement, selection and copy see the source.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Conceal {
+    /// Not drawn and takes no room.
+    Hide,
+    /// A list bullet, [`MARK_WIDTH`] ems wide, drawn for the run's first character; the rest
+    /// is hidden.
+    Bullet,
+    /// A task box, ticked or not, drawn like [`Conceal::Bullet`]. Clicking it asks the styler
+    /// for [`EditKey::Toggle`] over the run.
+    Task(bool),
+}
+
+/// The room a [`Conceal::Bullet`] or [`Conceal::Task`] mark takes, in ems.
+pub const MARK_WIDTH: f32 = 1.5;
+
+/// What a backend draws behind a paragraph.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TextBlock {
+    /// A quote `depth` levels deep: a bar at the left of each level, each one em in.
+    Quote(u8),
+    /// Code: consecutive code paragraphs share one rounded well across the column.
+    Code,
+    /// A thematic break: a hairline across the column, while the paragraph is concealed.
+    Rule,
+}
+
 /// How a paragraph is set. Lengths are in ems (multiples of the area's font size), so they
 /// follow its size; the default is the area's own setting.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -37,6 +66,7 @@ pub struct ParagraphStyle {
     pub first_indent: f32,
     /// Indent of its wrapped lines: past a list marker, so wrapped text lines up with the item's.
     pub head_indent: f32,
+    pub block: Option<TextBlock>,
 }
 
 /// What a styler makes of one paragraph.
@@ -51,9 +81,107 @@ pub struct StyledParagraph {
 }
 
 impl StyledParagraph {
-    /// The largest run scale: the drawn editor sets a paragraph at one size.
-    pub fn scale(&self) -> f32 {
-        self.runs.iter().map(|(_, s)| s.scale()).fold(1., f32::max)
+    /// The size the drawn editor sets this paragraph of `len` bytes at, as a multiple of the
+    /// area's: its largest run's, and at least the area's where some text has no run.
+    pub fn scale(&self, len: usize) -> f32 {
+        let largest = self.runs.iter().map(|(_, s)| s.scale()).fold(f32::MIN, f32::max);
+        let mut end = 0;
+        let gapless = self.runs.iter().all(|(r, _)| {
+            let joined = r.start <= end;
+            end = end.max(r.end);
+            joined
+        });
+        if gapless && end >= len && !self.runs.is_empty() { largest } else { largest.max(1.) }
+    }
+
+    /// Whether any run hides or replaces its text while concealed.
+    pub fn conceals(&self) -> bool {
+        self.runs.iter().any(|(_, s)| s.conceal.is_some())
+    }
+}
+
+/// A paragraph as live preview shows it while concealed: the text left once hidden runs are
+/// gone and marks stand in for theirs, and where each piece came from. Offsets are bytes.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ConcealedText {
+    pub text: String,
+    pieces: Vec<Piece>,
+    /// The source paragraph's length.
+    len: usize,
+}
+
+/// A stretch of [`ConcealedText::text`] and the source it shows: the same bytes, or a mark
+/// standing in for a run.
+#[derive(Clone, Debug, PartialEq)]
+struct Piece {
+    shown: Range<usize>,
+    source: Range<usize>,
+    mark: Option<Conceal>,
+}
+
+impl ConcealedText {
+    /// `paragraph` with its concealed runs taken out; each mark shows as `placeholder`, which
+    /// the backend sizes to [`MARK_WIDTH`] ems and draws the mark over.
+    pub fn new(paragraph: &str, styled: &StyledParagraph, placeholder: &str) -> Self {
+        let mut out = Self { len: paragraph.len(), ..Self::default() };
+        let mut at = 0;
+        for (range, style) in &styled.runs {
+            let Some(conceal) = style.conceal else { continue };
+            let range = range.start.min(paragraph.len())..range.end.min(paragraph.len());
+            if range.start < at || range.is_empty() {
+                continue;
+            }
+            out.push(&paragraph[at..range.start], at..range.start, None);
+            if conceal != Conceal::Hide {
+                out.push(placeholder, range.clone(), Some(conceal));
+            }
+            at = range.end;
+        }
+        out.push(&paragraph[at..], at..paragraph.len(), None);
+        out
+    }
+
+    fn push(&mut self, text: &str, source: Range<usize>, mark: Option<Conceal>) {
+        if text.is_empty() {
+            return;
+        }
+        let shown = self.text.len()..self.text.len() + text.len();
+        self.text.push_str(text);
+        self.pieces.push(Piece { shown, source, mark });
+    }
+
+    /// Every piece in order: its range in [`ConcealedText::text`], the source it shows, and the
+    /// mark it is, if one.
+    pub fn pieces(&self) -> impl Iterator<Item = (Range<usize>, Range<usize>, Option<Conceal>)> + '_ {
+        self.pieces.iter().map(|p| (p.shown.clone(), p.source.clone(), p.mark))
+    }
+
+    /// Each mark's offset in [`ConcealedText::text`], its source run and what it is.
+    pub fn marks(&self) -> impl Iterator<Item = (usize, Range<usize>, Conceal)> + '_ {
+        self.pieces.iter().filter_map(|p| Some((p.shown.start, p.source.clone(), p.mark?)))
+    }
+
+    /// The source offset shown at `shown`: the start of a mark is its run's start, past it
+    /// the run's end.
+    pub fn source(&self, shown: usize) -> usize {
+        let Some(p) = self.pieces.iter().find(|p| shown < p.shown.end) else {
+            return self.pieces.last().map_or(self.len, |p| p.source.end);
+        };
+        match p.mark {
+            _ if shown <= p.shown.start => p.source.start,
+            Some(_) => p.source.end,
+            None => p.source.start + (shown - p.shown.start),
+        }
+    }
+
+    /// Where source offset `source` shows: a hidden offset shows where the text after it does.
+    pub fn shown(&self, source: usize) -> usize {
+        let Some(p) = self.pieces.iter().find(|p| source < p.source.end) else { return self.text.len() };
+        match p.mark {
+            _ if source <= p.source.start => p.shown.start,
+            Some(_) => p.shown.start,
+            None => p.shown.start + (source - p.source.start),
+        }
     }
 }
 
@@ -68,6 +196,8 @@ pub enum EditKey {
     Bold,
     /// Command-I (Control-I off macOS).
     Italic,
+    /// A click on a [`Conceal::Task`] mark; the selection is the mark's run.
+    Toggle,
 }
 
 /// An edit a styler makes for a key, inside the caret's paragraph. Byte offsets into the
@@ -333,6 +463,16 @@ mod tests {
         text.replace_range(range.clone(), new);
         let after = text.clone();
         cache.edit(range, new.len(), styler, str::len, |r| Cow::Owned(after[r].to_owned()))
+    }
+
+    #[test]
+    fn a_paragraph_sets_at_its_largest_run_and_shrinks_only_when_runs_cover_it() {
+        let run = |range: Range<usize>, scale: f32| (range, SpanStyle { scale: Some(scale), ..Default::default() });
+        let small = StyledParagraph { runs: vec![run(0..4, 0.8)], ..Default::default() };
+        assert_eq!((small.scale(4), small.scale(6)), (0.8, 1.), "unstyled text keeps the area's size");
+        let mixed = StyledParagraph { runs: vec![run(0..2, 0.8), run(2..4, 1.5)], ..Default::default() };
+        assert_eq!(mixed.scale(4), 1.5);
+        assert_eq!(StyledParagraph::default().scale(0), 1.);
     }
 
     #[test]

@@ -38,11 +38,15 @@ use objc2_app_kit::{
     NSTextDelegate, NSTextField, NSTextFieldBezelStyle, NSTextFieldCell, NSTextFieldDelegate, NSTextStorage,
     NSTextStorageDelegate, NSTextStorageEditActions, NSTextView, NSTextViewDelegate, NSView,
 };
+use objc2_app_kit::{
+    NSControlCharacterAction, NSGlyphProperty, NSLayoutManager, NSLayoutManagerDelegate, NSTextContainer,
+};
 use objc2_foundation::{
     MainThreadMarker, NSArray, NSAttributedString, NSDictionary, NSInteger, NSNotification, NSObject, NSObjectProtocol,
     NSPoint, NSRange, NSRect, NSSize, NSString, NSURL,
 };
 
+use super::preview;
 use super::styled::{Styles, composing};
 use super::{Ctx, FormControl, NdControlTarget, apply_common, props, set_accessibility_label};
 use crate::events::defer;
@@ -179,6 +183,9 @@ struct Core {
     cancelled: Cell<bool>,
     /// A text area's styler and the paragraphs it styled.
     styles: RefCell<Option<Styles>>,
+    /// The paragraphs live preview shows unconcealed: the selection's, while the area has
+    /// focus. Empty otherwise.
+    revealed: Cell<NSRange>,
 }
 
 impl Core {
@@ -193,6 +200,7 @@ impl Core {
             options: RefCell::default(),
             cancelled: Cell::new(false),
             styles: RefCell::default(),
+            revealed: Cell::new(NSRange::new(0, 0)),
         })
     }
 
@@ -236,6 +244,69 @@ impl Core {
         }
         view.setSelectedRange(selection);
         view.scrollRangeToVisible(selection);
+        true
+    }
+
+    /// Reveals the selection's paragraphs while the area has `focus` and conceals the ones it
+    /// left: their glyphs are generated again.
+    fn reveal(&self, focus: bool) {
+        let Some(view) = self.area() else { return };
+        if self.styles.borrow().is_none() {
+            return;
+        }
+        let string = view.string();
+        let total = string.length();
+        let next = if focus { string.paragraphRangeForRange(view.selectedRange()) } else { NSRange::new(0, 0) };
+        let previous = self.revealed.replace(next);
+        if previous == next {
+            return;
+        }
+        let Some(layout) = (unsafe { view.layoutManager() }) else { return };
+        for range in [previous, next] {
+            let start = range.location.min(total);
+            let range = NSRange::new(start, (range.location + range.length).min(total) - start);
+            if range.length == 0 {
+                continue;
+            }
+            unsafe {
+                layout.invalidateGlyphsForCharacterRange_changeInLength_actualCharacterRange(
+                    range,
+                    0,
+                    std::ptr::null_mut(),
+                );
+                layout.invalidateLayoutForCharacterRange_actualCharacterRange(range, std::ptr::null_mut());
+            }
+            layout.invalidateDisplayForCharacterRange(range);
+        }
+    }
+
+    fn focused(&self) -> bool {
+        self.area().is_some_and(|view| {
+            view.window().and_then(|w| w.firstResponder()).is_some_and(|r| {
+                std::ptr::eq(&*r as *const NSResponder as *const u8, view as *const NSTextView as *const u8)
+            })
+        })
+    }
+
+    /// A click on the task box over `run`: the styler's toggle, as one undo step, with the
+    /// selection left where it was.
+    fn toggle_task(&self, run: NSRange) -> bool {
+        let Some(view) = self.area() else { return false };
+        if !view.isEditable() || composing(view) {
+            return false;
+        }
+        let Some(storage) = (unsafe { view.textStorage() }) else { return false };
+        let edit = self.styles.borrow().as_ref().and_then(|s| s.edit_for(&storage, run, EditKey::Toggle));
+        let Some((range, text, _)) = edit else { return false };
+        let selection = view.selectedRange();
+        let text = NSString::from_str(&text);
+        view.breakUndoCoalescing();
+        if view.shouldChangeTextInRange_replacementString(range, Some(&text)) {
+            storage.replaceCharactersInRange_withString(range, &text);
+            view.didChangeText();
+        }
+        view.breakUndoCoalescing();
+        view.setSelectedRange(selection);
         true
     }
 
@@ -460,7 +531,53 @@ define_class!(
         }
     }
 
+    unsafe impl NSLayoutManagerDelegate for NdTextDelegate {
+        #[unsafe(method(layoutManager:shouldGenerateGlyphs:properties:characterIndexes:font:forGlyphRange:))]
+        unsafe fn should_generate_glyphs(
+            &self,
+            layout: &NSLayoutManager,
+            glyphs: std::ptr::NonNull<objc2_core_graphics::CGGlyph>,
+            properties: std::ptr::NonNull<NSGlyphProperty>,
+            characters: std::ptr::NonNull<usize>,
+            font: &NSFont,
+            range: NSRange,
+        ) -> usize {
+            let revealed = self.ivars().core.revealed.get();
+            // SAFETY: the pointers come from the layout manager for `range`.
+            unsafe { preview::generate(layout, glyphs, properties, characters, font, range, revealed) }
+        }
+
+        #[unsafe(method(layoutManager:shouldUseAction:forControlCharacterAtIndex:))]
+        fn should_use_action(
+            &self,
+            layout: &NSLayoutManager,
+            action: NSControlCharacterAction,
+            index: usize,
+        ) -> NSControlCharacterAction {
+            preview::action(layout, action, index, self.ivars().core.revealed.get())
+        }
+
+        #[unsafe(method(layoutManager:boundingBoxForControlGlyphAtIndex:forTextContainer:proposedLineFragment:glyphPosition:characterIndex:))]
+        fn control_glyph_box(
+            &self,
+            layout: &NSLayoutManager,
+            _glyph: usize,
+            _container: &NSTextContainer,
+            proposed: NSRect,
+            position: NSPoint,
+            index: usize,
+        ) -> NSRect {
+            preview::mark_box(layout, index, proposed, position)
+        }
+    }
+
     unsafe impl NSTextViewDelegate for NdTextDelegate {
+        #[unsafe(method(textViewDidChangeSelection:))]
+        fn text_view_did_change_selection(&self, _n: &NSNotification) {
+            let core = &self.ivars().core;
+            core.reveal(core.focused());
+        }
+
         #[unsafe(method(textView:doCommandBySelector:))]
         fn text_view_do_command(&self, text_view: &NSTextView, command: Sel) -> bool {
             let core = &self.ivars().core;
@@ -499,9 +616,21 @@ impl NdTextDelegate {
         if !mask.contains(NSTextStorageEditActions::EditedCharacters) {
             return;
         }
-        if let Some(styles) = self.ivars().core.styles.borrow_mut().as_mut() {
+        let core = &self.ivars().core;
+        if let Some(styles) = core.styles.borrow_mut().as_mut() {
             styles.edited(storage, range, delta);
         }
+        // The revealed paragraphs move with an edit before them and grow with one inside.
+        let revealed = core.revealed.get();
+        let old_end = (range.location + range.length) as isize - delta;
+        let shifted = if (old_end as usize) <= revealed.location && range.location < revealed.location {
+            NSRange::new((revealed.location as isize + delta).max(0) as usize, revealed.length)
+        } else if range.location < revealed.location + revealed.length.max(1) {
+            NSRange::new(revealed.location, (revealed.length as isize + delta).max(0) as usize)
+        } else {
+            revealed
+        };
+        core.revealed.set(shifted);
     }
 
     fn new(mtm: MainThreadMarker, core: Rc<Core>) -> Retained<Self> {
@@ -966,6 +1095,43 @@ define_class!(
             self.styled_shortcut(event)
                 || unsafe { msg_send![super(self), performKeyEquivalent: event] }
         }
+
+        // Live preview's code wells, quote bars, rules, bullets and task boxes sit behind the
+        // text.
+        #[unsafe(method(drawViewBackgroundInRect:))]
+        fn draw_view_background(&self, rect: NSRect) {
+            let _: () = unsafe { msg_send![super(self), drawViewBackgroundInRect: rect] };
+            if let Some(core) = self.core().filter(|c| c.styles.borrow().is_some()) {
+                preview::draw(self, rect, core.revealed.get());
+            }
+        }
+
+        // A click on a concealed task box ticks it instead of placing the caret.
+        #[unsafe(method(mouseDown:))]
+        fn mouse_down(&self, event: &objc2_app_kit::NSEvent) {
+            if self.click_task(event) {
+                return;
+            }
+            let _: () = unsafe { msg_send![super(self), mouseDown: event] };
+        }
+
+        #[unsafe(method(becomeFirstResponder))]
+        fn become_first_responder(&self) -> bool {
+            let became: bool = unsafe { msg_send![super(self), becomeFirstResponder] };
+            if became && let Some(core) = self.core() {
+                core.reveal(true);
+            }
+            became
+        }
+
+        #[unsafe(method(resignFirstResponder))]
+        fn resign_first_responder(&self) -> bool {
+            let resigned: bool = unsafe { msg_send![super(self), resignFirstResponder] };
+            if resigned && let Some(core) = self.core() {
+                core.reveal(false);
+            }
+            resigned
+        }
     }
 );
 
@@ -1123,6 +1289,23 @@ fn media_types() -> Vec<&'static NSPasteboardType> {
 }
 
 impl NdAreaView {
+    fn core(&self) -> Option<Rc<Core>> {
+        self.ivars().core.borrow().as_ref().and_then(std::rc::Weak::upgrade)
+    }
+
+    fn click_task(&self, event: &objc2_app_kit::NSEvent) -> bool {
+        let plain = event.modifierFlags()
+            & (NSEventModifierFlags::Command | NSEventModifierFlags::Shift | NSEventModifierFlags::Option)
+            == NSEventModifierFlags::empty();
+        if event.clickCount() != 1 || !plain {
+            return false;
+        }
+        let Some(core) = self.core().filter(|c| c.styles.borrow().is_some()) else { return false };
+        let at = self.convertPoint_fromView(event.locationInWindow(), None);
+        let Some(run) = preview::task_at(self, at, core.revealed.get()) else { return false };
+        core.toggle_task(run)
+    }
+
     fn styled_shortcut(&self, event: &objc2_app_kit::NSEvent) -> bool {
         let focused = self
             .window()
@@ -1239,6 +1422,7 @@ impl TextAreaControl {
         // it now leaves the storage the styling delegate sits on in place from here on.
         if let Some(layout) = unsafe { text_view.layoutManager() } {
             layout.setAllowsNonContiguousLayout(true);
+            layout.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
         }
         if let Some(storage) = unsafe { text_view.textStorage() } {
             storage.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
@@ -1411,6 +1595,9 @@ impl Drop for TextAreaControl {
         self.text_view.setDelegate(None);
         if let Some(storage) = unsafe { self.text_view.textStorage() } {
             storage.setDelegate(None);
+        }
+        if let Some(layout) = unsafe { self.text_view.layoutManager() } {
+            layout.setDelegate(None);
         }
     }
 }
