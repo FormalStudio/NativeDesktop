@@ -5,6 +5,10 @@ and the one it moves to.
 
 ## Unreleased
 
+- GPUI draws each icon as one alpha mask, tinted once. A dimmed icon (a status page's, a
+  secondary toolbar button's) showed brighter wherever its strokes crossed, as each stroke was
+  its own translucent path; Lucide's round caps and joins now show too, where the paths drew
+  square ends.
 - Reduce motion dissolves instead of jumping, as Apple's guidance asks. A move that would show
   (more than 12 points of offset, size or layout, or a tenth of a scale) fades out where it was
   and back in where it lands; a smaller one (a hover lift, a press dip) takes its place at once;

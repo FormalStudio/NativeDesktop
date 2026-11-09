@@ -572,6 +572,47 @@ mod gate_m6 {
         assert!(paints.iter().any(|p| p.label == "status page icon"), "the icon slot painted");
     }
 
+    /// The status page's dimmed icon is one shape tinted once: where the search glass's handle
+    /// crosses its ring, the pixels are no brighter than the rest of the stroke.
+    pub fn gpui_a_translucent_icon_covers_its_overlaps_once() {
+        if nd_gpui::gpui_platform::current_headless_renderer().ok().flatten().is_none() {
+            println!("skipped: GPUI has no headless renderer on this OS");
+            return;
+        }
+        let mut o = open_with(Kind::Status, Scheme::Dark);
+        let status = o.node("status").bounds.expect("status");
+        let handle = o.host.window_handle(o.window).expect("window");
+        let image = o.cx.capture_screenshot(handle).expect("capture");
+        let scale = image.width() as f32 / 800.;
+        let luma = |x: u32, y: u32| {
+            let p = image.get_pixel(x, y).0;
+            (u32::from(p[0]) + u32::from(p[1]) + u32::from(p[2])) / 3
+        };
+        let (left, right) = (((400. - 72.) * scale) as u32, ((400. + 72.) * scale) as u32);
+        let top = (status.origin.y * scale) as u32;
+        let background = luma(left, top);
+        // The icon's rows: from the first row that shows it to the first blank one after.
+        let mut histogram = [0u32; 256];
+        let mut seen = false;
+        for y in top..image.height() {
+            let row: Vec<u32> = (left..right).map(|x| luma(x, y)).filter(|l| l.abs_diff(background) > 12).collect();
+            if row.is_empty() && seen {
+                break;
+            }
+            seen |= !row.is_empty();
+            for l in row {
+                histogram[l as usize] += 1;
+            }
+        }
+        let stroke = (0..256).max_by_key(|l| histogram[*l]).expect("icon pixels");
+        let brightest = (0..256).rev().find(|l| histogram[*l] > 0).expect("icon pixels");
+        assert!(stroke > background as usize, "the dimmed icon drew lighter than the dark page");
+        assert!(
+            brightest <= stroke + 6,
+            "overlapping strokes drew brighter ({brightest}) than the stroke ({stroke}) on {background}"
+        );
+    }
+
     pub fn gpui_toolbar_shows_a_title_in_an_empty_leading_run() {
         let titles = |kind| {
             let o = open(kind);
@@ -1038,6 +1079,10 @@ fn main() {
             gate_m6::gpui_split_hidden_subtree_is_not_hit_or_painted,
         ),
         ("gate_m6::gpui_status_page_lays_out_centred", gate_m6::gpui_status_page_lays_out_centred),
+        (
+            "gate_m6::gpui_a_translucent_icon_covers_its_overlaps_once",
+            gate_m6::gpui_a_translucent_icon_covers_its_overlaps_once,
+        ),
         (
             "gate_m6::gpui_toolbar_centres_its_centred_item_on_the_window",
             gate_m6::gpui_toolbar_centres_its_centred_item_on_the_window,
