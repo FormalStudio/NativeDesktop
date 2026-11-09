@@ -78,7 +78,8 @@ harness = false
 name = "msg_gaps"
 harness = false
 
-# Tier 2: what a notes app of cards needed (clicks where drawn, truncation and line clamps).
+# Tier 2: what a notes app of cards needed (clicks where drawn, truncation and line clamps,
+# corners of different radii).
 [[test]]
 name = "notes_gaps"
 harness = false

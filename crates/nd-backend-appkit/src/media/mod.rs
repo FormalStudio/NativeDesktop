@@ -7,7 +7,7 @@
 //! `NSScrollView` with the OS's momentum, rubber band and overlay scroller. Images are layer
 //! contents decoded by the shared pipeline off the main thread.
 
-mod chat;
+pub(crate) mod chat;
 mod equalizer;
 pub(crate) mod image;
 mod lyrics;

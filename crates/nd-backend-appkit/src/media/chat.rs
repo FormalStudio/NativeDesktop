@@ -27,7 +27,7 @@ use crate::custom::{CustomCx, CustomNative, CustomPaint, CustomWidget};
 
 /// A rounded rect with its own radius per corner, `[top_left, top_right, bottom_right,
 /// bottom_left]`, in flipped coordinates.
-pub(super) fn rounded(path: &CGMutablePath, r: NSRect, radii: [f64; 4]) {
+pub(crate) fn rounded(path: &CGMutablePath, r: NSRect, radii: [f64; 4]) {
     let (x0, y0) = (r.origin.x, r.origin.y);
     let (x1, y1) = (x0 + r.size.width, y0 + r.size.height);
     let max = r.size.width.min(r.size.height) / 2.;

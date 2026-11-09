@@ -133,7 +133,7 @@ impl GlassNative {
                 // The material has no tint of its own below 26: the tint lays over it.
                 let look = ViewLook {
                     background: self.props.tint.map(Color::from),
-                    corner_radius: r as f32 / if explicit { self.radius_scale } else { 1. },
+                    corner_radii: [r as f32 / if explicit { self.radius_scale } else { 1. }; 4],
                     ..ViewLook::default()
                 };
                 self.content.set_props(&look);

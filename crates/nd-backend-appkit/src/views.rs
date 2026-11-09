@@ -168,6 +168,9 @@ pub struct LayerIvars {
     tracking: RefCell<Option<Retained<objc2_app_kit::NSTrackingArea>>>,
     /// Where a hero in flight lives in the tree while it is drawn on the window's frame view.
     lifted: RefCell<Option<Home>>,
+    /// The border of a shape Core Animation cannot round (corners of different radii), drawn
+    /// along the mask that cuts the layer to it.
+    outline: RefCell<Option<Retained<objc2_quartz_core::CAShapeLayer>>>,
 }
 
 /// A lifted hero's place in the tree: its parent, and the sibling above it.
@@ -192,6 +195,7 @@ impl Default for LayerIvars {
             hovered: Cell::new(false),
             tracking: RefCell::new(None),
             lifted: RefCell::new(None),
+            outline: RefCell::new(None),
         }
     }
 }
@@ -392,7 +396,7 @@ define_class!(
                 self.apply_transform();
             }
             // A `rounded_full()` radius is clamped to the size, so it follows the size.
-            if self.ivars().props.borrow().corner_radius > 0. {
+            if self.ivars().props.borrow().corner_radii.iter().any(|r| *r > 0.) {
                 self.setNeedsDisplay(true);
             }
         }
@@ -408,21 +412,58 @@ define_class!(
             // `rounded_full()` asks for an unbounded radius; Core Animation draws a layer with one
             // past half its size, and everything in it, as nothing.
             let size = self.bounds().size;
-            let radius = f64::from(props.corner_radius * self.ivars().radius_scale.get())
-                .min(size.width.min(size.height) / 2.)
-                .max(0.);
-            layer.setCornerRadius(radius);
+            let scale = self.ivars().radius_scale.get();
+            let radii = props
+                .corner_radii
+                .map(|r| f64::from(r * scale).min(size.width.min(size.height) / 2.).max(0.));
+            let radius = radii.iter().copied().fold(0., f64::max);
             layer.setMasksToBounds(props.clips);
-            match props.border {
-                Some((width, color)) => {
-                    layer.setBorderWidth(width.into());
-                    layer.setBorderColor(Some(&color.ns_color().CGColor()));
+            let border = props.border.map(|(width, color)| (f64::from(width), color.ns_color().CGColor()));
+            // Core Animation rounds the corners it is told to by one radius; any other shape is a
+            // mask, which cuts what is inside it too.
+            if radii.iter().all(|r| *r == 0. || *r == radius) {
+                layer.setCornerRadius(radius);
+                layer.setMaskedCorners(corner_mask(radii));
+                // SAFETY: clearing the mask; no other layer uses it.
+                unsafe { layer.setMask(None) };
+                self.set_outline(None, &layer);
+                match &border {
+                    Some((width, color)) => {
+                        layer.setBorderWidth(*width);
+                        layer.setBorderColor(Some(color));
+                    }
+                    None => layer.setBorderWidth(0.),
                 }
-                None => layer.setBorderWidth(0.),
+            } else {
+                layer.setCornerRadius(0.);
+                layer.setBorderWidth(0.);
+                let bounds = NSRect::new(NSPoint::ZERO, size);
+                let path = objc2_core_graphics::CGMutablePath::new();
+                crate::media::chat::rounded(&path, bounds, radii);
+                let mask = objc2_quartz_core::CAShapeLayer::new();
+                mask.setFrame(bounds);
+                mask.setPath(Some(&path));
+                // SAFETY: the mask is a fresh layer used by no other layer.
+                unsafe { layer.setMask(Some(&mask)) };
+                self.set_outline(border.map(|(width, color)| (width, color, bounds, radii)), &layer);
             }
         }
     }
 );
+
+/// The corners with a radius, all four when none has one (so a later radius rounds them all).
+fn corner_mask(radii: [f64; 4]) -> objc2_quartz_core::CACornerMask {
+    use objc2_quartz_core::CACornerMask;
+    // Each layer of a flipped view keeps its y axis pointing down, so min Y is the top.
+    let corners = [
+        CACornerMask::LayerMinXMinYCorner,
+        CACornerMask::LayerMaxXMinYCorner,
+        CACornerMask::LayerMaxXMaxYCorner,
+        CACornerMask::LayerMinXMaxYCorner,
+    ];
+    let mask = radii.iter().zip(corners).filter(|(r, _)| **r > 0.).fold(CACornerMask::empty(), |m, (_, c)| m | c);
+    if mask.is_empty() { corners.into_iter().fold(CACornerMask::empty(), |m, c| m | c) } else { mask }
+}
 
 impl NdLayerView {
     pub(crate) fn new(mtm: MainThreadMarker, props: &ViewLook) -> Retained<Self> {
@@ -613,6 +654,38 @@ impl NdLayerView {
                 None => home.addSubview(self),
             }
             let _: () = unsafe { msg_send![super(self), setFrame: frame] };
+        }
+    }
+
+    /// Draws `border` (width, colour, bounds and radii) as a stroke inside the shape the mask
+    /// cuts; `None` takes it away.
+    fn set_outline(
+        &self,
+        border: Option<(f64, Retained<objc2_core_graphics::CGColor>, NSRect, [f64; 4])>,
+        layer: &objc2_quartz_core::CALayer,
+    ) {
+        let Some((width, color, bounds, radii)) = border else {
+            if let Some(outline) = self.ivars().outline.borrow_mut().take() {
+                outline.removeFromSuperlayer();
+            }
+            return;
+        };
+        let outline = self.ivars().outline.borrow_mut().get_or_insert_with(objc2_quartz_core::CAShapeLayer::new).clone();
+        // The stroke is centred on its path: inset by half the width, it lies inside the mask.
+        let half = width / 2.;
+        let inner = NSRect::new(
+            NSPoint::new(half, half),
+            NSSize::new((bounds.size.width - width).max(0.), (bounds.size.height - width).max(0.)),
+        );
+        let path = objc2_core_graphics::CGMutablePath::new();
+        crate::media::chat::rounded(&path, inner, radii.map(|r| (r - half).max(0.)));
+        outline.setFrame(bounds);
+        outline.setPath(Some(&path));
+        outline.setFillColor(None);
+        outline.setStrokeColor(Some(&color));
+        outline.setLineWidth(width);
+        if outline.superlayer().is_none() {
+            layer.addSublayer(&outline);
         }
     }
 

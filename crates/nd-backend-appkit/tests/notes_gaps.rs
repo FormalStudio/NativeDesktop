@@ -1,6 +1,7 @@
 //! Tier 2: what a notes app of cards needed on AppKit. A click lands on what is drawn under it,
 //! offset and scaled elements and tile grid tiles included; text cut to one line ends in an
-//! ellipsis and clamped text keeps its lines. Prints `ND_NOTES_GAPS_OK`.
+//! ellipsis and clamped text keeps its lines; corners of different radii round each corner.
+//! Prints `ND_NOTES_GAPS_OK`.
 
 mod harness;
 
@@ -32,6 +33,7 @@ mod gaps {
         let mut c = Checks(0);
         hits_where_drawn(&rig, &mut c);
         cut_text(&rig, &mut c);
+        corners(&rig, &mut c);
         if c.0 == 0 {
             println!("ND_NOTES_GAPS_OK");
             std::process::exit(0);
@@ -125,6 +127,59 @@ mod gaps {
             &format!("line clamp: two lines tall ({} against {})", two.height, one.height),
         );
         c.check(all.height > two.height, &format!("unclamped text is taller ({} > {})", all.height, two.height));
+        rig.close(opened);
+    }
+
+    struct Corners;
+
+    impl Render for Corners {
+        fn render(&mut self, _w: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            let shape = |id: &str| div().id(id.to_owned()).size(px(80.)).bg(hsla(0.6, 0.6, 0.5, 1.));
+            h_flex()
+                .p(px(12.))
+                .gap(px(8.))
+                .child(shape("all").rounded(px(12.)))
+                .child(shape("diagonal").rounded_tl(px(24.)).rounded_br(px(24.)))
+                .child(
+                    shape("mixed")
+                        .rounded_tl(px(4.))
+                        .rounded_tr(px(16.))
+                        .rounded_br(px(32.))
+                        .rounded_bl(px(8.))
+                        .border_2()
+                        .border_color(hsla(0., 0., 0., 1.)),
+                )
+        }
+    }
+
+    fn corners(rig: &Rig, c: &mut Checks) {
+        use objc2_quartz_core::CACornerMask;
+        let opened = rig.open("corners", |_| Corners);
+        let win = opened.id();
+        rig.pump();
+        let layer = |id: &str| {
+            let view = rig.view(win, id);
+            view.displayIfNeeded();
+            view.layer().expect("layer-backed")
+        };
+        let all = layer("all");
+        c.check(all.cornerRadius() == 12. && all.mask().is_none(), "corners: one radius rounds the layer");
+        let diagonal = layer("diagonal");
+        let masked = diagonal.maskedCorners();
+        c.check(
+            diagonal.cornerRadius() == 24.
+                && masked == CACornerMask::LayerMinXMinYCorner | CACornerMask::LayerMaxXMaxYCorner,
+            &format!("corners: equal radii round only their corners ({masked:?})"),
+        );
+        let mixed = layer("mixed");
+        // SAFETY: main thread; the array is read, not kept.
+        let outlined = unsafe { mixed.sublayers() }.is_some_and(|s| {
+            s.iter().any(|l| l.downcast_ref::<objc2_quartz_core::CAShapeLayer>().is_some())
+        });
+        c.check(
+            mixed.cornerRadius() == 0. && mixed.mask().is_some() && mixed.borderWidth() == 0. && outlined,
+            "corners: different radii cut a mask, and the border follows it",
+        );
         rig.close(opened);
     }
 }

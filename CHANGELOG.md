@@ -5,6 +5,9 @@ and the one it moves to.
 
 ## Unreleased
 
+- AppKit draws each corner of a `div` at its own radius: corners of one radius (or none) round
+  with the layer's masked corners, and corners of different radii cut a shape mask, with the
+  border stroked along it. Only the top-left radius applied before.
 - AppKit text takes `truncate()` and `line_clamp(n)`: a truncated line ends in an ellipsis
   (`text_ellipsis_start` and `text_ellipsis_middle` cut where they say), and clamped text keeps
   its first `n` lines, the last ending in an ellipsis with `text_ellipsis()`, as on GPUI. Text

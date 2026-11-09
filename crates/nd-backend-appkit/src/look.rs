@@ -97,7 +97,8 @@ pub(crate) fn length(l: AbsoluteLength) -> f32 {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ViewLook {
     pub background: Option<Color>,
-    pub corner_radius: f32,
+    /// Top left, top right, bottom right, bottom left.
+    pub corner_radii: [f32; 4],
     pub border: Option<(f32, Color)>,
     pub opacity: f32,
     /// `visibility: hidden`: the view keeps its frame but shows nothing and takes no clicks or
@@ -120,7 +121,7 @@ impl Default for ViewLook {
     fn default() -> Self {
         Self {
             background: None,
-            corner_radius: 0.,
+            corner_radii: [0.; 4],
             border: None,
             opacity: 1.,
             hidden: false,
@@ -138,12 +139,13 @@ impl ViewLook {
     /// `ND_DEBUG_EXPOSE` only area no node covers shows the window's own (magenta) background.
     pub fn from_style(style: &StyleRefinement, expose: bool) -> Self {
         let background = style.background.as_ref().and_then(|f| f.color()).and_then(|b| b.as_solid()).map(Color::from);
-        let radius = style.corner_radii.top_left.map(length).unwrap_or(0.);
+        let r = &style.corner_radii;
+        let corner_radii = [r.top_left, r.top_right, r.bottom_right, r.bottom_left].map(|r| r.map_or(0., length));
         let border_width = style.border_widths.top.map(length).unwrap_or(0.);
         let border = (border_width > 0.).then(|| (border_width, style.border_color.map_or(Color::Label, Color::from)));
         Self {
             background: background.or(expose.then_some(Color::WindowBackground)),
-            corner_radius: radius,
+            corner_radii,
             border,
             opacity: style.opacity.unwrap_or(1.),
             hidden: style.visibility == Some(Visibility::Hidden),
