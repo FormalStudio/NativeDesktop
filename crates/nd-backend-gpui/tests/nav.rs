@@ -556,6 +556,7 @@ fn golden_tree() -> SourceTreeProps {
         accepts: Vec::new(),
         drop_onto: false,
         row_menus: false,
+        fit_rows: false,
         style: Default::default(),
     }
 }

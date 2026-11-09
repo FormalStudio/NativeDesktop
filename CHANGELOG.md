@@ -5,6 +5,12 @@ and the one it moves to.
 
 ## Unreleased
 
+- `Pane::footer(el)` pins `el` at a sidebar's or inspector's foot, under the rest of the pane,
+  for a Trash row or a New Folder button. `SourceTree::fit_rows()` makes a source list as tall
+  as its rows with nothing to scroll: on AppKit the scroll view has no scroller, no rubber band
+  and no toolbar insets and lays out at its rows' height, and on GPUI the list takes its rows'
+  height with no scroll view. A one-row list given a fixed height clipped its row on GPUI and
+  showed a scroller on macOS. AppKit source lists now hide a legacy scroller while the rows fit.
 - `tile_grid` tiles follow a resize that keeps the column count frame for frame (a sidebar
   dragged or sliding, a window resizing), as Finder's do, instead of chasing the width on the
   reflow spring and shrinking mid-resize. New columns still glide the tiles to their slots, and

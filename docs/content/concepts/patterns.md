@@ -60,6 +60,20 @@ owns the selection. On macOS, the list is an `NSOutlineView` in source-list styl
 
 <!-- docs:snippet examples/chrome/src/lib.rs#sidebar -->
 
+`sidebar().footer(el)` pins `el` at the sidebar's foot, under a list that scrolls clear of it:
+a Trash row, or Apple Notes' New Folder button. For rows, give it a `source_list(..).fit_rows()`:
+the list is as tall as its rows and has no scroll view or scroller, so a short window never
+clips it, and its rows line up with the list above.
+
+```rust
+sidebar()
+    .child(source_tree("library").nodes(nodes).flex_1().min_h_0())
+    .footer(source_list("trash").nodes([source_node("trash", "Trash").icon(Icon::Trash)]).fit_rows())
+```
+
+On macOS a sidebar list's scroller follows the system's scroll bar setting and hides while the
+rows fit.
+
 Your state controls whether the inspector is collapsed, and its toggle sits in the toolbar:
 
 <!-- docs:snippet examples/chrome/src/lib.rs#inspector -->

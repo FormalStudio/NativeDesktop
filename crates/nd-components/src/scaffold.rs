@@ -236,10 +236,10 @@ impl IntoElement for Scaffold {
 }
 
 /// A side pane of a [`scaffold`]: the sidebar or the inspector.
-pub struct Pane(ContainerElement<PaneProps>);
+pub struct Pane(ContainerElement<PaneProps>, Option<AnyElement>);
 
 fn pane_with(key: Key, role: PaneRole) -> Pane {
-    Pane(ContainerElement::new::<Pane>(key, PaneProps { role, ..PaneProps::default() }).flex().flex_col())
+    Pane(ContainerElement::new::<Pane>(key, PaneProps { role, ..PaneProps::default() }).flex().flex_col(), None)
 }
 
 /// The sidebar. On macOS its material, width and collapse come from the split view.
@@ -270,7 +270,7 @@ impl Pane {
     }
 
     pub fn on_collapse_change(self, handler: impl Fn(&PaneCollapsed, &mut Window, &mut App) + 'static) -> Self {
-        Pane(self.0.on(handler))
+        Pane(self.0.on(handler), self.1)
     }
 
     /// While collapsed, the sidebar slides in over the content as a floating panel when the
@@ -283,7 +283,7 @@ impl Pane {
     }
 
     pub fn on_reveal_change(self, handler: impl Fn(&SidebarRevealed, &mut Window, &mut App) + 'static) -> Self {
-        Pane(self.0.on(handler))
+        Pane(self.0.on(handler), self.1)
     }
 
     /// The user drags the pane's inner edge to resize it, between its `min_w` and `max_w`
@@ -297,7 +297,7 @@ impl Pane {
     /// A divider drag, as it moves. Pass the width back through [`Pane::width`] to keep it, and
     /// store it to open the pane at that width next time.
     pub fn on_resize(self, handler: impl Fn(&PaneResized, &mut Window, &mut App) + 'static) -> Self {
-        Pane(self.0.on(handler))
+        Pane(self.0.on(handler), self.1)
     }
 
     /// The pane's width. The width a drag gives the pane holds until this changes.
@@ -316,6 +316,16 @@ impl Pane {
     /// The toolbar's band, and its blur, reach `points` further down over this pane.
     pub fn toolbar_extension(mut self, points: f32) -> Self {
         self.0.props_mut().toolbar_extension = points;
+        self
+    }
+
+    /// Pinned at the pane's foot under its other children, which take the height left: the
+    /// place for a sidebar's Trash row (a [`source_list`](crate::source_list) with
+    /// [`fit_rows`](crate::SourceTree::fit_rows), whose rows line up with the list above) or
+    /// Apple Notes' New Folder button. On macOS it sits under the list's scroll view in the
+    /// sidebar's material; the list above scrolls clear of it.
+    pub fn footer(mut self, footer: impl IntoElement) -> Self {
+        self.1 = Some(footer.into_any_element());
         self
     }
 }
@@ -347,6 +357,7 @@ impl IntoElement for Pane {
         props.min_width = px_of(style.min_size.width).or(props.min_width);
         props.max_width = px_of(style.max_size.width).or(props.max_width);
         props.style = style;
-        self.0.into_any_element()
+        let footer = self.1.map(|f| div().flex_none().w_full().child(f));
+        self.0.children(footer).into_any_element()
     }
 }

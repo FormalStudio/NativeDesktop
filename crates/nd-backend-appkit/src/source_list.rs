@@ -834,7 +834,9 @@ impl SourceTreeNative {
         }
         let scroll = NSScrollView::new(mtm);
         scroll.setDocumentView(Some(&outline));
-        scroll.setHasVerticalScroller(true);
+        // Finder's sidebar: an overlay scroller where the system setting asks for one, and a
+        // legacy scroller (a mouse attached) only while the rows overflow.
+        scroll.setAutohidesScrollers(true);
         scroll.setDrawsBackground(false);
 
         let empty: Retained<NdSourceEmpty> =
@@ -896,12 +898,44 @@ impl SourceTreeNative {
             props: props.clone(),
             retired: Vec::new(),
         };
+        this.fit(props.fit_rows);
         this.reload(props);
         this
     }
 
     pub fn view(&self) -> &NSView {
         &self.scroll
+    }
+
+    /// A list that fits its rows has no scroller, does not rubber-band and takes no insets
+    /// from the toolbar above (it sits at the pane's foot), so its height is its rows'.
+    fn fit(&self, fit: bool) {
+        self.scroll.setHasVerticalScroller(!fit);
+        self.scroll.setAutomaticallyAdjustsContentInsets(!fit);
+        if fit {
+            self.scroll.setContentInsets(objc2_foundation::NSEdgeInsets { top: 0., left: 0., bottom: 0., right: 0. });
+        }
+        self.scroll.setVerticalScrollElasticity(if fit {
+            objc2_app_kit::NSScrollElasticity::None
+        } else {
+            objc2_app_kit::NSScrollElasticity::Automatic
+        });
+    }
+
+    /// The height of the rows, for a list that fits them; nothing otherwise, so layout gives it
+    /// the room its style asks for.
+    pub fn measure(&self) -> nd_core::Size {
+        if !self.props.fit_rows {
+            return nd_core::Size::default();
+        }
+        let rows = self.outline.numberOfRows();
+        let content = if rows > 0 {
+            let last = self.outline.rectOfRow(rows - 1);
+            last.origin.y + last.size.height
+        } else {
+            0.
+        };
+        nd_core::Size { width: 0., height: content.ceil() as f32 }
     }
 
     pub fn outline(&self) -> &NSOutlineView {
@@ -918,6 +952,10 @@ impl SourceTreeNative {
     }
 
     pub fn update(&mut self, props: &SourceTreeProps) {
+        if props.fit_rows != self.props.fit_rows {
+            self.props.fit_rows = props.fit_rows;
+            self.fit(props.fit_rows);
+        }
         self.props.row_menus = props.row_menus;
         self.shared().row_menus.set(props.row_menus);
         if props.nodes != self.props.nodes

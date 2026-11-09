@@ -1752,6 +1752,7 @@ impl Backend for AppKitBackend {
             Native::Banner(b) => b.measure(),
             Native::Custom(c) => c.measure(width),
             Native::StatusPage(p) => p.measure(width),
+            Native::SourceTree(s) => s.measure(),
             Native::Separator(b, vertical) => {
                 let s = b.fittingSize();
                 if *vertical {

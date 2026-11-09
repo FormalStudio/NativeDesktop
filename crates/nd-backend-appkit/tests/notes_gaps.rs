@@ -3,7 +3,8 @@
 //! ellipsis and clamped text keeps its lines; corners of different radii round each corner; a
 //! right click on a source tree row asks for that row's menu and leaves the selection alone; a
 //! control-click or right click on a card's content asks for the card's menu, not its tap; a
-//! card casts its shadow, clipped or not, and dips while a press on it is held.
+//! card casts its shadow, clipped or not, and dips while a press on it is held. A list that
+//! fits its rows in a sidebar's footer shows all of them with no scroller, in a short window too.
 //! Prints `ND_NOTES_GAPS_OK`.
 
 mod harness;
@@ -44,6 +45,7 @@ mod gaps {
         inner_menus(&rig, &mut c);
         shadows_and_presses(&rig, &mut c);
         hero_first_frame(&rig, &mut c);
+        fitted_rows(&rig, &mut c);
         if c.0 == 0 {
             println!("ND_NOTES_GAPS_OK");
             std::process::exit(0);
@@ -434,6 +436,64 @@ mod gaps {
             (t.tx - 200.).abs() < 1. && (t.ty.abs() - 300.).abs() < 1.,
             &format!("hero: the first frame drawn keeps the offset onto its source ({}, {})", t.tx, t.ty),
         );
+        rig.close(opened);
+    }
+
+    struct Footer {
+        height: f32,
+    }
+
+    impl Render for Footer {
+        fn render(&mut self, _w: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            use nd_components::source_list;
+            let rows = (0..30).map(|i| source_node(format!("note{i}"), format!("Note {i}")));
+            v_flex()
+                .w(px(240.))
+                .h(px(self.height))
+                .child(source_tree("tree").nodes(rows).flex_1().min_h_0())
+                .child(source_list("trash").nodes([source_node("trash", "Trash").badge("1")]).fit_rows())
+        }
+    }
+
+    /// The Trash row under a sidebar's list: the list is as tall as the row, so nothing scrolls
+    /// or shows a scroller, and it stays whole while the list above it shrinks.
+    fn fitted_rows(rig: &Rig, c: &mut Checks) {
+        use nd_backend_appkit::objc2_app_kit::{NSOutlineView, NSScrollView};
+        let opened = rig.open("footer", |_| Footer { height: 420. });
+        let win = opened.id();
+        for height in [420., 120.] {
+            rig.update(&opened, |v, cx| {
+                v.height = height;
+                cx.notify();
+            });
+            rig.pump();
+            let trash = rig.view(win, "trash");
+            let scroll = find::<NSScrollView>(&trash).expect("a scroll view");
+            let outline = find::<NSOutlineView>(&trash).expect("an outline view");
+            let row = outline.rectOfRow(0);
+            let visible = scroll.documentVisibleRect();
+            c.check(!scroll.hasVerticalScroller(), &format!("fit rows at {height}: no vertical scroller"));
+            c.check(
+                (scroll.frame().size.height - (row.origin.y + row.size.height)).abs() < 1.,
+                &format!("fit rows at {height}: as tall as its rows ({:?}, {row:?})", scroll.frame()),
+            );
+            c.check(
+                visible.origin.y <= row.origin.y
+                    && visible.origin.y + visible.size.height >= row.origin.y + row.size.height,
+                &format!("fit rows at {height}: the whole row shows ({row:?} in {visible:?})"),
+            );
+            let tree = find::<NSScrollView>(&rig.view(win, "tree")).expect("the tree's scroll view");
+            let (bottom, top) = {
+                let t = tree.convertRect_toView(tree.bounds(), None);
+                let f = scroll.convertRect_toView(scroll.bounds(), None);
+                (t.origin.y, f.origin.y + f.size.height)
+            };
+            c.check(
+                (bottom - top).abs() < 1.,
+                &format!("fit rows at {height}: the list above ends where it starts ({bottom}, {top})"),
+            );
+            c.check(tree.autohidesScrollers(), &format!("fit rows at {height}: the tree's scroller hides when idle"));
+        }
         rig.close(opened);
     }
 

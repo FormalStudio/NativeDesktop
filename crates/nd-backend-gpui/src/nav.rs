@@ -21,6 +21,7 @@ use nd_components::{
     PaletteModel, SourceIndex, SourceTreeProps, TOAST, Toast, ToastOverlayProps, ToastQueue,
 };
 use nd_core::{NodeId, WindowId};
+use nd_gpui::gpui::prelude::FluentBuilder as _;
 use nd_gpui::gpui::{
     self, Animation, AnimationExt, AnyElement, BoxShadow, ElementId, FocusHandle, FontWeight, Hsla, InteractiveElement,
     IntoElement, Keystroke, MouseButton, ParentElement, Pixels, SharedString, StatefulInteractiveElement, Styled,
@@ -396,8 +397,9 @@ pub fn source_tree_view(
         .role(gpui::Role::Tree)
         .flex()
         .flex_col()
-        .size_full()
-        .overflow_y_scroll()
+        .w_full()
+        // A list that fits its rows takes their height and has nothing to scroll.
+        .when(!props.fit_rows, |l| l.h_full().overflow_y_scroll())
         // NavigationViewItem: 36 px rows 4 px in from the pane's edge, 4 px apart.
         .p(if fluent { px(4.) } else { theme.spacing.sm })
         .gap(gap)
@@ -2084,7 +2086,11 @@ impl Build<'_> {
             }
             return Some(
                 style
-                    .child(self.scrolled(id, tree, crate::scrollbar::Fit::Fill, window))
+                    .child(if props.fit_rows {
+                        tree.into_any_element()
+                    } else {
+                        self.scrolled(id, tree, crate::scrollbar::Fit::Fill, window)
+                    })
                     .children(slot.map(|(at, width)| {
                         let line = div().w(width).h(px(2.)).rounded(px(1.)).bg(theme.accent);
                         deferred(anchored().position(point(at.x, at.y - px(1.))).child(line))
