@@ -1,5 +1,6 @@
 //! Tier 2: what a notes app of cards needed on AppKit. A click lands on what is drawn under it,
-//! offset and scaled elements and tile grid tiles included. Prints `ND_NOTES_GAPS_OK`.
+//! offset and scaled elements and tile grid tiles included; text cut to one line ends in an
+//! ellipsis and clamped text keeps its lines. Prints `ND_NOTES_GAPS_OK`.
 
 mod harness;
 
@@ -23,10 +24,14 @@ mod gaps {
 
     pub use rig::{Checks, Rig};
 
+    const LONG: &str = "A summary long enough to need more than two lines at this width, so the clamp \
+                        has something to cut, and then some more words after that for good measure.";
+
     pub fn run() -> ! {
         let rig = Rig::new();
         let mut c = Checks(0);
         hits_where_drawn(&rig, &mut c);
+        cut_text(&rig, &mut c);
         if c.0 == 0 {
             println!("ND_NOTES_GAPS_OK");
             std::process::exit(0);
@@ -89,6 +94,37 @@ mod gaps {
             inside(hit(&opened, &stage, NSPoint::new(330., 420.)), &c_tile),
             "tile grid: the third tile takes a click on the third",
         );
+        rig.close(opened);
+    }
+
+    struct Cut;
+
+    impl Render for Cut {
+        fn render(&mut self, _w: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            v_flex()
+                .p(px(12.))
+                .gap(px(8.))
+                .w(px(200.))
+                .child(text("Short").id("short"))
+                .child(text(LONG).id("one").truncate())
+                .child(text(LONG).id("two").line_clamp(2).text_ellipsis())
+                .child(text(LONG).id("all"))
+        }
+    }
+
+    fn cut_text(rig: &Rig, c: &mut Checks) {
+        let opened = rig.open("cut", |_| Cut);
+        let win = opened.id();
+        rig.pump();
+        let frame = |id: &str| rig.view(win, id).frame().size;
+        let (short, one, two, all) = (frame("short"), frame("one"), frame("two"), frame("all"));
+        c.check(one.height == short.height, &format!("truncate: one line tall ({} against {})", one.height, short.height));
+        c.check(one.width == 176., &format!("truncate: as wide as the column ({})", one.width));
+        c.check(
+            two.height > one.height * 1.5 && two.height < one.height * 2.5,
+            &format!("line clamp: two lines tall ({} against {})", two.height, one.height),
+        );
+        c.check(all.height > two.height, &format!("unclamped text is taller ({} > {})", all.height, two.height));
         rig.close(opened);
     }
 }

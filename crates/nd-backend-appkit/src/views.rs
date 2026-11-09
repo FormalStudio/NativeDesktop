@@ -678,12 +678,28 @@ define_class!(
 
         #[unsafe(method(drawRect:))]
         fn draw_rect(&self, _dirty: NSRect) {
-            if let Some(props) = self.ivars().props.borrow().as_ref() {
-                attributed(props, self.family().as_deref()).drawWithRect_options_context(
-                    self.bounds(),
-                    draw_options(),
-                    None,
-                );
+            let Some(props) = self.ivars().props.borrow().clone() else { return };
+            let text = attributed(&props, self.family().as_deref());
+            match props.clamp {
+                Some(clamp) => {
+                    let Some(laid) = crate::rich::lay_out(&text, self.bounds().size.width, Some(clamp)) else {
+                        return;
+                    };
+                    let glyphs = laid.layout.glyphRangeForTextContainer(&laid.container);
+                    laid.layout.drawBackgroundForGlyphRange_atPoint(glyphs, NSPoint::ZERO);
+                    laid.layout.drawGlyphsForGlyphRange_atPoint(glyphs, NSPoint::ZERO);
+                }
+                None => text.drawWithRect_options_context(self.bounds(), draw_options(), None),
+            }
+        }
+
+        // The text wraps, cuts and clamps at the view's width: a new size draws it again.
+        #[unsafe(method(setFrameSize:))]
+        fn set_frame_size(&self, size: NSSize) {
+            let old = self.frame().size;
+            let _: () = unsafe { msg_send![super(self), setFrameSize: size] };
+            if old != size {
+                self.setNeedsDisplay(true);
             }
         }
 
@@ -792,9 +808,17 @@ impl NdTextView {
 }
 
 pub(crate) fn measure_text(props: &TextLook, family: Option<&str>, width: Option<f32>) -> Size {
-    let bound = NSSize::new(width.map_or(f64::MAX, f64::from), f64::MAX);
-    let rect = attributed(props, family).boundingRectWithSize_options_context(bound, draw_options(), None);
-    Size { width: rect.size.width.ceil() as f32, height: rect.size.height.ceil() as f32 }
+    let text = attributed(props, family);
+    let size = match props.clamp {
+        // NSStringDrawing has no line limit: TextKit lays the cut text out as it is drawn.
+        Some(clamp) => crate::rich::lay_out(&text, width.map_or(1e7, f64::from), Some(clamp))
+            .map_or(NSSize::ZERO, |laid| laid.layout.usedRectForTextContainer(&laid.container).size),
+        None => {
+            let bound = NSSize::new(width.map_or(f64::MAX, f64::from), f64::MAX);
+            text.boundingRectWithSize_options_context(bound, draw_options(), None).size
+        }
+    };
+    Size { width: size.width.ceil() as f32, height: size.height.ceil() as f32 }
 }
 
 fn draw_options() -> NSStringDrawingOptions {

@@ -185,18 +185,28 @@ pub(crate) fn attributed(
 }
 
 /// `text` laid out from the origin, wrapped at `width`, as `NSStringDrawing` draws it.
-struct Laid {
+pub(crate) struct Laid {
     _storage: Retained<NSTextStorage>,
-    layout: Retained<NSLayoutManager>,
-    container: Retained<NSTextContainer>,
+    pub layout: Retained<NSLayoutManager>,
+    pub container: Retained<NSTextContainer>,
 }
 
-fn lay_out(text: &NSAttributedString, width: f64) -> Option<Laid> {
+/// `clamp` cuts the text to that many lines, the last ending as the line break mode says (a
+/// truncating mode puts the ellipsis there).
+pub(crate) fn lay_out(
+    text: &NSAttributedString,
+    width: f64,
+    clamp: Option<(usize, objc2_app_kit::NSLineBreakMode)>,
+) -> Option<Laid> {
     let storage = NSTextStorage::new();
     storage.appendAttributedString(text);
     let layout = NSLayoutManager::new();
     let container = NSTextContainer::initWithSize(NSTextContainer::alloc(), NSSize::new(width.max(1.), 1e7));
     container.setLineFragmentPadding(0.);
+    if let Some((lines, mode)) = clamp {
+        container.setMaximumNumberOfLines(lines);
+        container.setLineBreakMode(mode);
+    }
     layout.addTextContainer(&container);
     storage.addLayoutManager(&layout);
     layout.ensureLayoutForTextContainer(&container);
@@ -206,7 +216,7 @@ fn lay_out(text: &NSAttributedString, width: f64) -> Option<Laid> {
 /// Where each link run of `runs` (drawn as `text`) sits, wrapped at `width`: one rect per run,
 /// bounding every line it spans.
 pub(crate) fn link_rects(runs: &[RunLook], text: &NSAttributedString, width: f64) -> Vec<NSRect> {
-    let Some(laid) = lay_out(text, width) else { return Vec::new() };
+    let Some(laid) = lay_out(text, width, None) else { return Vec::new() };
     let mut at = 0;
     let mut out = Vec::new();
     for run in runs {
@@ -225,7 +235,7 @@ pub(crate) fn link_rects(runs: &[RunLook], text: &NSAttributedString, width: f64
 /// The link under `point`, in the coordinates `text` is laid out in from the origin, wrapped
 /// at `width`.
 pub(crate) fn link_at(text: &NSAttributedString, width: f64, point: NSPoint) -> Option<String> {
-    let Laid { layout, container, .. } = lay_out(text, width)?;
+    let Laid { layout, container, .. } = lay_out(text, width, None)?;
     if !objc2_foundation::NSPointInRect(point, layout.usedRectForTextContainer(&container)) {
         return None;
     }

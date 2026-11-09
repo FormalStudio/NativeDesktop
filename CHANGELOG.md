@@ -5,6 +5,10 @@ and the one it moves to.
 
 ## Unreleased
 
+- AppKit text takes `truncate()` and `line_clamp(n)`: a truncated line ends in an ellipsis
+  (`text_ellipsis_start` and `text_ellipsis_middle` cut where they say), and clamped text keeps
+  its first `n` lines, the last ending in an ellipsis with `text_ellipsis()`, as on GPUI. Text
+  draws again when its size changes, so a label laid out narrow first no longer stays cut there.
 - On AppKit a click lands on what is drawn under the pointer: an element moved by `.offset` or
   scaled by `.scale` (a press dip, a layout glide, a hero) takes clicks where it is drawn, not
   where layout put it. A `tile_grid` places its tiles at their slots in layout and glides them

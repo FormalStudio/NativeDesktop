@@ -1,11 +1,11 @@
 //! What the AppKit views draw, resolved from `nd-ui` props. Layout fields of a style arrive as
 //! frames; only the visual part is read here.
 
-use nd_gpui::gpui::{Overflow, Visibility};
+use nd_gpui::gpui::{Overflow, TextOverflow, Visibility, WhiteSpace};
 use nd_ui::StyleRefinement;
 use nd_ui::prelude::{AbsoluteLength, FontWeight, Hsla, px};
 use objc2::rc::Retained;
-use objc2_app_kit::{NSColor, NSFontWeight};
+use objc2_app_kit::{NSColor, NSFontWeight, NSLineBreakMode};
 
 /// A colour as the views resolve it: system colours are looked up at draw time, under the
 /// view's effective appearance, so light/dark changes need no update.
@@ -182,6 +182,22 @@ pub(crate) struct TextLook {
     /// The runs of rich text, resolved under the node's theme; empty for plain text.
     pub runs: Vec<crate::rich::RunLook>,
     pub opens_links: bool,
+    /// The lines the text is cut to and how the last one ends: one for `whitespace_nowrap()`
+    /// (`truncate()`), or `line_clamp(n)`'s, with an ellipsis where `text_ellipsis()` asks.
+    pub clamp: Option<(usize, NSLineBreakMode)>,
+}
+
+/// What [`TextLook::clamp`] reads from a text style.
+fn clamp(style: &StyleRefinement) -> Option<(usize, NSLineBreakMode)> {
+    let cut = style.text.text_overflow.as_ref().map(|o| match o {
+        TextOverflow::Truncate(_) => NSLineBreakMode::ByTruncatingTail,
+        TextOverflow::TruncateStart(_) => NSLineBreakMode::ByTruncatingHead,
+        TextOverflow::TruncateMiddle(_) => NSLineBreakMode::ByTruncatingMiddle,
+    });
+    if style.text.white_space == Some(WhiteSpace::Nowrap) {
+        return Some((1, cut.unwrap_or(NSLineBreakMode::ByClipping)));
+    }
+    style.text.line_clamp.map(|lines| (lines.max(1), cut.unwrap_or(NSLineBreakMode::ByWordWrapping)))
 }
 
 impl TextLook {
@@ -198,6 +214,7 @@ impl TextLook {
             opacity: style.opacity.unwrap_or(1.),
             runs: Vec::new(),
             opens_links: props.opens_links,
+            clamp: clamp(style),
         };
         if let (Some(rich), Some(theme)) = (&props.rich, theme) {
             let size = look.size.unwrap_or(objc2_app_kit::NSFont::systemFontSize() as f32);
