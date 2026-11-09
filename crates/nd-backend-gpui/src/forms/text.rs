@@ -19,6 +19,7 @@ use nd_gpui::gpui::{
     InteractiveElement, IntoElement, KeyDownEvent, Keystroke, LayoutId, MouseButton, MouseDownEvent, MouseMoveEvent,
     ParentElement, Pixels, Point, ScrollEvent, ShapedLine, SharedString, StatefulInteractiveElement, Style, Styled,
     TextRun, UTF16Selection, UnderlineStyle, Window, anchored, deferred, div, fill, point, px, relative, size,
+    transparent_black,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -1037,6 +1038,8 @@ pub(crate) struct Field {
     pub placeholder: Option<SharedString>,
     pub options: Vec<SharedString>,
     pub completes: bool,
+    /// No fill, outline or focus ring (`TextArea::borderless`).
+    pub borderless: bool,
 }
 
 fn editor(
@@ -1091,6 +1094,9 @@ pub(crate) fn chrome(ctl: &Ctl, editor: &Rc<std::cell::RefCell<Editor>>, f: &Fie
         .line_height(look.line_height)
         .text_color(look.text);
     chrome = match look.field_underline {
+        // The border stays, clear, so the text sits where a bordered area's would.
+        Some(_) if f.borderless => chrome.border_1().border_color(transparent_black()),
+        None if f.borderless => chrome.border_2().border_color(transparent_black()),
         // WinUI's TextBox: a 1 px elevation border whose bottom edge is the strong stroke, and
         // focused, a 2 px accent underline over the input-active fill, with no focus ring.
         Some(underline) => {
@@ -1258,6 +1264,7 @@ pub(crate) fn text_field(
         placeholder: p.placeholder.clone(),
         options: Vec::new(),
         completes: false,
+        borderless: false,
     };
     let (ctl, editor) = editor(b, id, &f, || Commit::Text, window, cx);
     {
@@ -1337,6 +1344,7 @@ pub(crate) fn text_area(
         placeholder: p.placeholder.clone(),
         options: Vec::new(),
         completes: false,
+        borderless: p.borderless,
     };
     let (ctl, editor) = editor(b, id, &f, || Commit::Text, window, cx);
     let mut look = ctl.look;
@@ -1385,7 +1393,7 @@ pub(crate) fn text_area(
         .min_w(look.field_min_width)
         .py(padding_y)
         .h(text_height + padding_y * 2. + if look.field_underline.is_some() { px(2.) } else { px(4.) });
-    if rounded && !ctl.focused {
+    if rounded && !ctl.focused && !p.borderless {
         area = area.border_color(look.border);
     }
     if p.enabled {
@@ -1557,6 +1565,7 @@ pub(crate) fn combo_box(
         placeholder: p.placeholder.clone(),
         options: p.options.clone(),
         completes: p.completes,
+        borderless: false,
     };
     let (ctl, editor) = editor(b, id, &f, || Commit::Text, window, cx);
     let look = ctl.look;
@@ -1799,6 +1808,7 @@ pub(crate) fn value_field(
         placeholder: None,
         options: Vec::new(),
         completes: false,
+        borderless: false,
     };
     let (ctl, editor) = editor(b, id, &f, || Commit::Parse(Rc::new(parse)), window, cx);
     let field = line(&ctl, &editor, &f);

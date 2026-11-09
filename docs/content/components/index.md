@@ -57,7 +57,8 @@ The Gallery shows one page per component. Select a component in its source list,
   `.select_on_focus(0..stem_chars)`, focus it with `window.focus_id(cx, "rename")`, commit in
   `.on_end_editing` (Return, or focus leaving the field) and drop the field in `.on_cancel`
   (Escape, which ends the edit without `TextEditingEnded`). A press in the field stays the
-  field's: the list under it doesn't select, activate, or take the keys.
+  field's: the list under it doesn't select, activate, or take the keys. A `text_area` that is
+  the whole page (a notes editor) takes `.borderless()`: no bezel, focus ring or fill.
 - `switch`, `checkbox`, `radio_group`, `segmented`, `select`, `slider`, `stepper`: the AppKit
   control of the same name. `select` can map to a pop-up, a segmented control, or a radio group.
   `segmented(..).icons([..])` shows an icon per segment, and each option's title becomes that

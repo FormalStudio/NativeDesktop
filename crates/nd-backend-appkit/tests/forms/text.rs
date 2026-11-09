@@ -5,8 +5,8 @@ use nd_backend_appkit::objc2::rc::Retained;
 use nd_backend_appkit::objc2::runtime::{AnyClass, AnyObject};
 use nd_backend_appkit::objc2::{msg_send, sel};
 use nd_backend_appkit::objc2_app_kit::{
-    NSAccessibility, NSBorderType, NSButton, NSComboBox, NSControlSize, NSFocusRingType, NSScrollView, NSSearchField,
-    NSSecureTextField, NSText, NSTextField, NSTextFieldBezelStyle, NSTextView, NSView,
+    NSAccessibility, NSBorderType, NSButton, NSComboBox, NSControlSize, NSFocusRingType, NSFont, NSScrollView,
+    NSSearchField, NSSecureTextField, NSText, NSTextField, NSTextFieldBezelStyle, NSTextView, NSView,
 };
 use nd_backend_appkit::objc2_foundation::{NSRange, NSSize, NSString};
 use nd_components::Icon;
@@ -92,6 +92,7 @@ impl Render for Texts {
                     cx.notify();
                 }),
             ))
+            .child(text_area("page").borderless().text_size(px(19.)).min_lines(2))
             .child(
                 combo_box("fruit", ["Apple", "Banana", "Cherry"])
                     .text(self.fruit.clone())
@@ -176,6 +177,24 @@ pub fn run(rig: &Rig, c: &mut Checks) {
         "text_area draws a rounded text field bezel",
     );
     c.check(scroll.focusRingType() == NSFocusRingType::Exterior, "text_area's focus ring goes round its bezel");
+    let notes_size = notes.font().map_or(0., |f| f.pointSize());
+    c.check(notes_size == NSFont::systemFontSize(), &format!("text_area starts at the system size ({notes_size})"));
+
+    // Borderless: no bezel, border, fill or focus ring; the app's text size reaches the font.
+    let page_scroll = rig.view(id, "page").downcast::<NSScrollView>().expect("borderless text_area is a scroll view");
+    let page = page_scroll.documentView().and_then(|v| v.downcast::<NSTextView>().ok()).expect("text view");
+    c.check(
+        page_scroll.borderType() == NSBorderType::NoBorder
+            && !page_scroll.subviews().iter().any(|v| v.downcast::<NSTextField>().is_ok()),
+        "borderless text_area has no bezel or border",
+    );
+    c.check(
+        !page_scroll.drawsBackground() && !page_scroll.contentView().drawsBackground() && !page.drawsBackground(),
+        "borderless text_area draws no fill",
+    );
+    c.check(page_scroll.focusRingType() == NSFocusRingType::None, "borderless text_area has no focus ring");
+    let page_size = page.font().map_or(0., |f| f.pointSize());
+    c.check(page_size == 19., &format!(".text_size() reaches the text area's font ({page_size})"));
 
     // Props.
     c.check(name.placeholderString().is_some_and(|p| p.to_string() == "Name"), "placeholder reaches NSTextField");

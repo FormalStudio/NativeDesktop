@@ -186,6 +186,8 @@ pub struct TextAreaProps {
     pub styles: Option<Styler>,
     /// The widest the text runs, in points: wider, the text is centred with the rest as margin.
     pub max_measure: Option<f32>,
+    /// No bezel, outline, focus ring or fill: the text sits on whatever is behind the area.
+    pub borderless: bool,
     pub label: Option<SharedString>,
     pub enabled: bool,
     pub tooltip: Option<SharedString>,
@@ -408,6 +410,7 @@ pub fn text_area(id: impl Into<SharedString>) -> TextArea {
         trailing_room: 0.,
         styles: None,
         max_measure: None,
+        borderless: false,
         label: None,
         enabled: true,
         tooltip: None,
@@ -625,6 +628,14 @@ impl TextArea {
     /// margin: a document column that stays readable in a wide window.
     pub fn max_measure(mut self, points: f32) -> Self {
         self.element.props_mut().max_measure = Some(points.max(1.));
+        self
+    }
+
+    /// Drops the field chrome (bezel, outline, focus ring and fill) for an area that is the
+    /// page itself, a document editor filling its window. The text keeps its place and sits on
+    /// whatever is behind the area.
+    pub fn borderless(mut self) -> Self {
+        self.element.props_mut().borderless = true;
         self
     }
 

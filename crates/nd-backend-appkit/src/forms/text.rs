@@ -1282,7 +1282,7 @@ impl TextAreaControl {
             self.scroll.tile_now();
         }
         tv.ivars().media.set(new.accepts_media);
-        if old.is_none_or(|o| o.style.corner_radii != new.style.corner_radii) {
+        if old.is_none_or(|o| o.style.corner_radii != new.style.corner_radii || o.borderless != new.borderless) {
             self.apply_shape(new);
         }
         if old.is_none_or(|o| o.max_measure != new.max_measure) {
@@ -1334,11 +1334,22 @@ impl TextAreaControl {
     /// single-line fields beside it, and the system focus ring follows that bezel. A style with
     /// rounded corners draws it as a capsule instead: a hairline in the system separator colour,
     /// the text kept clear of the curve. A zero radius asks for the square scroll view bezel.
+    /// A borderless area draws none of these and no fill, its text where the bezel's would be.
     fn apply_shape(&self, props: &TextAreaProps) {
         let radius = props.style.corner_radii.top_left.map(crate::look::length);
         let mtm = self.core.cx.mtm;
         self.scroll.set_capsule(None);
         self.scroll.setDrawsBackground(true);
+        if props.borderless {
+            self.scroll.set_bezel(None);
+            self.scroll.setBorderType(NSBorderType::NoBorder);
+            self.scroll.setDrawsBackground(false);
+            self.scroll.contentView().setDrawsBackground(false);
+            self.text_view.setDrawsBackground(false);
+            self.scroll.setFocusRingType(NSFocusRingType::None);
+            self.scroll.set_inset(NSSize::new(BEZEL_INSET.0, BEZEL_INSET.1));
+            return;
+        }
         let Some(radius) = radius else {
             self.scroll.setBorderType(NSBorderType::NoBorder);
             let bezel = inert_bezel(mtm);

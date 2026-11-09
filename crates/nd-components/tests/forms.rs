@@ -179,7 +179,7 @@ fn styled_view(s: &Text, cx: &mut Context<Host<Text>>) -> AnyElement {
                 cx.notify();
             }),
         ))
-        .child(markdown_editor("md", &cx.new(|_| TextFieldState::default().with_text("# Title"))))
+        .child(markdown_editor("md", &cx.new(|_| TextFieldState::default().with_text("# Title"))).borderless())
         .into_any_element()
 }
 
@@ -188,6 +188,7 @@ fn text_area_carries_its_styler_and_measure() {
     let mut rig = Rig::new(Text::default(), styled_view);
     let props = rig.props::<TextAreaProps>("doc");
     assert_eq!(props.max_measure, Some(640.));
+    assert!(!props.borderless, "an area wears the field chrome unless asked");
     let styler = props.styles.unwrap_or_else(|| panic!("the area has a styler"));
     let styled = styler.style("hello", 3);
     assert_eq!((styled.runs.len(), styled.state), (1, 3));
@@ -209,6 +210,9 @@ fn markdown_editor_is_a_bound_styled_area_in_a_column() {
     let props = rig.props::<TextAreaProps>("md");
     assert_eq!(props.text.as_ref(), "# Title");
     assert_eq!(props.max_measure, Some(nd_components::markdown::MEASURE));
+    assert!(props.borderless, "a markdown editor takes the borderless style");
+    let body = props.style.text.font_size.unwrap_or_else(|| panic!("the editor sets its text size"));
+    assert_eq!(body, px(nd_components::markdown::BODY_SIZE).into());
     let styler = props.styles.unwrap_or_else(|| panic!("markdown styles"));
     let heading = styler.style("# Title", 0);
     assert!(heading.runs.iter().any(|(_, s)| s.bold && s.scale == Some(1.75)));

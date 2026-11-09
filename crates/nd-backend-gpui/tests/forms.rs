@@ -456,6 +456,38 @@ fn open_narrow() -> Rig {
     Rig { cx, host, window: window.expect("window"), log: Rc::default(), view: Rc::default() }
 }
 
+/// A bordered area beside a borderless one, as a document editor fills its window.
+struct Pages;
+
+impl Render for Pages {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        h_flex()
+            .size_full()
+            .p(px(16.))
+            .gap(px(16.))
+            .child(text_area("boxed").min_lines(4).w(px(160.)))
+            .child(text_area("bare").borderless().min_lines(4).w(px(160.)))
+    }
+}
+
+const PAGES: (f32, f32) = (400., 160.);
+
+fn open_pages() -> Rig {
+    let mut cx = headless();
+    let mut window = None;
+    let host = cx.update(|cx| {
+        GpuiHost::builder().quit_when_empty(false).start(cx, |app| {
+            let options = WindowOptions::main("pages").size(size(px(PAGES.0), px(PAGES.1)));
+            window = Some(app.open_window(options, |_, cx| cx.new(|_| Pages)).id());
+        })
+    });
+    let mut registry = ThemeRegistry::new(Preset::current());
+    registry.set_os(OsTheme { scheme: Some(Scheme::Light), ..registry.os().clone() });
+    host.backend().set_theme(registry);
+    settle(&mut cx, &host);
+    Rig { cx, host, window: window.expect("window"), log: Rc::default(), view: Rc::default() }
+}
+
 /// Settling again produces nothing: the value the app fed back is no new report.
 fn quiet(rig: &mut Rig) {
     rig.settle();
@@ -726,6 +758,34 @@ mod forms {
         assert!(zoom.size.width > 0. && zoom.origin.x > NARROW / 2., "the stepper sits on the row's trailing side");
     }
 
+    /// Focused, a borderless area still draws nothing of its own on its edge or inside it: no
+    /// fill, outline or focus ring. Focused, the bordered one beside it draws its ring.
+    pub fn borderless_area_draws_no_chrome() {
+        if nd_gpui::gpui_platform::current_headless_renderer().ok().flatten().is_none() {
+            println!("skipped: GPUI has no headless renderer on this OS");
+            return;
+        }
+        let mut rig = open_pages();
+        // The window's own background, and the pixels on an area's left edge and inside it.
+        let probe = |rig: &Rig, id: &str| {
+            let capture = rig.host.job(|app| app.capture(rig.window)).expect("capture");
+            let image = image::load_from_memory(&capture.png).expect("png").to_rgba8();
+            let scale = image.width() as f32 / PAGES.0;
+            let b = rig.node(id).bounds.unwrap_or_else(|| panic!("{id} laid out"));
+            let at = |x: f32, y: f32| image.get_pixel((x * scale) as u32, (y * scale) as u32).0;
+            let mid = b.origin.y + b.size.height / 2.;
+            (at(4., 4.), at(b.origin.x + 1., mid), at(b.origin.x + b.size.width - 6., b.origin.y + b.size.height - 6.))
+        };
+        let near = |a: [u8; 4], b: [u8; 4]| a.iter().zip(b).all(|(x, y)| (i16::from(*x) - i16::from(y)).abs() <= 8);
+        rig.perform("bare", SemanticAction::Focus).expect("focus");
+        let (window, edge, inside) = probe(&rig, "bare");
+        assert!(near(window, edge), "the borderless area's edge is the window's {window:?}, not {edge:?}");
+        assert!(near(window, inside), "the borderless area has no fill: {inside:?} over {window:?}");
+        rig.perform("boxed", SemanticAction::Focus).expect("focus");
+        let (window, edge, _) = probe(&rig, "boxed");
+        assert!(!near(window, edge), "the bordered area draws its focus ring ({edge:?})");
+    }
+
     pub fn goldens() {
         // GPUI renders headless only on macOS (Metal) and Linux (wgpu); Windows captures arrive
         // with the Fluent goldens (M3).
@@ -833,6 +893,7 @@ fn main() {
         ("forms::disabled_controls_refuse", forms::disabled_controls_refuse),
         ("forms::animated_progress_keeps_drawing", forms::animated_progress_keeps_drawing),
         ("forms::form_help_wraps_and_the_control_stays_inside", forms::form_help_wraps_and_the_control_stays_inside),
+        ("forms::borderless_area_draws_no_chrome", forms::borderless_area_draws_no_chrome),
         ("forms::goldens", forms::goldens),
     ];
     harness(&args, &tests);

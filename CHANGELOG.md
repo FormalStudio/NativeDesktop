@@ -5,6 +5,11 @@ and the one it moves to.
 
 ## Unreleased
 
+- `text_area(..).borderless()` (and `markdown_editor(..).borderless()`) drops the field chrome
+  for an area that is the page, a document editor filling its window: no bezel, outline, focus
+  ring or fill, with the text where a bordered area puts it. On AppKit the scroll, clip and text
+  views draw no background; the drawn area keeps a clear border of the look's width.
+  `TextAreaProps` gained `borderless`.
 - `Div::exit_to(|p| ..)`: an element that drops out of its parent's output stays drawn where it
   stood, out of the layout flow, inert and out of the accessibility tree, while it animates to the
   pose, then goes. The same key back before then turns it around from where it is. Reduce motion

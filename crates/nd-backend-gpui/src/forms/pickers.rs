@@ -453,6 +453,7 @@ pub(crate) fn color_well(
             placeholder: None,
             options: Vec::new(),
             completes: false,
+            borderless: false,
         };
         let editor = well.borrow().hex.clone();
         prepare(&part, &editor, &f, cx);

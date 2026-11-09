@@ -71,6 +71,13 @@ key to the area.
 either side as margin. A document stays readable in a wide window without the app laying out
 its own column.
 
+## Borderless
+
+`.borderless()` drops the field chrome: no bezel, outline, focus ring or fill, so the text sits
+on the window behind it. Use it for an area that is the page, a document editor filling its
+window, rather than a field in a form. The text keeps the inset it has inside the bezel, and
+`markdown_editor(..)` takes it too: `markdown_editor("doc", &state).borderless()`.
+
 ## How the backends set it
 
 On macOS the text view's storage delegate keeps a paragraph cache in step with every character
