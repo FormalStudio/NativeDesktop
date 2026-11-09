@@ -163,7 +163,13 @@ impl PaneNative {
         let controller = NSViewController::new(mtm);
         controller.setView(&host);
         let item = match props.role {
-            PaneRole::Sidebar => Some(NSSplitViewItem::sidebarWithViewController(&controller)),
+            PaneRole::Sidebar => {
+                let item = NSSplitViewItem::sidebarWithViewController(&controller);
+                // A live resize past the sidebar and the content's minimum may collapse the
+                // sidebar instead of stopping the window.
+                item.setCanCollapseFromWindowResize(true);
+                Some(item)
+            }
             PaneRole::Inspector => Some(NSSplitViewItem::inspectorWithViewController(&controller)),
             PaneRole::Content => Some(NSSplitViewItem::splitViewItemWithViewController(&controller)),
             PaneRole::Overlay => None,

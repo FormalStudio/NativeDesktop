@@ -102,6 +102,7 @@ pub struct Scaffold {
     toolbar_extension: f32,
     content_edge_on_hover: bool,
     content_bottom_bar: f32,
+    content_min_width: f32,
 }
 
 #[track_caller]
@@ -118,6 +119,7 @@ pub fn scaffold() -> Scaffold {
         toolbar_extension: 0.,
         content_edge_on_hover: false,
         content_bottom_bar: 0.,
+        content_min_width: 0.,
     }
 }
 
@@ -153,6 +155,13 @@ impl Scaffold {
     /// under it and rest clear of it. Zero where the bar docks below the content instead.
     pub fn content_bottom_bar(mut self, points: f32) -> Self {
         self.content_bottom_bar = points;
+        self
+    }
+
+    /// The content keeps at least `points` of width beside the sidebar: on macOS the window
+    /// stops narrowing there while the sidebar shows, and widens to make room when it opens.
+    pub fn content_min_width(mut self, points: f32) -> Self {
+        self.content_min_width = points;
         self
     }
 
@@ -204,13 +213,14 @@ impl IntoElement for Scaffold {
         let extension = self.toolbar_extension;
         let edge_on_hover = self.content_edge_on_hover;
         let bottom_bar = self.content_bottom_bar;
+        let min_width = self.content_min_width;
         let content = self.content.map(|c| {
             let mut pane = pane_with(Key::Id("nd-content".into()), PaneRole::Content);
             pane.0.props_mut().under_toolbar = under;
             pane.0.props_mut().toolbar_extension = extension;
             pane.0.props_mut().edge_on_hover = edge_on_hover;
             pane.0.props_mut().bottom_bar = bottom_bar;
-            pane.flex_1().min_w_0().h_full().child(c)
+            pane.flex_1().min_w(px(min_width)).h_full().child(c)
         });
         let overlay = self.overlay.map(|o| {
             pane_with(Key::Id("nd-overlay".into()), PaneRole::Overlay).absolute().top_0().left_0().size_full().child(o)

@@ -17,6 +17,10 @@ and the one it moves to.
   draws the marks and blocks behind the text; GPUI shapes the shown text and maps hit testing,
   carets and selections back. Markdown takes quiet.md's metrics: 16pt body on a 1.625 leading,
   headings from 1.625em down, and code at 0.8125em.
+- `scaffold().content_min_width(points)` keeps the content at least that wide beside the
+  sidebar: on macOS the window stops narrowing there while the sidebar shows, and opening the
+  sidebar in a narrow window widens it.
+
 - `BoxShadow` is in the prelude, so an app can pass shadows of its own to `.shadow(vec![..])`
   instead of only the `shadow_sm()` to `shadow_2xl()` presets.
 - `nd::test` exports `DivProps`, so an app's tier 1 test can read a div's look from the
