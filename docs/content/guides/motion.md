@@ -73,10 +73,6 @@ v_flex().children(notes.iter().map(|note| {
 }))
 ```
 
-AppKit knows each frame as it lays out, so the glide starts in the frame that moves the element.
-GPUI lays out as it paints: the element shows at its new place for one frame before it glides
-from the old one.
-
 `tile_grid` uses all three: tiles move to new slots on `.reflow(animation)` (the platform spring
 by default), new tiles fade and grow in, removed ones fade and shrink where they stood, and the
 grid's height follows. The first width it learns places the tiles at once.

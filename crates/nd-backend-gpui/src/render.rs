@@ -32,16 +32,53 @@ use crate::backend::{GpuiBackend, Node, Wake, is_button};
 use crate::forms::glyph::Glyph;
 use crate::os::{ChromeContext, OsHooks};
 
-/// Records the bounds GPUI laid an element out at.
+/// Records the bounds GPUI laid an element out at, and its frame in its parent's.
 pub(crate) struct Tracked {
     node: NodeId,
     inner: AnyElement,
     bounds: Rc<RefCell<HashMap<NodeId, Rect>>>,
+    laid: Rc<RefCell<Layouts>>,
+    /// The nd parent, whose element GPUI prepaints first; `None` for content placed apart from
+    /// it (an overlay).
+    parent: Option<NodeId>,
+    /// Glides when layout moves it (`DivProps::glides`).
+    glides: bool,
+}
+
+/// Where GPUI laid each node out, before the offsets, scales and scrolling that move what is
+/// drawn.
+#[derive(Default)]
+pub(crate) struct Layouts {
+    nodes: HashMap<NodeId, Laid>,
+    /// A gliding node moved and was drawn where it was. nd has to run a frame before the next
+    /// paint to start its glide, or that paint would draw it at its new place.
+    pub moved: bool,
+}
+
+#[derive(Clone, Copy)]
+struct Laid {
+    /// In the window.
+    origin: gpui::Point<Pixels>,
+    /// Relative to its parent's.
+    frame: Rect,
+    glides: bool,
+}
+
+impl Layouts {
+    /// `Backend::layout_frame`.
+    pub(crate) fn frame(&self, node: NodeId) -> Option<Rect> {
+        self.nodes.get(&node).map(|l| l.frame)
+    }
+
+    pub(crate) fn forget(&mut self, node: NodeId) {
+        self.nodes.remove(&node);
+    }
 }
 
 impl Tracked {
-    pub(crate) fn new(node: NodeId, inner: AnyElement, bounds: Rc<RefCell<HashMap<NodeId, Rect>>>) -> Self {
-        Self { node, inner, bounds }
+    /// Content drawn apart from its parent, which never glides.
+    pub(crate) fn new(node: NodeId, inner: AnyElement, backend: &GpuiBackend) -> Self {
+        Self { node, inner, bounds: backend.bounds.clone(), laid: backend.laid.clone(), parent: None, glides: false }
     }
 }
 
@@ -91,7 +128,29 @@ impl gpui::Element for Tracked {
             bounds.size.height.as_f32(),
         );
         self.bounds.borrow_mut().insert(self.node, rect);
-        self.inner.prepaint(window, cx);
+        let origin = bounds.origin - window.pixel_snap_point(window.element_offset());
+        let mut laid = self.laid.borrow_mut();
+        let parent = self.parent.and_then(|p| laid.nodes.get(&p)).map_or(gpui::Point::default(), |p| p.origin);
+        let (x, y) = ((origin.x - parent.x).as_f32(), (origin.y - parent.y).as_f32());
+        let frame = Rect::new(x, y, rect.size.width, rect.size.height);
+        let laid_now = Laid { origin, frame, glides: self.glides };
+        let before = laid.nodes.insert(self.node, laid_now).filter(|l| l.glides).map(|l| l.frame.origin);
+        // nd learns of the move only after this paint and starts the glide from where the node
+        // was, so this frame already draws it there. As in nd, a node glides only once it was
+        // laid out gliding.
+        let back = before
+            .filter(|_| self.glides)
+            .map(|b| gpui::point(px(b.x - x), px(b.y - y)))
+            .filter(|b| b.x.as_f32().abs() >= 0.01 || b.y.as_f32().abs() >= 0.01);
+        if back.is_some() {
+            laid.moved = true;
+            window.request_animation_frame();
+        }
+        drop(laid);
+        match back {
+            Some(back) => window.with_element_offset(back, |window| self.inner.prepaint(window, cx)),
+            None => self.inner.prepaint(window, cx),
+        };
     }
 
     fn paint(
@@ -549,7 +608,16 @@ impl<'a> Build<'a> {
     pub fn node(&self, id: NodeId, window: &mut gpui::Window, cx: &mut App) -> AnyElement {
         let node = &self.nodes[&id];
         let element = self.scoped(node, || self.element(id, node, window, cx));
-        let tracked = Tracked { node: id, inner: element, bounds: self.backend.bounds.clone() }.into_any_element();
+        let glides = !self.ghost && node.props.downcast_ref::<DivProps>().is_some_and(|d| d.glides);
+        let tracked = Tracked {
+            node: id,
+            inner: element,
+            bounds: self.backend.bounds.clone(),
+            laid: self.backend.laid.clone(),
+            parent: node.parent,
+            glides,
+        }
+        .into_any_element();
         if crate::window_tabs::is_title_row(node)
             && let Some(b) = self.backend.bounds.borrow().get(&id)
         {

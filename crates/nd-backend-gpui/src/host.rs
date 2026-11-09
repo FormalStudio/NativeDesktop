@@ -1092,7 +1092,8 @@ impl Inner {
                 }
                 let time = self.tick(id, started, window, cx);
                 frame_time = Some(time.target);
-                if app.needs_frame() {
+                let moved = std::mem::take(&mut self.backend.laid.borrow_mut().moved);
+                if app.needs_frame() || moved {
                     app.tick_window(id, time);
                     app.frame();
                     record_frame(&app, id, time, started.elapsed().as_secs_f64() * 1000.);

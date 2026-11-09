@@ -270,7 +270,7 @@ pub(crate) struct Tree {
     retired: HashSet<NodeId>,
     /// Retired nodes and everything in them: no handler hears them.
     inert: HashSet<NodeId>,
-    /// Where a backend that lays out as it paints last painted each node with a layout
+    /// Where a backend that lays out as it paints last laid out each node with a layout
     /// animation, within its parent.
     painted_at: HashMap<NodeId, (f32, f32)>,
     /// That backend painted a transaction since: the next frame reads the painted frames.
@@ -534,6 +534,10 @@ impl Tree {
         };
         spec.animation = tokens.resolve(spec.animation, reduce);
         let hero = div.hero.clone();
+        // Layout jumps under reduce motion, so the backend must not hold the node back either.
+        if reduce && div.glides {
+            el.props = Rc::new(DivProps { glides: false, ..div.clone() });
+        }
         let away = hero.as_ref().is_some_and(|h| h.away);
         if !away {
             self.hero_away.remove(&id);
@@ -780,24 +784,11 @@ impl Tree {
     }
 
     /// The box node `n` is held at while it exits, in its parent's padding box: its last
-    /// frame. `None` when that is not known (not painted yet, or inside a scroll view on a
-    /// backend that lays out as it paints).
+    /// frame. `None` when that is not known (not laid out yet).
     fn held_frame(&self, n: NodeId, backend: &dyn Backend) -> Option<Rect> {
         let node = self.nodes.get(&n)?;
-        let parent_id = node.parent?;
-        let parent = self.nodes.get(&parent_id)?;
-        let at = if backend.retains_frames() {
-            node.frame?
-        } else {
-            let div = parent.props.downcast_ref::<DivProps>();
-            if div.is_some_and(|d| d.gestures.scroll.any()) {
-                return None;
-            }
-            let (b, pb) = (backend.probe(n).bounds?, backend.probe(parent_id).bounds?);
-            // Painted bounds carry the offsets of the nodes above, the parent's own included.
-            let (ox, oy) = div.map_or((0., 0.), |d| d.transform.offset);
-            Rect::new(b.origin.x - pb.origin.x - ox, b.origin.y - pb.origin.y - oy, b.size.width, b.size.height)
-        };
+        let parent = self.nodes.get(&node.parent?)?;
+        let at = if backend.retains_frames() { node.frame? } else { backend.layout_frame(n)? };
         let (bx, by) = border_of(&parent.layout);
         Some(Rect::new(at.origin.x - bx, at.origin.y - by, at.size.width, at.size.height))
     }
@@ -881,7 +872,7 @@ impl Tree {
 
     /// On a backend that lays out as it paints (GPUI) frames are known only once painted: a
     /// node with a layout animation that the last paint put somewhere else within its parent
-    /// starts from where the paint before had it. That paint showed it at its new place.
+    /// starts from where the paint before had it. That paint drew it there too (`glides`).
     pub(crate) fn follow_painted_layout(&mut self, backend: &dyn Backend, now: f64, reduce: bool) {
         self.layout_check = false;
         if backend.retains_frames() {

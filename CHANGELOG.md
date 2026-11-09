@@ -5,6 +5,11 @@ and the one it moves to.
 
 ## Unreleased
 
+- On the GPUI backend `animate_layout` starts its glide in the frame that moves the element, from
+  where it was (it showed at its new place for one frame first), and `exit_to` and
+  `animate_layout` work inside a scroll view, where the element vanished or jumped.
+  `Backend::layout_frame(node)` lets a backend that lays out itself report a node's frame within
+  its parent, and `DivProps` gained `glides`.
 - On the GPUI backend an element leaving with `exit_to` takes no pointer input: nothing in it is
   hit, hovered or shows a cursor or tooltip while it animates out.
 - `text_area(..).borderless()` (and `markdown_editor(..).borderless()`) drops the field chrome

@@ -720,6 +720,120 @@ mod motion {
         let leaving = pixel(&host, window, centre);
         assert!(leaving[2] > 200 && leaving[0] < 100, "the leaving row is drawn unlit: {leaving:?}");
     }
+
+    const SLOW: Duration = Duration::from_secs(20);
+
+    /// A box that glides when a row is put above it.
+    struct Glide {
+        top: bool,
+    }
+
+    impl Render for Glide {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            v_flex().size_full().when(self.top, |d| d.child(div().id("top").h(px(30.)).flex_none())).child(
+                div()
+                    .id("moving")
+                    .h(px(20.))
+                    .flex_none()
+                    .animate_layout(Animation::linear(SLOW))
+                    .child(div().id("inside").size_full().bg(rgb(0x3366ff))),
+            )
+        }
+    }
+
+    fn open<V: Render>(view: impl FnOnce() -> V + 'static) -> (HeadlessAppContext, GpuiHost, WindowId, Entity<V>) {
+        let mut cx = headless();
+        let mut opened = None;
+        let host = cx.update(|cx| {
+            GpuiHost::builder().quit_when_empty(false).start(cx, |app| {
+                let options = WindowOptions::main("motion").size(size(px(320.), px(240.)));
+                let handle = app.open_window(options, |_, cx| cx.new(|_| view()));
+                opened = Some((handle.id(), handle.root().clone()));
+            })
+        });
+        let (window, view) = opened.expect("window");
+        settle(&mut cx, &host);
+        (cx, host, window, view)
+    }
+
+    /// GPUI lays out as it paints, so nd hears of a move only after the paint that made it; that
+    /// paint already draws the element where it was, and the glide starts from there.
+    pub fn a_layout_glide_starts_from_the_old_place_in_its_first_frame() {
+        let (mut cx, host, window, view) = open(|| Glide { top: false });
+        let inside = by_test_id(&host, window, "inside");
+        let was = inside.bounds.expect("bounds").origin.y;
+        cx.update(|cx| {
+            host.update(cx, |app| {
+                view.update(app, |g, cx| {
+                    g.top = true;
+                    cx.notify();
+                })
+            })
+        });
+        cx.run_until_parked();
+        cx.update(|cx| {
+            host.pump(cx);
+            host.draw(cx);
+        });
+        let first = host.backend().bounds(inside.id).expect("drawn").origin.y;
+        assert!((first - was).abs() < 0.01, "the first frame draws it where it was: {was} then {first}");
+        settle(&mut cx, &host);
+        let moving = by_test_id(&host, window, "moving").bounds.expect("bounds").origin.y;
+        assert!((moving - (was + 30.)).abs() < 0.01, "laid out at its new place: {moving}");
+        let gliding = host.backend().bounds(inside.id).expect("drawn").origin.y;
+        assert!(gliding < was + 1., "and glides from the old one: {gliding}");
+    }
+
+    /// Rows in a scroll view that glide and leave slowly.
+    struct Scrolled {
+        rows: Vec<usize>,
+    }
+
+    impl Render for Scrolled {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            v_flex().id("list").h(px(120.)).overflow_y_scroll().children(self.rows.iter().map(|&i| {
+                div()
+                    .id(SharedString::from(format!("row-{i}")))
+                    .h(px(30.))
+                    .flex_none()
+                    .animate(Animation::linear(SLOW))
+                    .animate_layout(Animation::linear(SLOW))
+                    .exit_to(|p| p.opacity(0.))
+                    .child(div().id(SharedString::from(format!("inside-{i}"))).size_full())
+            }))
+        }
+    }
+
+    /// Inside a scrolled parent a leaving row stays where it stood and the row below glides up
+    /// from its old place, the scroll offset taken out of both.
+    pub fn an_exit_and_a_glide_inside_a_scrolled_parent() {
+        let (mut cx, host, window, view) = open(|| Scrolled { rows: (0..10).collect() });
+        let row6 = by_test_id(&host, window, "row-6");
+        cx.update(|cx| host.update(cx, |app| app.perform(row6.id, &SemanticAction::ScrollIntoView))).expect("scrolled");
+        settle(&mut cx, &host);
+        let list = by_test_id(&host, window, "list").bounds.expect("list").origin.y;
+        let row0 = by_test_id(&host, window, "row-0").bounds.expect("row 0").origin.y;
+        assert!(row0 < list - 1., "the list is scrolled: row 0 at {row0}, list at {list}");
+        let leaving = by_test_id(&host, window, "inside-5");
+        let below = by_test_id(&host, window, "inside-6");
+        let (stood, was) = (leaving.bounds.expect("row 5"), below.bounds.expect("row 6").origin.y);
+
+        cx.update(|cx| {
+            host.update(cx, |app| {
+                view.update(app, |s, cx| {
+                    s.rows.retain(|i| *i != 5);
+                    cx.notify();
+                })
+            })
+        });
+        settle(&mut cx, &host);
+        assert!(host.backend().is_live(leaving.id), "row 5 is leaving, not gone");
+        assert_eq!(host.backend().bounds(leaving.id), Some(stood), "drawn where it stood");
+        let laid = by_test_id(&host, window, "row-6").bounds.expect("row 6").origin.y;
+        assert!((laid - (was - 30.)).abs() < 0.01, "row 6 is laid out in row 5's place: {laid}");
+        let drawn = host.backend().bounds(below.id).expect("drawn").origin.y;
+        assert!(drawn > was - 1., "and glides up from its old place: {was} then {drawn}");
+    }
 }
 
 fn main() {
@@ -756,6 +870,11 @@ fn main() {
             gate_m4::a_wheel_with_the_secondary_key_zooms_instead_of_scrolling,
         ),
         ("motion::a_leaving_element_takes_no_pointer", motion::a_leaving_element_takes_no_pointer),
+        (
+            "motion::a_layout_glide_starts_from_the_old_place_in_its_first_frame",
+            motion::a_layout_glide_starts_from_the_old_place_in_its_first_frame,
+        ),
+        ("motion::an_exit_and_a_glide_inside_a_scrolled_parent", motion::an_exit_and_a_glide_inside_a_scrolled_parent),
     ];
     harness(&args, &tests);
 }

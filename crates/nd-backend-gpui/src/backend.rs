@@ -105,6 +105,8 @@ pub struct GpuiBackend {
     /// Each node's bounds in window coordinates as of the last paint, written by the elements
     /// while GPUI prepaints; kept apart from `state` so a paint never contends with a seam op.
     pub(crate) bounds: Rc<RefCell<HashMap<NodeId, Rect>>>,
+    /// Where GPUI last laid each node out, written beside `bounds`.
+    pub(crate) laid: Rc<RefCell<crate::render::Layouts>>,
     /// What a drawn forms control keeps between frames (a text field's caret and selection, a
     /// slider mid-drag), by node; dropped when the node is released.
     pub(crate) form_drawn: Rc<RefCell<HashMap<NodeId, crate::forms::Drawn>>>,
@@ -203,6 +205,7 @@ impl GpuiBackend {
                 quit: false,
             })),
             bounds: Rc::default(),
+            laid: Rc::default(),
             form_drawn: Rc::default(),
             reported_sizes: Rc::default(),
             focus_requests: Rc::default(),
@@ -697,6 +700,7 @@ impl Backend for GpuiBackend {
         }
         drop(state);
         self.bounds.borrow_mut().remove(&node);
+        self.laid.borrow_mut().forget(node);
         self.fades.forget(node);
         self.surface_counts.borrow_mut().remove(&node);
         self.drawn.borrow_mut().remove(&node);
@@ -724,6 +728,10 @@ impl Backend for GpuiBackend {
 
     fn retains_frames(&self) -> bool {
         false
+    }
+
+    fn layout_frame(&self, node: NodeId) -> Option<Rect> {
+        self.laid.borrow().frame(node)
     }
 
     fn drop_slot(

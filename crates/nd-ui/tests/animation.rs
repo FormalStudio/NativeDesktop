@@ -560,20 +560,8 @@ fn a_backend_that_lays_out_as_it_paints_glides_from_the_painted_frames() {
     let mut cx = TestApp::with_backend(nd_ui::test_backend::TestBackend::new().without_frames());
     let handle = cx.open_window(WINDOW, |_, cx| cx.new(|_| LayoutOnly { top: false }));
     let moving = node(&cx, "moving");
-    let column = cx.backend().parent(moving).unwrap();
-    let paint = |cx: &mut TestApp, y: f32| {
-        cx.backend_mut().set_probe(
-            column,
-            nd_ui::semantics::Probe {
-                bounds: Some(Rect::new(0., 0., 400., 300.)),
-                ..nd_ui::semantics::Probe::default()
-            },
-        );
-        cx.backend_mut().set_probe(
-            moving,
-            nd_ui::semantics::Probe { bounds: Some(Rect::new(0., y, 400., 10.)), ..nd_ui::semantics::Probe::default() },
-        );
-    };
+    assert!(props(&cx, moving).glides, "the backend is told it glides");
+    let paint = |cx: &mut TestApp, y: f32| cx.backend_mut().set_layout_frame(moving, Rect::new(0., y, 400., 10.));
     paint(&mut cx, 0.);
     cx.run_until_idle();
     handle.root().update(&mut cx, |v, cx| {
@@ -588,4 +576,54 @@ fn a_backend_that_lays_out_as_it_paints_glides_from_the_painted_frames() {
     step(&mut cx, 0.2);
     cx.run_until_idle();
     assert_eq!(props(&cx, moving).transform.offset, (5., 0.));
+}
+
+struct ScrolledNotes {
+    ids: Vec<&'static str>,
+}
+
+impl Render for ScrolledNotes {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        v_flex().id("scroller").h(px(40.)).overflow_y_scroll().children(self.ids.iter().map(|&id| {
+            div()
+                .id(id)
+                .h(px(20.))
+                .flex_none()
+                .animate(Animation::linear(Duration::from_millis(200)))
+                .animate_layout(Animation::linear(Duration::from_millis(200)))
+                .exit_to(|p| p.opacity(0.))
+        }))
+    }
+}
+
+#[test]
+fn a_backend_that_lays_out_itself_holds_an_exit_inside_a_scroll_view() {
+    let mut cx = TestApp::with_backend(nd_ui::test_backend::TestBackend::new().without_frames());
+    let handle = cx.open_window(WINDOW, |_, cx| cx.new(|_| ScrolledNotes { ids: vec!["a", "b", "c"] }));
+    let (b, c) = (node(&cx, "b"), node(&cx, "c"));
+    cx.backend_mut().set_layout_frame(b, Rect::new(0., 20., 400., 20.));
+    cx.backend_mut().set_layout_frame(c, Rect::new(0., 40., 400., 20.));
+    cx.run_until_idle();
+    handle.root().update(&mut cx, |n, cx| {
+        n.ids = vec!["a", "c"];
+        cx.notify();
+    });
+    cx.frame();
+    assert!(cx.backend().is_live(b), "held while it exits");
+    assert!(props(&cx, b).inert, "takes no input");
+    cx.backend_mut().set_layout_frame(c, Rect::new(0., 20., 400., 20.));
+    cx.frame();
+    assert_eq!(props(&cx, c).transform.offset, (0., 20.), "the row below glides up from where it was");
+    step(&mut cx, 0.25);
+    cx.run_until_idle();
+    assert!(!cx.backend().is_live(b), "dropped once settled");
+    assert_eq!(props(&cx, c).transform.offset, (0., 0.));
+}
+
+#[test]
+fn under_reduce_motion_the_backend_is_told_nothing_glides() {
+    let mut cx = TestApp::with_backend(nd_ui::test_backend::TestBackend::new().without_frames());
+    cx.set_reduce_motion(true);
+    cx.open_window(WINDOW, |_, cx| cx.new(|_| LayoutOnly { top: false }));
+    assert!(!props(&cx, node(&cx, "moving")).glides);
 }

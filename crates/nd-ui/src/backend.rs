@@ -241,6 +241,12 @@ pub trait Backend: Any {
     /// True when `nd-ui` lays out with Taffy and pushes frames (AppKit, tests); false when the
     /// backend lays out itself (GPUI runs Taffy inside its own element tree).
     fn retains_frames(&self) -> bool;
+    /// A backend that lays out itself: `node`'s frame as last laid out, relative to its
+    /// parent's, before any offset, scale or scroll moves what is drawn. `None` until it is laid
+    /// out.
+    fn layout_frame(&self, _node: NodeId) -> Option<Rect> {
+        None
+    }
     /// False while `window` has no native window to draw into: AppKit builds one on the run
     /// loop turn after the frame that opened it. Frames skip the window until then.
     fn hosts(&self, _window: WindowId) -> bool {

@@ -44,6 +44,7 @@ pub struct TestBackend {
     events: EventQueue,
     on_apply: Option<WidgetHook>,
     probes: HashMap<NodeId, Probe>,
+    laid_out: HashMap<NodeId, Rect>,
     performed: Vec<(NodeId, SemanticAction)>,
     haptics: Vec<nd_gesture::Haptic>,
     commands: Vec<(WindowId, crate::backend::WindowCommand)>,
@@ -69,6 +70,7 @@ impl TestBackend {
             events: EventQueue::default(),
             on_apply: None,
             probes: HashMap::new(),
+            laid_out: HashMap::new(),
             performed: Vec::new(),
             haptics: Vec::new(),
             commands: Vec::new(),
@@ -106,6 +108,12 @@ impl TestBackend {
     /// What [`Backend::probe`] answers for `node`, standing in for a native control's state.
     pub fn set_probe(&mut self, node: NodeId, probe: Probe) {
         self.probes.insert(node, probe);
+    }
+
+    /// What [`Backend::layout_frame`] answers for `node` once frames are off
+    /// ([`Self::without_frames`]): the frame the backend's own layout gave it.
+    pub fn set_layout_frame(&mut self, node: NodeId, frame: Rect) {
+        self.laid_out.insert(node, frame);
     }
 
     /// Semantic actions carried out so far, in order.
@@ -414,6 +422,10 @@ impl Backend for TestBackend {
 
     fn retains_frames(&self) -> bool {
         self.retains_frames
+    }
+
+    fn layout_frame(&self, node: NodeId) -> Option<Rect> {
+        self.laid_out.get(&node).copied()
     }
 
     fn probe(&self, node: NodeId) -> Probe {

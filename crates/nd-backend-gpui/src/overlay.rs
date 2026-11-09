@@ -460,7 +460,7 @@ impl Build<'_> {
             )
             .into_any_element()
         };
-        let content = Tracked::new(id, content, self.backend.bounds.clone());
+        let content = Tracked::new(id, content, self.backend);
         let content = if passive { Occluding::passive(content) } else { Occluding::surface(content) };
 
         let viewport = window.viewport_size();

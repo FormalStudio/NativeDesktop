@@ -722,6 +722,7 @@ mod tests {
             tracks_hover: false,
             reports_size: false,
             inert: false,
+            glides: false,
             access_key: None,
             group: None,
             group_hover: None,

@@ -281,6 +281,9 @@ pub struct DivProps {
     /// On its way out (see [`Div::exit_to`]): drawn, but it and everything in it take no
     /// pointer input and are left out of the accessibility tree.
     pub inert: bool,
+    /// Glides when layout moves it (see [`Div::animate_layout`]). A backend that lays out
+    /// itself draws it where it was in the frame that moves it, which the glide starts from.
+    pub glides: bool,
     /// The access key of the first control inside (`.access_key("S")`).
     pub access_key: Option<SharedString>,
 }
@@ -522,8 +525,7 @@ impl Div {
         self
     }
 
-    /// Scales the element about its centre without changing its layout box. Drawn unscaled on
-    /// GPUI backends, which have no element transforms.
+    /// Scales the element about its centre without changing its layout box.
     pub fn scale(mut self, scale: f32) -> Self {
         self.transform.scale = scale;
         self
@@ -775,6 +777,7 @@ impl IntoElement for Div {
                 hero: self.hero,
                 reports_size: self.reports_size,
                 inert: false,
+                glides: self.motion.as_ref().is_some_and(|m| m.layout.is_some()),
                 access_key: self.access_key,
             }),
             layout: self.style,
