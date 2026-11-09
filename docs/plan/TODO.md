@@ -119,7 +119,7 @@ Compiles on macOS and Linux; tier 1 green, AppKit tier 2 in `nd-backend-appkit/t
 green, `clippy --workspace` clean on g815.
 - Rich text: `rich_text`/`span`, `label().rich`, `chat_bubble().rich`, link clicks.
 - Animation and hover: `.animate`, `.enter_from`, `.offset`, `.scale`, `.hover`, `.on_hover`,
-  reduce motion, `on_animation_end`. Scale is drawn unscaled on GPUI.
+  reduce motion, `on_animation_end`. Scale draws on GPUI through `Window::with_element_scale`.
 - `FillRole` and `theme.fill(role)`, `text.accent/success/warning`; bubble `.role`.
 - `canvas`: GPUI quads and paths, AppKit shape and image layers.
 - SVG, `data:` URLs and tints in the image pipeline; image `.tint`.

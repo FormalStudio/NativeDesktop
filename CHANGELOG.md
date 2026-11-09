@@ -5,6 +5,11 @@ and the one it moves to.
 
 ## Unreleased
 
+- `.scale(..)` draws on the GPUI backend: the element and everything in it (fills, borders,
+  shadows, text, images, paths and clips) scales about its centre, and its hit area follows what
+  is drawn, so press dips and hero transitions shrink and grow as on AppKit. GPUI gained
+  `Window::with_element_scale` in nd's fork queue. Text and icons are sampled from their unscaled
+  raster while scaled.
 - `WindowKind::Popup` opens a flyout for a tray or menu-bar icon: above other windows, without a
   title row, window controls or taskbar entry, at a fixed size, placed with `origin`. On Windows
   it is a rounded Acrylic tool window; on macOS a floating window with its buttons hidden.

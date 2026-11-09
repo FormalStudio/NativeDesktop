@@ -1,0 +1,448 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: FormalSnake <kyaniserni@gmail.com>
+Date: Mon, 9 Nov 2026 11:36:27 +0000
+Subject: [PATCH] gpui: scale an element subtree with
+ Window::with_element_scale
+
+---
+ crates/gpui/src/window.rs | 273 ++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 260 insertions(+), 13 deletions(-)
+
+diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
+index 779b7f6..be42eb4 100644
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -829,6 +829,82 @@ impl HitboxId {
+ }
+ 
+ /// A rectangular region that potentially blocks hitboxes inserted prior.
++/// A uniform scale and translation from an element subtree's layout space to the window, set by
++/// [`Window::with_element_scale`].
++#[derive(Clone, Copy, Debug, PartialEq)]
++pub struct ElementTransform {
++    /// The factor lengths are multiplied by.
++    pub scale: f32,
++    /// Where the layout-space origin lands in the window.
++    pub translation: Point<Pixels>,
++}
++
++impl ElementTransform {
++    /// Leaves every point where it is.
++    pub const IDENTITY: Self = Self {
++        scale: 1.,
++        translation: Point {
++            x: Pixels::ZERO,
++            y: Pixels::ZERO,
++        },
++    };
++
++    /// Whether this transform leaves every point where it is.
++    pub fn is_identity(&self) -> bool {
++        *self == Self::IDENTITY
++    }
++
++    /// Scales by `scale` about `origin`, which stays where it is.
++    pub fn scale_about(scale: f32, origin: Point<Pixels>) -> Self {
++        Self {
++            scale,
++            translation: origin.map(|c| c * (1. - scale)),
++        }
++    }
++
++    /// `other` applied first, then `self`.
++    pub fn then(&self, other: Self) -> Self {
++        Self {
++            scale: self.scale * other.scale,
++            translation: self.apply(other.translation),
++        }
++    }
++
++    /// Maps a layout-space point to the window.
++    pub fn apply(&self, point: Point<Pixels>) -> Point<Pixels> {
++        point.map(|c| c * self.scale) + self.translation
++    }
++
++    /// Maps a window point back to layout space.
++    pub fn invert(&self, point: Point<Pixels>) -> Point<Pixels> {
++        (point - self.translation).map(|c| c * self.scale.recip())
++    }
++
++    /// Maps layout-space bounds to the window.
++    pub fn apply_bounds(&self, bounds: Bounds<Pixels>) -> Bounds<Pixels> {
++        Bounds {
++            origin: self.apply(bounds.origin),
++            size: bounds.size.map(|c| c * self.scale),
++        }
++    }
++
++    /// Maps window bounds back to layout space.
++    pub fn invert_bounds(&self, bounds: Bounds<Pixels>) -> Bounds<Pixels> {
++        Bounds {
++            origin: self.invert(bounds.origin),
++            size: bounds.size.map(|c| c * self.scale.recip()),
++        }
++    }
++
++    fn apply_device(&self, bounds: Bounds<ScaledPixels>, scale_factor: f32) -> Bounds<ScaledPixels> {
++        let translation = self.translation.scale(scale_factor);
++        Bounds {
++            origin: bounds.origin.map(|c| c * self.scale) + translation,
++            size: bounds.size.map(|c| c * self.scale),
++        }
++    }
++}
++
+ /// See [Window::insert_hitbox] for more details.
+ #[derive(Clone, Debug, Deref)]
+ pub struct Hitbox {
+@@ -1240,6 +1316,7 @@ pub struct Window {
+     pub(crate) rendered_entity_stack: Vec<EntityId>,
+     pub(crate) element_offset_stack: Vec<Point<Pixels>>,
+     pub(crate) element_opacity: f32,
++    pub(crate) element_transform: ElementTransform,
+     pub(crate) content_mask_stack: Vec<ContentMask<Pixels>>,
+     pub(crate) requested_autoscroll: Option<Bounds<Pixels>>,
+     /// The [`TextInputConfiguration`] most recently forwarded to the platform
+@@ -2370,6 +2447,7 @@ impl Window {
+             element_offset_stack: Vec::new(),
+             content_mask_stack: Vec::new(),
+             element_opacity: 1.0,
++            element_transform: ElementTransform::IDENTITY,
+             requested_autoscroll: None,
+             last_text_input_configuration: None,
+             focused_text_input: None,
+@@ -3429,6 +3507,7 @@ impl Window {
+         style: &UnderlineStyle,
+     ) -> Bounds<ScaledPixels> {
+         let scale_factor = self.scale_factor();
++        let origin = self.element_transform.apply(origin);
+         let thickness = self.snap_stroke(style.thickness);
+         let height = if style.wavy {
+             ScaledPixels(thickness.0 * 3.)
+@@ -3461,11 +3540,16 @@ impl Window {
+             return;
+         }
+ 
++        let transform = self.element_transform;
++        let scale_factor = self.scale_factor();
++        let to_window = |x: ScaledPixels| {
++            ScaledPixels(x.0 * transform.scale + transform.translation.x.0 * scale_factor)
++        };
+         let mut exclusions = exclusions
+             .iter()
+             .filter_map(|span| {
+-                let start = span.start.max(bounds.left());
+-                let end = span.end.min(bounds.right());
++                let start = to_window(span.start).max(bounds.left());
++                let end = to_window(span.end).min(bounds.right());
+                 (start < end).then_some(start..end)
+             })
+             .collect::<SmallVec<[_; 4]>>();
+@@ -3515,6 +3599,11 @@ impl Window {
+ 
+     #[inline]
+     fn snap_bounds(&self, bounds: Bounds<Pixels>) -> Bounds<ScaledPixels> {
++        self.snap_layout_bounds(self.element_transform.apply_bounds(bounds))
++    }
++
++    #[inline]
++    fn snap_layout_bounds(&self, bounds: Bounds<Pixels>) -> Bounds<ScaledPixels> {
+         let scale_factor = self.scale_factor();
+         let left = round_to_device_pixel(bounds.left().0, scale_factor);
+         let top = round_to_device_pixel(bounds.top().0, scale_factor);
+@@ -3529,7 +3618,26 @@ impl Window {
+     /// Rounds half-to-zero but clamps any non-zero input up to 1 dp so thin strokes do not disappear.
+     #[inline]
+     fn snap_stroke(&self, value: Pixels) -> ScaledPixels {
+-        ScaledPixels(round_stroke_to_device_pixel(value.0, self.scale_factor()))
++        ScaledPixels(round_stroke_to_device_pixel(
++            value.0 * self.element_transform.scale,
++            self.scale_factor(),
++        ))
++    }
++
++    /// The device scale for lengths that are not snapped: radii and blur.
++    #[inline]
++    fn length_scale(&self) -> f32 {
++        self.scale_factor() * self.element_transform.scale
++    }
++
++    /// Maps device bounds computed in layout space, a glyph's or an SVG's, to the window.
++    #[inline]
++    fn transform_device_bounds(&self, bounds: Bounds<ScaledPixels>) -> Bounds<ScaledPixels> {
++        if self.element_transform.is_identity() {
++            return bounds;
++        }
++        self.element_transform
++            .apply_device(bounds, self.scale_factor())
+     }
+ 
+     #[inline]
+@@ -3540,6 +3648,7 @@ impl Window {
+     /// Floors the near edge and ceils the far edge, producing a strict superset of the raw region.
+     #[inline]
+     fn cover_bounds(&self, bounds: Bounds<Pixels>) -> Bounds<ScaledPixels> {
++        let bounds = self.element_transform.apply_bounds(bounds);
+         let scale_factor = self.scale_factor();
+         let left = floor_to_device_pixel(bounds.left().0, scale_factor);
+         let top = floor_to_device_pixel(bounds.top().0, scale_factor);
+@@ -4456,6 +4565,45 @@ impl Window {
+         result
+     }
+ 
++    /// Draws everything `f` prepaints and paints scaled by `scale` about `origin`, without
++    /// changing its layout. Call it around both the prepaint and the paint of the same elements.
++    ///
++    /// Inside, bounds and [`Self::content_mask`] stay in layout space; quads, borders, shadows,
++    /// paths, text, images and surfaces are mapped to the window as they reach the scene, and
++    /// hitboxes are stored mapped, so hit testing follows what is drawn. Glyphs, SVGs and images
++    /// are sampled from their unscaled raster. Deferred draws escape the scale, as they escape
++    /// clipping, and views inside it are redrawn rather than reused from the last frame.
++    pub fn with_element_scale<R>(
++        &mut self,
++        scale: f32,
++        origin: Point<Pixels>,
++        f: impl FnOnce(&mut Self) -> R,
++    ) -> R {
++        self.invalidator.debug_assert_paint_or_prepaint();
++        if scale == 1. {
++            return f(self);
++        }
++        // A zero scale has no inverse for the clip; a hair above it draws nothing visible.
++        let local = ElementTransform::scale_about(scale.max(1e-4), origin);
++        let mask = ContentMask {
++            bounds: local.invert_bounds(self.content_mask().bounds),
++        };
++        let previous = self.element_transform;
++        self.element_transform = previous.then(local);
++        let refreshing = mem::replace(&mut self.refreshing, true);
++        self.content_mask_stack.push(mask);
++        let result = f(self);
++        self.content_mask_stack.pop();
++        self.refreshing = refreshing;
++        self.element_transform = previous;
++        result
++    }
++
++    /// The transform [`Self::with_element_scale`] applies to what is drawn now.
++    pub fn element_transform(&self) -> ElementTransform {
++        self.element_transform
++    }
++
+     /// Perform prepaint on child elements in a "retryable" manner, so that any side effects
+     /// of prepaints can be discarded before prepainting again. This is used to support autoscroll
+     /// where we need to prepaint children to detect the autoscroll bounds, then adjust the
+@@ -4744,7 +4892,9 @@ impl Window {
+             parent_node,
+             element_id_stack: self.element_id_stack.clone(),
+             text_style_stack: self.text_style_stack.clone(),
+-            content_mask,
++            content_mask: content_mask.map(|mask| ContentMask {
++                bounds: self.element_transform.apply_bounds(mask.bounds),
++            }),
+             rem_size: self.rem_size(),
+             priority,
+             element: Some(element),
+@@ -4792,7 +4942,7 @@ impl Window {
+     ) {
+         self.invalidator.debug_assert_paint();
+ 
+-        let scale_factor = self.scale_factor();
++        let scale_factor = self.length_scale();
+         let content_mask = self.snapped_content_mask();
+         let opacity = self.element_opacity();
+         let element_bounds = self.cover_bounds(bounds);
+@@ -4828,7 +4978,7 @@ impl Window {
+     ) {
+         self.invalidator.debug_assert_paint();
+ 
+-        let scale_factor = self.scale_factor();
++        let scale_factor = self.length_scale();
+         let content_mask = self.snapped_content_mask();
+         let opacity = self.element_opacity();
+         let element_bounds = self.cover_bounds(bounds);
+@@ -4922,7 +5072,7 @@ impl Window {
+             content_mask: self.snapped_content_mask(),
+             background: quad.background.opacity(opacity),
+             border_color: quad.border_color.opacity(opacity),
+-            corner_radii: quad.corner_radii.scale(self.scale_factor()),
++            corner_radii: quad.corner_radii.scale(self.length_scale()),
+             border_widths: snapped_border_widths,
+             border_style: quad.border_style,
+         };
+@@ -4988,6 +5138,14 @@ impl Window {
+         let content_mask = self.content_mask();
+         let opacity = self.element_opacity();
+         path.content_mask = content_mask;
++        let transform = self.element_transform;
++        if !transform.is_identity() {
++            for vertex in &mut path.vertices {
++                vertex.xy_position = transform.apply(vertex.xy_position);
++            }
++            path.bounds = transform.apply_bounds(path.bounds);
++            path.content_mask.bounds = transform.apply_bounds(path.content_mask.bounds);
++        }
+         let color: Background = color.into();
+         path.color = color.opacity(opacity);
+         self.next_frame
+@@ -5021,6 +5179,7 @@ impl Window {
+         self.invalidator.debug_assert_paint();
+ 
+         let scale_factor = self.scale_factor();
++        let origin = self.element_transform.apply(origin);
+         let height = style.thickness;
+         let bounds = Bounds {
+             origin: origin.map(|c| ScaledPixels(round_to_device_pixel(c.0, scale_factor))),
+@@ -5094,10 +5253,10 @@ impl Window {
+                     Ok(Some((size, Cow::Owned(bytes))))
+                 })?
+                 .expect("Callback above only errors or returns Some");
+-            let bounds = Bounds {
++            let bounds = self.transform_device_bounds(Bounds {
+                 origin: integer_origin + raster_bounds.origin.map(Into::into),
+                 size: tile.bounds.size.map(Into::into),
+-            };
++            });
+             let content_mask = self.snapped_content_mask();
+ 
+             if subpixel_rendering {
+@@ -5185,10 +5344,10 @@ impl Window {
+                 })?
+                 .expect("Callback above only errors or returns Some");
+ 
+-            let bounds = Bounds {
++            let bounds = self.transform_device_bounds(Bounds {
+                 origin: integer_origin + raster_bounds.origin.map(Into::into),
+                 size: tile.bounds.size.map(Into::into),
+-            };
++            });
+             let content_mask = self.snapped_content_mask();
+             let opacity = self.element_opacity();
+ 
+@@ -5221,7 +5380,8 @@ impl Window {
+         self.invalidator.debug_assert_paint();
+ 
+         let element_opacity = self.element_opacity();
+-        let bounds = self.snap_bounds(bounds);
++        // Rastered at its layout size, so a scale in flight does not fill the atlas.
++        let bounds = self.snap_layout_bounds(bounds);
+ 
+         let params = RenderSvgParams {
+             path,
+@@ -5257,6 +5417,24 @@ impl Window {
+         let final_bounds = svg_bounds
+             .map_origin(|value| ScaledPixels(round_half_toward_zero(value.0)))
+             .map_size(|size| size.ceil());
++        let (final_bounds, transformation) = if self.element_transform.is_identity() {
++            (final_bounds, transformation)
++        } else {
++            // The SVG's own transformation turns about its layout centre: conjugated by the
++            // element transform it turns about the same point drawn where the scale puts it.
++            let scale = self.element_transform.scale;
++            let shift = self.element_transform.translation.scale(self.scale_factor());
++            let to_window = TransformationMatrix::unit()
++                .translate(shift)
++                .scale(size(scale, scale));
++            let to_layout = TransformationMatrix::unit()
++                .scale(size(scale.recip(), scale.recip()))
++                .translate(shift.map(|c| ScaledPixels(-c.0)));
++            (
++                self.transform_device_bounds(final_bounds),
++                to_window.compose(transformation).compose(to_layout),
++            )
++        };
+ 
+         self.next_frame.scene.insert_primitive(MonochromeSprite {
+             order: 0,
+@@ -5361,7 +5539,7 @@ impl Window {
+         let content_mask = self.snapped_content_mask();
+         let corner_radii = corner_radii
+             .clamp_radii_for_quad_size(visible_bounds.size)
+-            .scale(self.scale_factor());
++            .scale(self.length_scale());
+         let opacity = self.element_opacity();
+ 
+         self.next_frame.scene.insert_primitive(PolychromeSprite {
+@@ -5533,6 +5711,14 @@ impl Window {
+             content_mask,
+             behavior,
+         };
++        let transform = self.element_transform;
++        let hitbox = Hitbox {
++            bounds: transform.apply_bounds(hitbox.bounds),
++            content_mask: ContentMask {
++                bounds: transform.apply_bounds(hitbox.content_mask.bounds),
++            },
++            ..hitbox
++        };
+         self.next_frame.hitboxes.push(hitbox.clone());
+         hitbox
+     }
+@@ -8207,6 +8393,67 @@ mod tests {
+         });
+     }
+ 
++    #[gpui::test]
++    fn test_element_scale_maps_paint_and_hit_testing(cx: &mut TestAppContext) {
++        struct Scaled(Rc<Cell<Option<crate::HitboxId>>>);
++
++        impl Render for Scaled {
++            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
++                let id = self.0.clone();
++                div().size_full().child(
++                    canvas(
++                        move |bounds, window, _| {
++                            window.with_element_scale(0.5, bounds.center(), |window| {
++                                let hitbox =
++                                    window.insert_hitbox(bounds, crate::HitboxBehavior::Normal);
++                                id.set(Some(hitbox.id));
++                            })
++                        },
++                        |bounds, (), window, _| {
++                            window.with_element_scale(0.5, bounds.center(), |window| {
++                                window.paint_quad(
++                                    crate::fill(bounds, crate::rgb(0xff0000)).corner_radii(px(8.)),
++                                );
++                            })
++                        },
++                    )
++                    .w(px(100.))
++                    .h(px(60.)),
++                )
++            }
++        }
++
++        let id = Rc::new(Cell::new(None));
++        let window = cx.add_window({
++            let id = id.clone();
++            move |_, _| Scaled(id)
++        });
++        cx.update_window(window.into(), |_, window, cx| {
++            window.draw(cx).clear(cx);
++            let s = window.scale_factor();
++            let quad = &window.rendered_frame.scene.quads[0];
++            assert_eq!(
++                quad.bounds,
++                Bounds {
++                    origin: point(ScaledPixels(25. * s), ScaledPixels(15. * s)),
++                    size: size(ScaledPixels(50. * s), ScaledPixels(30. * s)),
++                }
++            );
++            assert_eq!(quad.corner_radii.top_left, ScaledPixels(4. * s));
++            let id = id.get().expect("hitbox inserted");
++            let hits = |x: f32, y: f32| {
++                window
++                    .rendered_frame
++                    .hit_test(point(px(x), px(y)))
++                    .ids
++                    .contains(&id)
++            };
++            assert!(hits(30., 20.), "inside the drawn quad");
++            assert!(!hits(10., 10.), "inside the layout box, outside the drawn quad");
++        })
++        .unwrap();
++    }
++
+     #[gpui::test]
+     fn test_dropped_focus_handle_blurs_only_its_windows(cx: &mut TestAppContext) {
+         let windows = [

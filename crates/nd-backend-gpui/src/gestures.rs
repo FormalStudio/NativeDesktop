@@ -99,6 +99,19 @@ fn contains(r: &Rect, p: Point) -> bool {
     p.x >= r.origin.x && p.y >= r.origin.y && p.x < r.origin.x + r.size.width && p.y < r.origin.y + r.size.height
 }
 
+/// A view drawn scaled (`b` its layout bounds): the box it is drawn in, and `at` in the space its
+/// children's bounds were recorded in, which the scale leaves unscaled. `None` at scale 1.
+fn scaled(node: &Node, b: &Rect, at: Point) -> Option<(Rect, Point)> {
+    let props = node.props.downcast_ref::<DivProps>().filter(|d| d.transform.scale != 1.)?;
+    // GPUI's floor for a scale, below which nothing is drawn.
+    let s = props.transform.scale.max(1e-4);
+    let (x, y) = props.transform.offset;
+    let (cx, cy) = (b.origin.x + b.size.width / 2. + x, b.origin.y + b.size.height / 2. + y);
+    let (w, h) = (b.size.width * s, b.size.height * s);
+    let drawn = Rect::new(cx - w / 2., cy - h / 2., w, h);
+    Some((drawn, Point { x: cx + (at.x - cx) / s, y: cy + (at.y - cy) / s }))
+}
+
 /// Where a hit test starts. Overlays draw above all content (`crate::overlay`): a point inside
 /// the topmost one starts there, and a point on an input-taking overlay's backdrop hits nothing,
 /// so no gesture under an overlay ever fires. Scrolls pass a light-dismiss backdrop, as GPUI's
@@ -153,16 +166,17 @@ fn descend(nodes: &HashMap<NodeId, Node>, bounds: &HashMap<NodeId, Rect>, node: 
     if let Some(n) = nodes.get(&node) {
         for c in n.children.iter().rev() {
             let Some(b) = bounds.get(c).filter(|_| !nodes.get(c).is_some_and(hidden)) else { continue };
-            if !contains(b, at) {
+            let (b, inside) = nodes.get(c).and_then(|n| scaled(n, b, at)).unwrap_or((*b, at));
+            if !contains(&b, at) {
                 if b.size.width <= 0. || b.size.height <= 0. {
-                    let path = descend(nodes, bounds, *c, at);
+                    let path = descend(nodes, bounds, *c, inside);
                     if path.iter().any(|p| nodes.get(p).and_then(gestures_of).is_some()) {
                         return std::iter::once(node).chain(path).collect();
                     }
                 }
                 continue;
             }
-            let path = descend(nodes, bounds, *c, at);
+            let path = descend(nodes, bounds, *c, inside);
             if path.iter().any(|p| nodes.get(p).and_then(gestures_of).is_some()) {
                 return std::iter::once(node).chain(path).collect();
             }
@@ -536,6 +550,74 @@ impl gpui::Element for Offset {
         cx: &mut App,
     ) {
         self.inner.paint(window, cx);
+    }
+}
+
+/// `child` drawn `by` times its size about its centre, its layout untouched. GPUI's hitboxes
+/// follow the drawing. The node bounds nd records stay the layout's, as an AppKit view's frame
+/// ignores its layer's transform, and the hit path maps the pointer through the scale instead.
+pub(crate) fn scale(child: AnyElement, by: f32) -> AnyElement {
+    Scaled { by, inner: child }.into_any_element()
+}
+
+struct Scaled {
+    by: f32,
+    inner: AnyElement,
+}
+
+impl IntoElement for Scaled {
+    type Element = Self;
+
+    fn into_element(self) -> Self {
+        self
+    }
+}
+
+impl gpui::Element for Scaled {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        window: &mut gpui::Window,
+        cx: &mut App,
+    ) -> (LayoutId, ()) {
+        (self.inner.request_layout(window, cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _: &mut (),
+        window: &mut gpui::Window,
+        cx: &mut App,
+    ) {
+        window.with_element_scale(self.by, bounds.center(), |window| self.inner.prepaint(window, cx));
+    }
+
+    fn paint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        _: &mut (),
+        _: &mut (),
+        window: &mut gpui::Window,
+        cx: &mut App,
+    ) {
+        window.with_element_scale(self.by, bounds.center(), |window| self.inner.paint(window, cx));
     }
 }
 

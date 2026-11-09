@@ -17,7 +17,8 @@ gets the platform's timing for it:
 
 The curve is `CAMediaTimingFunction`'s default on macOS, ease-out-cubic on GNOME and WinUI's
 entrance curve on Windows. With reduce motion on, every paced animation becomes a short fade:
-offsets, scales and sizes jump, and opacity still eases.
+offsets, scales and sizes jump, and opacity still eases. `.scale(..)` scales an element about
+its centre on both backends; on GPUI its hit area follows what is drawn.
 
 ```rust
 div()

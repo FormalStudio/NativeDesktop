@@ -41,6 +41,27 @@ impl Render for Counter {
     }
 }
 
+/// A box drawn at half its size about its centre, counting the taps that reach it.
+struct Scaled {
+    taps: Rc<Cell<u32>>,
+}
+
+impl Render for Scaled {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        let taps = self.taps.clone();
+        v_flex().size_full().p(px(20.)).bg(rgb(0xffffff)).child(
+            div()
+                .id("scaled")
+                .w(px(120.))
+                .h(px(80.))
+                .rounded(px(8.))
+                .bg(rgb(0x3366ff))
+                .scale(0.5)
+                .on_tap(move |_: &nd_ui::TapEvent, _, _| taps.set(taps.get() + 1)),
+        )
+    }
+}
+
 struct TitleRow;
 
 impl Render for TitleRow {
@@ -355,6 +376,58 @@ mod gate_m2 {
         assert!(corner[0] > 200 && corner[1] > 200, "light background: {corner:?}");
     }
 
+    /// `.scale(0.5)` draws the box at half its size about its centre, its corners with it, and
+    /// a tap lands only on what is drawn; its layout box stays where it was.
+    pub fn a_scaled_element_paints_at_its_scaled_bounds() {
+        if nd_gpui::gpui_platform::current_headless_renderer().ok().flatten().is_none() {
+            println!("skipped: GPUI has no headless renderer on this OS");
+            return;
+        }
+        let mut cx = headless();
+        let taps = Rc::new(Cell::new(0));
+        let t = taps.clone();
+        let mut window = None;
+        let host = cx.update(|cx| {
+            GpuiHost::builder().quit_when_empty(false).start(cx, |app| {
+                let options = WindowOptions::main("scaled").size(size(px(320.), px(240.)));
+                window = Some(app.open_window(options, |_, cx| cx.new(|_| Scaled { taps: t })).id());
+            })
+        });
+        settle(&mut cx, &host);
+        let window = window.expect("window");
+        let layout = by_test_id(&host, window, "scaled").bounds.expect("bounds");
+        assert_eq!((layout.size.width, layout.size.height), (120., 80.), "the layout keeps its size");
+        let capture = host.job(|app| app.capture(window)).expect("capture");
+        let image = image::load_from_memory(&capture.png).expect("png").to_rgba8();
+        let scale = capture.width as f32 / 320.;
+        let blue = |x: f32, y: f32| {
+            let p = image.get_pixel(((layout.origin.x + x) * scale) as u32, ((layout.origin.y + y) * scale) as u32).0;
+            p[2] > 200 && p[0] < 100
+        };
+        // Drawn over 30..90 by 20..60 of its 120 by 80 box.
+        assert!(blue(60., 40.), "the centre is drawn");
+        assert!(blue(33., 23.) && blue(87., 57.), "the drawn box reaches to near its scaled corners");
+        assert!(!blue(26., 40.) && !blue(94., 40.) && !blue(60., 16.) && !blue(60., 64.), "nothing past them");
+        // 2 pt in from the drawn corner: inside a 4 pt radius, outside an unscaled 8 pt one.
+        assert!(blue(32., 22.), "the corner radius scaled with it");
+        let tap = |cx: &mut HeadlessAppContext, x: f32, y: f32| {
+            let at = nd_ui::Point { x: layout.origin.x + x, y: layout.origin.y + y };
+            cx.update(|cx| {
+                host.update(cx, |app| {
+                    for phase in [PointerPhase::Down, PointerPhase::Up] {
+                        let input = SyntheticInput::Pointer { phase, at, button: MouseButton::Left, click_count: 1 };
+                        app.synthesize(window, &input).expect("posted");
+                    }
+                })
+            });
+            settle(cx, &host);
+        };
+        tap(&mut cx, 10., 10.);
+        assert_eq!(taps.get(), 0, "inside the layout box but outside what is drawn");
+        tap(&mut cx, 40., 30.);
+        assert_eq!(taps.get(), 1, "inside what is drawn");
+    }
+
     pub fn the_backend_releases_what_the_reconciler_drops() {
         let Opened { mut cx, host, window, .. } = open_counter();
         let live = host.backend().live_count();
@@ -578,6 +651,10 @@ fn main() {
             gate_m2::a_window_of_another_app_parents_a_modal_child,
         ),
         ("gate_m2::capture_renders_the_window", gate_m2::capture_renders_the_window),
+        (
+            "gate_m2::a_scaled_element_paints_at_its_scaled_bounds",
+            gate_m2::a_scaled_element_paints_at_its_scaled_bounds,
+        ),
         (
             "gate_m2::the_backend_releases_what_the_reconciler_drops",
             gate_m2::the_backend_releases_what_the_reconciler_drops,
