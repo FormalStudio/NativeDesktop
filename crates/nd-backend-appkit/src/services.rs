@@ -381,10 +381,6 @@ impl ChromeServices for AppKitChrome {
     fn show_context_menu(&self, cx: &mut App, window: WindowId, node: NodeId, x: f32, y: f32, menu: ContextMenu) {
         let Some(mtm) = MainThreadMarker::new() else { return };
         let Some(view) = self.backend.view(node) else { return };
-        // A row with nothing to offer opens no menu, not an empty one.
-        if menu.items.is_empty() {
-            return;
-        }
         let target = NdMenuTarget::new(mtm, Some(window));
         let above = menu.above;
         let ns = context_items(mtm, &target, cx.key_bindings(), menu);

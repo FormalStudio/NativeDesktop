@@ -232,11 +232,27 @@ struct FakeChrome {
     shown: RefCell<Vec<(WindowId, SharedString)>>,
     pending: RefCell<Vec<AlertCallback>>,
     abouts: RefCell<Vec<AboutPanel>>,
+    menus: RefCell<Vec<Vec<String>>>,
+}
+
+/// A menu's rows as labels: a submenu as its title and its rows in brackets, a separator as `-`.
+fn labels(items: &[MenuItem]) -> Vec<String> {
+    items
+        .iter()
+        .map(|item| match item {
+            MenuItem::Action { label, .. } => label.to_string(),
+            MenuItem::Submenu(sub) => format!("{} [{}]", sub.title, labels(&sub.items).join(", ")),
+            MenuItem::Separator => "-".into(),
+            MenuItem::Role(role) => format!("{role:?}"),
+        })
+        .collect()
 }
 
 impl ChromeServices for FakeChrome {
     fn set_menus(&self, _cx: &mut App, _menus: Vec<Menu>) {}
-    fn show_context_menu(&self, _: &mut App, _: WindowId, _: NodeId, _: f32, _: f32, _: ContextMenu) {}
+    fn show_context_menu(&self, _: &mut App, _: WindowId, _: NodeId, _: f32, _: f32, menu: ContextMenu) {
+        self.menus.borrow_mut().push(labels(&menu.items));
+    }
     fn alert(&self, _cx: &mut App, window: WindowId, alert: Alert, done: AlertCallback) {
         self.shown.borrow_mut().push((window, alert.title));
         self.pending.borrow_mut().push(done);
@@ -290,6 +306,32 @@ fn alerts_wait_their_turn_per_window_and_each_answer_reaches_its_own_callback() 
 
     services::about(&mut cx, Some(a), AboutPanel::new().name("Notes").version("1.0"));
     assert_eq!(chrome.abouts.borrow()[0].name.as_deref(), Some("Notes"));
+}
+
+#[test]
+fn a_context_menu_leaves_out_submenus_with_nothing_in_them() {
+    use nd_ui::actions::ToggleSidebar;
+    let mut cx = TestApp::new();
+    let chrome = Rc::new(FakeChrome::default());
+    cx.set_global(Chrome(chrome.clone()));
+    let window = cx.open_window(WINDOW, |_, cx| cx.new(|_| Empty)).id();
+    let note = |folders: &[&str]| {
+        ContextMenu::default()
+            .item("Open", ToggleSidebar)
+            .submenu(Menu::new("Move To").items(folders.iter().map(|f| MenuItem::action(*f, ToggleSidebar))))
+            .separator()
+            .submenu(Menu::new("Share").item(MenuItem::separator()))
+            .separator()
+            .item_destructive("Move to Trash", ToggleSidebar)
+    };
+    services::show_context_menu(&mut cx, window, NodeId(1), 0., 0., note(&["Journal"]));
+    services::show_context_menu(&mut cx, window, NodeId(1), 0., 0., note(&[]));
+    services::show_context_menu(&mut cx, window, NodeId(1), 0., 0., ContextMenu::default().separator());
+    assert_eq!(
+        *chrome.menus.borrow(),
+        [vec!["Open", "Move To [Journal]", "-", "Move to Trash"], vec!["Open", "-", "Move to Trash"],],
+        "an empty submenu is left out, its separators with it, and a menu left with nothing never opens"
+    );
 }
 
 struct TitleRow {

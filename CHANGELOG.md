@@ -5,6 +5,9 @@ and the one it moves to.
 
 ## Unreleased
 
+- A context menu leaves out a submenu with nothing in it, and the separators that leaves doubled
+  or at an edge: AppKit drew its row with a chevron that opened nothing on hover, as a note's
+  Move To did with no folder to move to. A menu left with nothing opens nothing, on every backend.
 - `BoxShadow` is in the prelude, so an app can pass shadows of its own to `.shadow(vec![..])`
   instead of only the `shadow_sm()` to `shadow_2xl()` presets.
 - `nd::test` exports `DivProps`, so an app's tier 1 test can read a div's look from the
