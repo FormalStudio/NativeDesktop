@@ -13,9 +13,9 @@ use std::sync::Arc;
 use nd_components::{ContextMenuRequested, GlassProps, ScaffoldProps, SubtreeScope};
 use nd_core::{NodeId, Rect};
 use nd_gpui::gpui::{
-    self, AnyElement, App, Bounds, Decorations, ElementId, FontFeatures, FontWeight, GlobalElementId, Hsla,
-    InspectorElementId, InteractiveElement, IntoElement, LayoutId, MouseButton, MouseDownEvent, ParentElement, Pixels,
-    Refineable, StatefulInteractiveElement, StyleRefinement, Styled, WindowControlArea, div, px,
+    self, AnyElement, App, Bounds, ContentMask, Decorations, ElementId, FontFeatures, FontWeight, GlobalElementId,
+    Hsla, InspectorElementId, InteractiveElement, IntoElement, LayoutId, MouseButton, MouseDownEvent, ParentElement,
+    Pixels, Refineable, StatefulInteractiveElement, StyleRefinement, Styled, WindowControlArea, div, px,
 };
 use nd_theme::color::{over, with_alpha};
 use nd_theme::{Preset, Theme, ThemeRefinement, ThemeRegistry};
@@ -164,6 +164,81 @@ impl gpui::Element for HiddenSubtree {
         _cx: &mut App,
     ) {
     }
+}
+
+thread_local! {
+    /// The content mask the outermost [`Inert`] subtree being prepainted draws under.
+    static INERT_MASK: Cell<Option<ContentMask<Pixels>>> = const { Cell::new(None) };
+}
+
+/// A subtree on its way out (`DivProps::inert`): drawn, but nothing in it is hit, hovered or
+/// shows a cursor or tooltip. A hitbox is clipped to the content mask in effect where it is
+/// inserted, which is at prepaint, so the subtree prepaints under an empty mask and paints under
+/// the real one.
+struct Inert(AnyElement);
+
+impl IntoElement for Inert {
+    type Element = Self;
+
+    fn into_element(self) -> Self {
+        self
+    }
+}
+
+impl gpui::Element for Inert {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static std::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        window: &mut gpui::Window,
+        cx: &mut App,
+    ) -> (LayoutId, ()) {
+        (self.0.request_layout(window, cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        _: &mut (),
+        window: &mut gpui::Window,
+        cx: &mut App,
+    ) {
+        let outer = INERT_MASK.with(|m| m.replace(Some(m.get().unwrap_or_else(|| window.content_mask()))));
+        window.with_content_mask(Some(ContentMask::default()), |window| self.0.prepaint(window, cx));
+        INERT_MASK.with(|m| m.set(outer));
+    }
+
+    fn paint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        _: &mut (),
+        _: &mut (),
+        window: &mut gpui::Window,
+        cx: &mut App,
+    ) {
+        self.0.paint(window, cx);
+    }
+}
+
+/// The content mask what prepaints now draws under. Inside an [`Inert`] subtree the mask in
+/// effect is empty, so this is the one around the subtree; masks nested inside it are lost.
+pub(crate) fn drawn_mask(window: &gpui::Window) -> ContentMask<Pixels> {
+    INERT_MASK.with(Cell::get).unwrap_or_else(|| window.content_mask())
 }
 
 /// The colours the drawn chrome and controls use, taken from the theme in effect.
@@ -552,6 +627,7 @@ impl<'a> Build<'a> {
                     self.covers.borrow_mut().remove(&id);
                     return HiddenSubtree(element).into_any_element();
                 }
+                let element = if props.inert { Inert(element).into_any_element() } else { element };
                 // A hero in flight crosses what is drawn after it (the player bar under an
                 // expanded player), so it paints over the window's content until it lands.
                 if props.hero.is_some() && ((x, y) != (0., 0.) || scale != 1.) {

@@ -5,6 +5,8 @@ and the one it moves to.
 
 ## Unreleased
 
+- On the GPUI backend an element leaving with `exit_to` takes no pointer input: nothing in it is
+  hit, hovered or shows a cursor or tooltip while it animates out.
 - `text_area(..).borderless()` (and `markdown_editor(..).borderless()`) drops the field chrome
   for an area that is the page, a document editor filling its window: no bezel, outline, focus
   ring or fill, with the text where a bordered area puts it. On AppKit the scroll, clip and text

@@ -632,6 +632,96 @@ mod gate_m4 {
     }
 }
 
+mod motion {
+    use std::time::Duration;
+
+    use super::*;
+
+    /// Blue rows that turn red under the pointer and leave on a slow fade.
+    struct Rows {
+        rows: Vec<&'static str>,
+    }
+
+    impl Render for Rows {
+        fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            v_flex().size_full().p(px(10.)).bg(rgb(0xffffff)).children(self.rows.iter().map(|&row| {
+                div()
+                    .id(row)
+                    .h(px(40.))
+                    .flex_none()
+                    .bg(rgb(0x3366ff))
+                    .hover(|s| s.bg(rgb(0xff0000)))
+                    .animate(Animation::linear(Duration::from_secs(20)))
+                    .exit_to(|p| p.opacity(0.))
+            }))
+        }
+    }
+
+    fn point_at(cx: &mut HeadlessAppContext, host: &GpuiHost, window: WindowId, at: nd_ui::Point) {
+        cx.update(|cx| {
+            host.update(cx, |app| {
+                let input = SyntheticInput::Pointer {
+                    phase: PointerPhase::Move,
+                    at,
+                    button: MouseButton::Left,
+                    click_count: 0,
+                };
+                app.synthesize(window, &input).expect("posted");
+            })
+        });
+        settle(cx, host);
+    }
+
+    /// The colour drawn at `at`, in points.
+    fn pixel(host: &GpuiHost, window: WindowId, at: nd_ui::Point) -> [u8; 4] {
+        let capture = host.job(|app| app.capture(window)).expect("capture");
+        let image = image::load_from_memory(&capture.png).expect("png").to_rgba8();
+        let scale = capture.width as f32 / 320.;
+        image.get_pixel((at.x * scale) as u32, (at.y * scale) as u32).0
+    }
+
+    /// A row on its way out (`exit_to`) is drawn where it stood, but GPUI hit-tests nothing in
+    /// it: the pointer over it no longer lights its hover style.
+    pub fn a_leaving_element_takes_no_pointer() {
+        if nd_gpui::gpui_platform::current_headless_renderer().ok().flatten().is_none() {
+            println!("skipped: GPUI has no headless renderer on this OS");
+            return;
+        }
+        let mut cx = headless();
+        let mut opened = None;
+        let host = cx.update(|cx| {
+            GpuiHost::builder().quit_when_empty(false).start(cx, |app| {
+                let options = WindowOptions::main("rows").size(size(px(320.), px(240.)));
+                let handle = app.open_window(options, |_, cx| cx.new(|_| Rows { rows: vec!["a", "b"] }));
+                opened = Some((handle.id(), handle.root().clone()));
+            })
+        });
+        let (window, view) = opened.expect("window");
+        settle(&mut cx, &host);
+        let row = by_test_id(&host, window, "b");
+        let b = row.bounds.expect("row bounds");
+        let centre = nd_ui::Point { x: b.origin.x + b.size.width / 2., y: b.origin.y + b.size.height / 2. };
+        point_at(&mut cx, &host, window, centre);
+        let lit = pixel(&host, window, centre);
+        assert!(lit[0] > 200 && lit[2] < 100, "the row lights under the pointer: {lit:?}");
+
+        cx.update(|cx| {
+            host.update(cx, |app| {
+                view.update(app, |rows, cx| {
+                    rows.rows.pop();
+                    cx.notify();
+                })
+            })
+        });
+        settle(&mut cx, &host);
+        point_at(&mut cx, &host, window, nd_ui::Point { x: centre.x + 1., y: centre.y });
+        assert!(host.backend().is_live(row.id), "the row is still leaving");
+        assert_eq!(host.backend().bounds(row.id), Some(b), "drawn where it stood");
+        let leaving = pixel(&host, window, centre);
+        assert!(leaving[2] > 200 && leaving[0] < 100, "the leaving row is drawn unlit: {leaving:?}");
+    }
+}
+
 fn main() {
     // libtest-style listing and filtering for nextest, one test per process.
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -665,6 +755,7 @@ fn main() {
             "gate_m4::a_wheel_with_the_secondary_key_zooms_instead_of_scrolling",
             gate_m4::a_wheel_with_the_secondary_key_zooms_instead_of_scrolling,
         ),
+        ("motion::a_leaving_element_takes_no_pointer", motion::a_leaving_element_takes_no_pointer),
     ];
     harness(&args, &tests);
 }

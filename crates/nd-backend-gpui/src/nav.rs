@@ -852,7 +852,7 @@ pub fn source_tree_view(
             let (m, id) = (m.clone(), node.id.clone());
             let shown = blocks.shown();
             gpui::canvas(
-                move |bounds, window, _| m.place(id.clone(), bounds, window.content_mask(), shown),
+                move |bounds, window, _| m.place(id.clone(), bounds, crate::render::drawn_mask(window), shown),
                 |_, (), _, _| {},
             )
             .absolute()
