@@ -68,6 +68,17 @@ let art = div()
 v_flex().group("card").child(art).child(label(title))
 ```
 
+## Source lists
+
+On the GPUI backend a `source_list` or `source_tree` animates its rows. A folder's
+rows open as a drawer: its edge travels on a cubic ease-out over the fast to normal timing,
+longer the more rows it shows (150 to 250 ms on macOS), each row fades in and rises 4 pt as the
+edge passes it, the rows below slide down with it, and the disclosure turns. Closing plays the
+same back at 0.8 of the time and removes the rows once the drawer has shut; a click mid-flight
+reverses from where it is. The selection is one pill under the rows that slides to a newly
+selected row on a stiff spring (about 80 ms), and the hover fill fades in fast and out slower.
+With reduce motion nothing moves: the rows fade in place and the pill jumps.
+
 ## Shared element transitions
 
 `.hero_from(id, away)` makes an element travel from the frame of the element keyed `id` when it

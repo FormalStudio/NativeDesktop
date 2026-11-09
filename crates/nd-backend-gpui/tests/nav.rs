@@ -416,6 +416,93 @@ mod gate_m6 {
         }
     }
 
+    /// A folder opening slides the rows below it down as its drawer opens and lands them where
+    /// a tree drawn open puts them; closing slides them back and removes the folder's rows.
+    pub fn gpui_tree_expand_settles_on_the_open_layout() {
+        if nd_gpui::gpui_platform::current_headless_renderer().ok().flatten().is_none() {
+            println!("skipped: GPUI has no headless renderer on this OS");
+            return;
+        }
+        // Long enough to catch the drawer between frames on a loaded machine. Each test runs in a
+        // process of its own, so nothing else reads the environment meanwhile.
+        unsafe { std::env::set_var("ND_ANIMATION_SLOWDOWN", "4") };
+        let mut cx = headless();
+        type Slot = Rc<RefCell<Option<(WindowId, Entity<Folders>)>>>;
+        let opened: Slot = Rc::default();
+        let o = opened.clone();
+        let host = cx.update(|cx| {
+            GpuiHost::builder().quit_when_empty(false).start(cx, move |app| {
+                let backend = app.backend_as::<nd_backend_gpui::GpuiBackend>().expect("GPUI backend").clone();
+                backend.set_theme(nd_theme::ThemeRegistry::new(nd_theme::Preset::Adwaita));
+                let handle = app.open_window(WindowOptions::main("folders").size(size(px(300.), px(300.))), |_, cx| {
+                    cx.new(|_| Folders { open: false })
+                });
+                *o.borrow_mut() = Some((handle.id(), handle.root().clone()));
+            })
+        });
+        settle(&mut cx, &host);
+        let (window, view) = opened.borrow_mut().take().expect("window");
+        let tree = by_test_id(&host, window, "folders").bounds.expect("tree bounds");
+        // The top of the selected row's fill, down a column clear of the titles.
+        let band = |host: &GpuiHost| {
+            let capture = host.job(|app| app.capture(window)).expect("capture");
+            let image = image::load_from_memory(&capture.png).expect("png").to_rgba8();
+            let scale = capture.width as f32 / 300.;
+            let x = ((tree.origin.x + tree.size.width - 16.) * scale) as u32;
+            let rest = image.get_pixel(x, (tree.origin.y * scale) as u32 + 2).0;
+            let top = (0..image.height())
+                .find(|&y| image.get_pixel(x, y).0.iter().zip(rest).any(|(a, b)| a.abs_diff(b) > 6))
+                .expect("a selected row");
+            top as f32 / scale
+        };
+        let frames = |cx: &mut HeadlessAppContext, ms: u64| {
+            for _ in 0..ms / 16 {
+                std::thread::sleep(Duration::from_millis(16));
+                cx.update(|cx| {
+                    host.pump(cx);
+                    host.draw(cx);
+                });
+                cx.run_until_parked();
+            }
+        };
+        let shut = band(&host);
+        // libadwaita's rows: 36 pt, 2 apart. Two rows come in above the selected one.
+        let open = shut + 2. * 38.;
+        let toggle = |cx: &mut HeadlessAppContext, to: bool| {
+            cx.update(|cx| {
+                host.update(cx, |app| {
+                    view.update(app, |v, cx| {
+                        v.open = to;
+                        cx.notify();
+                    })
+                })
+            });
+            settle(cx, &host);
+        };
+        // Every band drawn on the way from one layout to the other, until it rests.
+        let travel = |cx: &mut HeadlessAppContext, to: f32| {
+            let mut seen = Vec::new();
+            let deadline = std::time::Instant::now() + Duration::from_secs(8);
+            while std::time::Instant::now() < deadline {
+                frames(cx, 16);
+                seen.push(band(&host));
+                if seen.len() > 2 && seen.iter().rev().take(3).all(|b| (b - to).abs() <= 1.) {
+                    break;
+                }
+            }
+            seen
+        };
+        toggle(&mut cx, true);
+        let seen = travel(&mut cx, open);
+        assert!(seen.iter().any(|&b| b > shut + 1. && b < open - 1.), "the rows below slide down: {seen:?}");
+        assert!((seen.last().expect("frames") - open).abs() <= 1., "lands on the open layout: {seen:?}");
+
+        toggle(&mut cx, false);
+        let seen = travel(&mut cx, shut);
+        assert!(seen.iter().any(|&b| b > shut + 1. && b < open - 1.), "closing slides them back: {seen:?}");
+        assert!((seen.last().expect("frames") - shut).abs() <= 1., "lands on the shut layout: {seen:?}");
+    }
+
     pub fn gpui_nav_goldens() {
         // GPUI renders headless only on macOS (Metal) and Linux (wgpu); Windows captures arrive
         // with the Fluent goldens (M3).
@@ -493,6 +580,7 @@ impl gpui::Render for Golden {
                 NodeId(1),
                 &golden_tree(),
                 None,
+                None,
                 false,
                 None,
                 &Default::default(),
@@ -557,6 +645,7 @@ impl gpui::Render for Meters {
                 NodeId(1),
                 &props,
                 None,
+                None,
                 false,
                 None,
                 &Default::default(),
@@ -594,6 +683,24 @@ impl Render for Sources {
     }
 }
 
+/// A folder that opens and closes as the app says, over a selected row.
+struct Folders {
+    open: bool,
+}
+
+impl Render for Folders {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        source_tree("folders")
+            .nodes([
+                source_node("work", "Work").expanded(self.open),
+                source_node("q3", "Q3 planning").parent("work"),
+                source_node("trips", "Trips").parent("work"),
+                source_node("later", "Later"),
+            ])
+            .selected("later")
+    }
+}
+
 /// A selected volume with its free space as a caption over its meter, and one more row.
 struct Volumes;
 
@@ -615,6 +722,7 @@ impl gpui::Render for Volumes {
             .child(source_tree_view(
                 NodeId(1),
                 &props,
+                None,
                 None,
                 false,
                 None,
@@ -646,6 +754,7 @@ impl gpui::Render for Crowded {
                 NodeId(1),
                 &props,
                 None,
+                None,
                 false,
                 None,
                 &Default::default(),
@@ -673,6 +782,7 @@ impl gpui::Render for Meter {
             .child(source_tree_view(
                 NodeId(1),
                 &props,
+                None,
                 None,
                 false,
                 None,
@@ -716,6 +826,7 @@ impl gpui::Render for Rail {
             .child(source_tree_view(
                 NodeId(1),
                 &props,
+                None,
                 None,
                 true,
                 None,
@@ -800,6 +911,10 @@ fn main() {
         (
             "gate_m6::gpui_source_list_overflow_scrolls_instead_of_squashing",
             gate_m6::gpui_source_list_overflow_scrolls_instead_of_squashing,
+        ),
+        (
+            "gate_m6::gpui_tree_expand_settles_on_the_open_layout",
+            gate_m6::gpui_tree_expand_settles_on_the_open_layout,
         ),
         ("gate_m6::gpui_nav_goldens", gate_m6::gpui_nav_goldens),
     ];

@@ -64,13 +64,17 @@ fn stroke(bounds: Bounds<Pixels>, lines: &[Vec<(f32, f32)>], width: Pixels, colo
     }
 }
 
-/// The tessellated paths of `glyph` in `bounds`, its strokes `width` thick however big the box is.
-fn paths(glyph: Glyph, bounds: Bounds<Pixels>, width: Pixels) -> Vec<gpui::Path<Pixels>> {
+/// The tessellated paths of `glyph` in `bounds`, its strokes `width` thick however big the box is,
+/// turned `turn` radians clockwise about the box's centre.
+fn paths(glyph: Glyph, bounds: Bounds<Pixels>, width: Pixels, turn: f32) -> Vec<gpui::Path<Pixels>> {
     let Some(shape) = glyph.0.shape() else { return Vec::new() };
+    let (sin, cos) = turn.sin_cos();
     let at = |x: f32, y: f32| -> Point<Pixels> {
+        let (x, y) = (x / shape.size - 0.5, y / shape.size - 0.5);
+        let (x, y) = (x * cos - y * sin, x * sin + y * cos);
         point(
-            bounds.origin.x + bounds.size.width * (x / shape.size),
-            bounds.origin.y + bounds.size.height * (y / shape.size),
+            bounds.origin.x + bounds.size.width * (x + 0.5),
+            bounds.origin.y + bounds.size.height * (y + 0.5),
         )
     };
     shape
@@ -93,9 +97,28 @@ fn paths(glyph: Glyph, bounds: Bounds<Pixels>, width: Pixels) -> Vec<gpui::Path<
 
 /// `glyph` drawn in `bounds`.
 pub(crate) fn paint_glyph(glyph: Glyph, bounds: Bounds<Pixels>, color: Hsla, width: Pixels, window: &mut gpui::Window) {
-    for path in paths(glyph, bounds, width) {
+    for path in paths(glyph, bounds, width, 0.) {
         window.paint_path(path, color);
     }
+}
+
+/// [`glyph`] turned `turn` radians clockwise about its centre: a disclosure chevron mid-turn.
+/// Segoe Fluent Icons' glyphs are text and do not turn: past halfway they show `then`.
+pub(crate) fn turned_glyph(glyph: Glyph, then: Glyph, turn: f32, size: Pixels, color: Hsla, width: Pixels) -> AnyElement {
+    if ICON_FONT.get() {
+        return self::glyph(if turn.abs() < PI / 2. { glyph } else { then }, size, color, width);
+    }
+    canvas(
+        |_, _, _| (),
+        move |bounds, _, window, _| {
+            for path in paths(glyph, bounds, width, turn) {
+                window.paint_path(path, color);
+            }
+        },
+    )
+    .size(size)
+    .flex_none()
+    .into_any_element()
 }
 
 /// `icon` drawn as [`glyph`] draws it, for chrome outside this crate (the OS hooks' window
@@ -158,7 +181,7 @@ mod tests {
         let bounds = Bounds::new(point(px(0.), px(0.)), size(px(16.), px(16.)));
         for icon in Icon::ALL {
             let shape = icon.shape().unwrap_or_else(|| panic!("{} has no shape", icon.lucide()));
-            let drawn = paths(Glyph::of(*icon), bounds, px(1.5));
+            let drawn = paths(Glyph::of(*icon), bounds, px(1.5), 0.);
             assert_eq!(drawn.len(), shape.paths.len(), "{} lost a path", icon.lucide());
         }
     }

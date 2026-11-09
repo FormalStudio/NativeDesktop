@@ -11,7 +11,11 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use crate::forms::glyph::{Glyph, glyph};
+use std::f32::consts::PI;
+
+use crate::forms::glyph::{Glyph, glyph, turned_glyph};
+use crate::tree_motion::{RISE, Timing, drawer_rows, reveal};
+pub use crate::tree_motion::{TreeFrame, TreeMotion};
 use nd_components::{
     BANNER, BannerProps, CommandPaletteProps, DecodeRequest, FieldSelection, ImageFit, PALETTE, PaletteKey,
     PaletteModel, SourceIndex, SourceTreeProps, TOAST, Toast, ToastOverlayProps, ToastQueue,
@@ -339,7 +343,8 @@ pub enum TreeInput {
     /// The disclosure: `true` asks to expand.
     Toggle(SharedString, bool),
     Action(SharedString, SharedString),
-    Hover(Option<SharedString>),
+    /// The pointer came onto a row (`true`) or left it.
+    Hover(SharedString, bool),
     /// A press on a row that drags, with its title and where in the window it landed.
     Press(nd_ui::DragItem, SharedString, gpui::Point<Pixels>),
     /// A row's bounds in the window, as just laid out, by its id.
@@ -357,11 +362,15 @@ pub struct Paint<'a> {
 }
 
 /// The drawn source tree: section headers, rows indented by depth with a disclosure, the
-/// badge and the trailing actions, and the empty state when there are no rows.
+/// badge and the trailing actions, and the empty state when there are no rows. With `motion`
+/// a folder opens and closes as a drawer, the selection slides between rows and the hover
+/// fades; without it every row is drawn at rest.
+#[allow(clippy::too_many_arguments)]
 pub fn source_tree_view(
     id: NodeId,
     props: &SourceTreeProps,
     hovered: Option<&SharedString>,
+    motion: Option<&TreeFrame>,
     compact: bool,
     on_input: Option<OnInput<TreeInput>>,
     art: &HashMap<SharedString, Arc<gpui::RenderImage>>,
@@ -375,6 +384,13 @@ pub fn source_tree_view(
     let adwaita = theme.preset == Preset::Adwaita;
     let subtle = with_alpha(theme.text.primary, if theme.is_dark() { 0.06 } else { 0.04 });
     let (regular, semibold) = (FontWeight::NORMAL, FontWeight::SEMIBOLD);
+    let gap = if fluent {
+        px(4.)
+    } else if adwaita {
+        px(2.)
+    } else {
+        px(1.)
+    };
     let mut list = div()
         .id(ElementId::Integer(id.0))
         .role(gpui::Role::Tree)
@@ -384,13 +400,7 @@ pub fn source_tree_view(
         .overflow_y_scroll()
         // NavigationViewItem: 36 px rows 4 px in from the pane's edge, 4 px apart.
         .p(if fluent { px(4.) } else { theme.spacing.sm })
-        .gap(if fluent {
-            px(4.)
-        } else if theme.preset == Preset::Adwaita {
-            px(2.)
-        } else {
-            px(1.)
-        })
+        .gap(gap)
         .text_size(theme.type_scale.body);
     if props.nodes.is_empty() {
         if let Some(empty) = &props.empty {
@@ -432,16 +442,59 @@ pub fn source_tree_view(
             .size_full(),
         )
     };
+    // libadwaita's sidebar rows: 36 px at the button radius.
+    let row_height = if fluent {
+        px(FLUENT_ROW)
+    } else if adwaita {
+        px(36.)
+    } else {
+        theme.control.regular
+    };
+    let pitch = (row_height + gap).as_f32();
+    let selected_fill = if fluent {
+        subtle
+    } else if adwaita {
+        with_alpha(theme.text.primary, theme.text.primary.a * 0.1)
+    } else {
+        theme.accent_container.bg
+    };
+    if let Some(m) = motion {
+        let timing = Timing { fast: theme.motion.fast.as_secs_f64(), normal: theme.motion.normal.as_secs_f64() };
+        for (i, node) in props.nodes.iter().enumerate() {
+            if index.expandable(&props.nodes, i) {
+                m.toggle(&node.id, node.expanded, drawer_rows(&index, &props.nodes, i), timing);
+            }
+        }
+    }
+    // A closing drawer keeps its rows until it has shut.
+    let visible = index
+        .visible_with(&props.nodes, |i| props.nodes[i].expanded || motion.is_some_and(|m| m.in_flight(&props.nodes[i].id)));
+    let held = rows_under(&visible);
+    if let Some(m) = motion
+        && props.selected.as_ref().is_some_and(|s| visible.iter().any(|&(i, _)| props.nodes[i].id == *s))
+    {
+        // The selection is one pill under the rows, so it can slide from row to row.
+        let (m, radius) = (m.clone(), theme.radius.md);
+        list = list.child(
+            gpui::canvas(|_, _, _| (), move |bounds, (), window, _| m.paint_pill(bounds, selected_fill, radius, window))
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full(),
+        );
+    }
+    let mut blocks = Blocks::new(motion, gap, pitch);
     let mut first = true;
-    for (i, depth) in index.visible(&props.nodes) {
+    for (at, &(i, depth)) in visible.iter().enumerate() {
         let node = &props.nodes[i];
+        blocks.close_to(depth);
         if node.section && compact {
             continue;
         }
         if node.section && fluent {
             // NavigationViewItemHeader: body text, semibold, secondary, on a row's height.
             marks.text(&node.title, theme.text.secondary, &[], body, semibold);
-            list = list.child(
+            blocks.push(
                 div()
                     .flex()
                     .flex_shrink_0()
@@ -450,7 +503,8 @@ pub fn source_tree_view(
                     .px(px(12.))
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(theme.text.secondary)
-                    .child(node.title.clone()),
+                    .child(node.title.clone())
+                    .into_any_element(),
             );
             continue;
         }
@@ -458,7 +512,7 @@ pub fn source_tree_view(
             // AdwSidebar's section header: `.heading` (bold, body size) in the text colour,
             // 12 px in from the pane and 12 px above and below, no top margin on the first.
             marks.text(&node.title, theme.text.primary, &[], body, FontWeight::BOLD);
-            list = list.child(
+            blocks.push(
                 div()
                     .flex_shrink_0()
                     .pt(if first { px(0.) } else { px(12.) })
@@ -468,7 +522,8 @@ pub fn source_tree_view(
                     .text_color(theme.text.primary)
                     .relative()
                     .child(node.title.clone())
-                    .children(report(&node.id)),
+                    .children(report(&node.id))
+                    .into_any_element(),
             );
             first = false;
             continue;
@@ -476,7 +531,7 @@ pub fn source_tree_view(
         first = false;
         if node.section {
             marks.text(&node.title, theme.text.secondary, &[], footnote, semibold);
-            list = list.child(
+            blocks.push(
                 div()
                     .flex_shrink_0()
                     .pt(theme.spacing.md)
@@ -487,7 +542,8 @@ pub fn source_tree_view(
                     .text_color(theme.text.secondary)
                     .relative()
                     .child(node.title.clone())
-                    .children(report(&node.id)),
+                    .children(report(&node.id))
+                    .into_any_element(),
             );
             continue;
         }
@@ -500,13 +556,6 @@ pub fn source_tree_view(
             (theme.accent_container.fg, theme.accent_container.fg.opacity(0.8))
         } else {
             (theme.text.primary, theme.text.secondary)
-        };
-        let selected_fill = if fluent {
-            subtle
-        } else if adwaita {
-            with_alpha(theme.text.primary, theme.text.primary.a * 0.1)
-        } else {
-            theme.accent_container.bg
         };
         // Dim text on a selected libadwaita row darkens just enough to keep 4.5:1 on the tint.
         let secondary = if selected && adwaita {
@@ -536,21 +585,21 @@ pub fn source_tree_view(
         let key = node.id.clone();
         // libadwaita's rows start 8 px in and keep no room for a disclosure they do not have.
         let disclosure_width = if adwaita && !expandable { px(0.) } else { theme.spacing.lg };
+        // How far the disclosure has turned towards open: with the drawer while it moves.
+        let turn = match motion {
+            Some(m) => m.turn(&node.id, node.expanded),
+            None if node.expanded => 1.,
+            None => 0.,
+        };
         let mut disclosure = div()
             .id(ElementId::Name(format!("{}-disclosure", node.id).into()))
             .flex_shrink_0()
             .w(disclosure_width)
             .text_color(secondary)
-            .child(if expandable { if node.expanded { "\u{25be}" } else { "\u{25b8}" } } else { "" });
+            .children(expandable.then(|| disclosure_triangle(turn, body, secondary)));
         if fluent {
-            // WinUI puts the expand chevron at the row's trailing edge.
-            let chevron = if cfg!(target_os = "windows") {
-                crate::fluent_icons::glyph(if node.expanded { '\u{E70E}' } else { '\u{E70D}' }, px(12.), secondary)
-                    .into_any_element()
-            } else {
-                let g = if node.expanded { Glyph::ChevronUp } else { Glyph::ChevronDown };
-                glyph(g, px(12.), secondary, px(1.))
-            };
+            // WinUI puts the expand chevron at the row's trailing edge, and turns it over to open.
+            let chevron = turned_glyph(Glyph::ChevronDown, Glyph::ChevronUp, turn * PI, px(12.), secondary, px(1.));
             disclosure = div()
                 .id(ElementId::Name(format!("{}-disclosure", node.id).into()))
                 .flex_shrink_0()
@@ -570,14 +619,6 @@ pub fn source_tree_view(
             .filter(|_| fluent)
             .and_then(|icon| icon_glyph(Some(icon)))
             .map(|g| div().flex_none().child(glyph(g, px(16.), fg, px(1.5))));
-        // libadwaita's sidebar rows: 36 px at the button radius.
-        let row_height = if fluent {
-            px(FLUENT_ROW)
-        } else if adwaita {
-            px(36.)
-        } else {
-            theme.control.regular
-        };
         // At the item's indentation: a child's pill sits in from its parent's.
         let pill = (fluent && selected).then(|| {
             div()
@@ -736,11 +777,26 @@ pub fn source_tree_view(
         if !compact && node.caption.is_some() && node.meter.is_some() {
             row = row.py(theme.spacing.xs + px(2.));
         }
+        let pointer = hovered == Some(&node.id);
+        // Live, the selection is the pill under the rows and the hover wash fades in and out.
+        let wash = |row: gpui::Stateful<gpui::Div>, hover: Hsla, on: bool| match motion {
+            Some(m) => {
+                let shown = m.hover(&node.id, on);
+                if shown > 0. { row.bg(with_alpha(hover, hover.a * shown)) } else { row }
+            }
+            None => row.hover(move |s| s.bg(hover)),
+        };
         if selected {
-            row = row.bg(selected_fill);
+            if motion.is_none() {
+                row = row.bg(selected_fill);
+            }
             if adwaita {
-                let hover = with_alpha(theme.text.primary, theme.text.primary.a * 0.13);
-                row = row.hover(move |s| s.bg(hover));
+                // 13% over the pill's 10%.
+                let hover = match motion {
+                    Some(_) => with_alpha(theme.text.primary, theme.text.primary.a * 0.033),
+                    None => with_alpha(theme.text.primary, theme.text.primary.a * 0.13),
+                };
+                row = wash(row, hover, pointer);
             }
         } else {
             let hover = if fluent {
@@ -750,7 +806,7 @@ pub fn source_tree_view(
             } else {
                 theme.hover(theme.surface.sidebar)
             };
-            row = row.hover(move |s| s.bg(hover));
+            row = wash(row, hover, pointer);
         }
         if fluent {
             // SubtleFillColorTertiary while pressed.
@@ -786,16 +842,201 @@ pub fn source_tree_view(
             row = row.on_mouse_up(MouseButton::Middle, move |_, window, cx| {
                 on_middle(TreeInput::Middle(middle_key.clone()), window, cx);
             });
-            if hover_only {
+            if hover_only || motion.is_some() {
                 row = row.on_hover(move |inside, window, cx| {
-                    on_input(TreeInput::Hover(inside.then(|| key.clone())), window, cx);
+                    on_input(TreeInput::Hover(key.clone(), *inside), window, cx);
                 });
             }
         }
-        list = list.child(row.children(report(&node.id)));
+        let place = motion.map(|m| {
+            let (m, id) = (m.clone(), node.id.clone());
+            let shown = blocks.shown();
+            gpui::canvas(
+                move |bounds, window, _| m.place(id.clone(), bounds, window.content_mask(), shown),
+                |_, (), _, _| {},
+            )
+            .absolute()
+            .top_0()
+            .left_0()
+            .size_full()
+        });
+        let row = row.children(report(&node.id)).children(place);
+        blocks.push_row(row);
+        if let Some(m) = motion
+            && let Some(shown) = m.drawer(&node.id)
+            && held[at] > 0
+        {
+            blocks.open(node.id.clone(), depth, shown, m.height(&node.id).unwrap_or(held[at] as f32 * pitch));
+        }
     }
-    list
+    list.children(blocks.finish())
 }
+
+/// For each visible row, how many rows follow it at a greater depth: what its drawer holds.
+fn rows_under(visible: &[(usize, usize)]) -> Vec<usize> {
+    let mut under = vec![0; visible.len()];
+    let mut open: Vec<usize> = Vec::new();
+    for (at, &(_, depth)) in visible.iter().enumerate() {
+        while let Some(&top) = open.last().filter(|&&top| visible[top].1 >= depth) {
+            under[top] = at - top - 1;
+            open.pop();
+        }
+        open.push(at);
+    }
+    for top in open {
+        under[top] = visible.len() - top - 1;
+    }
+    under
+}
+
+/// The rows of a source tree as they are built, the rows of each drawer in flight gathered
+/// into a box that clips them at its edge.
+struct Blocks<'a> {
+    motion: Option<&'a TreeFrame>,
+    gap: Pixels,
+    pitch: f32,
+    rows: Vec<AnyElement>,
+    open: Vec<Drawer>,
+}
+
+struct Drawer {
+    owner: SharedString,
+    depth: usize,
+    /// How far open, 0 to 1.
+    shown: f32,
+    /// Its height fully open.
+    height: f32,
+    rows: Vec<AnyElement>,
+    count: usize,
+}
+
+impl<'a> Blocks<'a> {
+    fn new(motion: Option<&'a TreeFrame>, gap: Pixels, pitch: f32) -> Self {
+        Self { motion, gap, pitch, rows: Vec::new(), open: Vec::new() }
+    }
+
+    fn reduce(&self) -> bool {
+        self.motion.is_some_and(TreeFrame::reduce)
+    }
+
+    /// How far the next row has faded in: rows fade in as their drawer's edge passes them, and
+    /// only fade with reduce motion.
+    fn shown(&self) -> f32 {
+        let reduce = self.reduce();
+        self.open
+            .iter()
+            .map(|d| {
+                if reduce {
+                    d.shown
+                } else {
+                    let top = self.gap.as_f32() + d.count as f32 * self.pitch;
+                    reveal(d.height * d.shown, top, self.pitch)
+                }
+            })
+            .fold(1., f32::min)
+    }
+
+    fn push(&mut self, element: AnyElement) {
+        for d in &mut self.open {
+            d.count += 1;
+        }
+        match self.open.last_mut() {
+            Some(d) => d.rows.push(element),
+            None => self.rows.push(element),
+        }
+    }
+
+    /// A row, faded in and risen to where its drawer's edge has got.
+    fn push_row(&mut self, row: gpui::Stateful<gpui::Div>) {
+        let shown = self.shown();
+        if shown >= 1. {
+            return self.push(row.into_any_element());
+        }
+        let row = row.opacity(shown).into_any_element();
+        let row = if self.reduce() {
+            row
+        } else {
+            crate::gestures::offset(row, point(px(0.), px(-RISE * (1. - shown))))
+        };
+        self.push(row);
+    }
+
+    fn open(&mut self, owner: SharedString, depth: usize, shown: f32, height: f32) {
+        self.open.push(Drawer { owner, depth, shown, height, rows: Vec::new(), count: 0 });
+    }
+
+    /// Shuts every drawer a row at `depth` is not inside.
+    fn close_to(&mut self, depth: usize) {
+        while self.open.last().is_some_and(|d| d.depth >= depth) {
+            self.close();
+        }
+    }
+
+    fn close(&mut self) {
+        let Some(d) = self.open.pop() else { return };
+        let gap = self.gap;
+        let measure = self.motion.map(|m| {
+            let (m, owner) = (m.clone(), d.owner.clone());
+            gpui::canvas(move |bounds, _, _| m.set_height(owner.clone(), bounds.size.height.as_f32()), |_, (), _, _| {})
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+        });
+        // The list's gap before the drawer moves inside it, so a shut drawer takes no room.
+        let inner = div().relative().flex_shrink_0().flex().flex_col().pt(gap).gap(gap).children(d.rows).children(measure);
+        let mut drawer = div().flex_shrink_0().flex().flex_col().overflow_hidden().mt(-gap);
+        if !self.reduce() {
+            drawer = drawer.h(px(d.height * d.shown));
+        }
+        let drawer = drawer.child(inner).into_any_element();
+        match self.open.last_mut() {
+            Some(outer) => outer.rows.push(drawer),
+            None => self.rows.push(drawer),
+        }
+    }
+
+    fn finish(mut self) -> Vec<AnyElement> {
+        while !self.open.is_empty() {
+            self.close();
+        }
+        self.rows
+    }
+}
+
+/// The disclosure triangle, pointing right when shut and turned `turn` of the way to pointing
+/// down, sized to sit where the body font's small triangle did.
+fn disclosure_triangle(turn: f32, size: Pixels, color: Hsla) -> AnyElement {
+    let size = size.as_f32();
+    gpui::canvas(
+        |_, _, _| (),
+        move |bounds, (), window, _| {
+            let center = point(bounds.origin.x + px(size * TRIANGLE_X), bounds.center().y);
+            let (sin, cos) = (turn * PI / 2.).sin_cos();
+            let at = |x: f32, y: f32| {
+                let (x, y) = (x * size, y * size);
+                center + point(px(x * cos - y * sin), px(x * sin + y * cos))
+            };
+            let (w, h) = (TRIANGLE_W / 2., TRIANGLE_H / 2.);
+            let mut path = gpui::PathBuilder::fill();
+            path.move_to(at(-w, -h));
+            path.line_to(at(w, 0.));
+            path.line_to(at(-w, h));
+            path.close();
+            if let Ok(path) = path.build() {
+                window.paint_path(path, color);
+            }
+        },
+    )
+    .w_full()
+    .h(px(size))
+    .into_any_element()
+}
+
+/// The small right-pointing triangle, in ems: its width, height and centre from the left.
+const TRIANGLE_W: f32 = 0.42;
+const TRIANGLE_H: f32 = 0.48;
+const TRIANGLE_X: f32 = 0.3;
 
 /// Window-wide pointer listeners for a press on a row of a tree whose rows drag: past
 /// [`DRAG_START`] the press becomes an nd drag ([`nd_ui::DragSource`]), which follows the pointer
@@ -1326,6 +1567,7 @@ pub(crate) struct TreeDrawn {
     pub onto: Option<gpui::Bounds<Pixels>>,
     /// Each row's artwork load, by id, while the row has artwork.
     pub art: HashMap<SharedString, Rc<RefCell<crate::media::image::Picture>>>,
+    pub motion: TreeMotion,
 }
 
 pub(crate) struct RowPress {
@@ -1733,15 +1975,18 @@ impl Build<'_> {
                 .entry(id)
                 .or_insert_with(|| Rc::new(RefCell::new(Drawn::Tree(TreeDrawn::default()))))
                 .clone();
-            let (hovered, slot, onto, preview) = match &*drawn.borrow() {
+            let (hovered, slot, onto, preview, motion) = match &*drawn.borrow() {
                 Drawn::Tree(t) => (
                     t.hovered.clone(),
                     t.slot,
                     t.onto,
                     t.press.as_ref().filter(|p| p.dragging).map(|p| (p.title.clone(), p.at - p.grab, p.width)),
+                    t.motion.clone(),
                 ),
-                _ => (None, None, None, None),
+                _ => (None, None, None, None, TreeMotion::default()),
             };
+            let reduce = self.backend.platform_reduce_motion() == Some(true);
+            let frame = motion.frame(&props.nodes, props.selected.as_ref(), self.time, reduce);
             let listener = props.drag_kind.is_some().then(|| row_drag_listener(&drawn, &emit, &wake));
             let art = self.source_art(&drawn, props, window, cx);
             let tree = drawn.clone();
@@ -1784,9 +2029,14 @@ impl Build<'_> {
                         emit.emit(SourceMenuRequested { node: id, id: row, x, y });
                     }
                     TreeInput::Middle(id) => emit.emit(SourceMiddleClicked { id }),
-                    TreeInput::Hover(row) => {
+                    TreeInput::Hover(row, inside) => {
                         if let Drawn::Tree(t) = &mut *drawn.borrow_mut() {
-                            t.hovered = row;
+                            // Entering the next row can come before leaving the last.
+                            if inside {
+                                t.hovered = Some(row);
+                            } else if t.hovered.as_ref() == Some(&row) {
+                                t.hovered = None;
+                            }
                         }
                         window.refresh();
                         return;
@@ -1800,11 +2050,15 @@ impl Build<'_> {
                 id,
                 props,
                 hovered.as_ref(),
+                Some(&frame),
                 self.in_hidden_sidebar(node),
                 Some(on_input),
                 &art,
                 paint,
             );
+            if motion.moving(self.time) {
+                window.request_animation_frame();
+            }
             return Some(
                 style
                     .child(self.scrolled(id, tree, crate::scrollbar::Fit::Fill, window))

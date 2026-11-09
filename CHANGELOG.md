@@ -10,6 +10,14 @@ and the one it moves to.
   is drawn, so press dips and hero transitions shrink and grow as on AppKit. GPUI gained
   `Window::with_element_scale` in nd's fork queue. Text and icons are sampled from their unscaled
   raster while scaled.
+- A drawn `source_tree` or `source_list` animates: a folder's rows open as a drawer over the
+  theme's fast to normal timing (150 to 250 ms on the macOS look, longer the more rows it shows,
+  on a cubic ease-out), each row fading in and rising 4 pt as the edge passes it, while the rows
+  below slide down and the disclosure turns; closing plays it back at 0.8 of the time before the
+  rows go. The selection slides from row to row as one pill on a stiff spring, and the hover fill
+  fades in fast and out slower. With reduce motion the rows only fade and the pill jumps. The
+  disclosure is now a drawn triangle, and Fluent's chevron turns instead of swapping (except
+  Segoe Fluent Icons on Windows, which swaps at halfway).
 - `WindowKind::Popup` opens a flyout for a tray or menu-bar icon: above other windows, without a
   title row, window controls or taskbar entry, at a fixed size, placed with `origin`. On Windows
   it is a rounded Acrylic tool window; on macOS a floating window with its buttons hidden.

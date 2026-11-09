@@ -16,7 +16,7 @@ const OUT: Duration = Duration::from_millis(150);
 const LEAVE: Duration = Duration::from_millis(250);
 const CURVE: Curve = Curve::Bezier(0.23, 1., 0.32, 1.);
 
-fn slowdown() -> f32 {
+pub(crate) fn slowdown() -> f32 {
     std::env::var("ND_ANIMATION_SLOWDOWN").ok().and_then(|v| v.parse::<f32>().ok()).filter(|v| *v >= 1.).unwrap_or(1.)
 }
 

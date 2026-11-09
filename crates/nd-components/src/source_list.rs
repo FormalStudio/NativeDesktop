@@ -593,9 +593,15 @@ impl SourceIndex {
     /// The rows on screen, in order, with their depth: children of collapsed rows are hidden.
     /// Section rows sit at depth 0 and their rows at depth 0 too, like Finder's sidebar.
     pub fn visible(&self, nodes: &[SourceNode]) -> Vec<(usize, usize)> {
+        self.visible_with(nodes, |i| nodes[i].expanded)
+    }
+
+    /// [`Self::visible`] with the children of every row `open` names shown, whatever its
+    /// `expanded` says: a backend keeps a collapsing row's children on screen while they close.
+    pub fn visible_with(&self, nodes: &[SourceNode], open: impl Fn(usize) -> bool) -> Vec<(usize, usize)> {
         let mut out = Vec::new();
         for &r in &self.roots {
-            self.walk(nodes, r, 0, &mut out);
+            self.walk(nodes, r, 0, &open, &mut out);
         }
         out
     }
@@ -633,12 +639,19 @@ impl SourceIndex {
         DropSlot { parent, index: if upper { at } else { at + 1 }, on: None }
     }
 
-    fn walk(&self, nodes: &[SourceNode], i: usize, depth: usize, out: &mut Vec<(usize, usize)>) {
+    fn walk(
+        &self,
+        nodes: &[SourceNode],
+        i: usize,
+        depth: usize,
+        open: &impl Fn(usize) -> bool,
+        out: &mut Vec<(usize, usize)>,
+    ) {
         out.push((i, depth));
-        if nodes[i].expanded {
+        if open(i) {
             let child_depth = if nodes[i].section { depth } else { depth + 1 };
             for &c in &self.children[i] {
-                self.walk(nodes, c, child_depth, out);
+                self.walk(nodes, c, child_depth, open, out);
             }
         }
     }
