@@ -9,6 +9,17 @@ and the one it moves to.
   secondary toolbar button's) showed brighter wherever its strokes crossed, as each stroke was
   its own translucent path; Lucide's round caps and joins now show too, where the paths drew
   square ends.
+- Container transforms. A hero now carries its source's look to its own as it flies: corner
+  radius, border width and colour and fill interpolate with its frame on the platform spring, so
+  a card's ring thins away as it grows into a page instead of staying as an outline. Elements
+  inside a hero can follow its flight with `.hero_part(HeroPart::Source | Destination)`: the
+  source's content keeps the source's size and fades out over the first 35% of the flight, the
+  destination's keeps its final size and fades in from 20% to 60%, so the container is never
+  empty, and closing (or turning around mid-flight) plays it back. In `presentation`,
+  `.hero_content()` marks a card's content inside the container and `.reveal_with(&state)`
+  inside a container is its destination; beside a shared element it fades as before. A hero
+  holding parts goes home at once on close instead of waiting for its surroundings to fade.
+  Reduce motion crossfades the container over its base without travel.
 - Reduce motion dissolves instead of jumping, as Apple's guidance asks. A move that would show
   (more than 12 points of offset, size or layout, or a tenth of a scale) fades out where it was
   and back in where it lands; a smaller one (a hover lift, a press dip) takes its place at once;

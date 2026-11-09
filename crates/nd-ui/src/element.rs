@@ -279,6 +279,8 @@ pub struct DivProps {
     /// A shared element: it travels from another element's frame when it mounts, and back to
     /// it while `away` (see [`Div::hero_from`]).
     pub hero: Option<HeroFrom>,
+    /// What it is to the hero it sits in (see [`Div::hero_part`]).
+    pub hero_part: Option<HeroPart>,
     /// Size changes are reported as [`Resized`].
     pub reports_size: bool,
     /// On its way out (see [`Div::exit_to`]): drawn, but it and everything in it take no
@@ -289,6 +291,35 @@ pub struct DivProps {
     pub glides: bool,
     /// The access key of the first control inside (`.access_key("S")`).
     pub access_key: Option<SharedString>,
+}
+
+/// What an element inside a hero shows of its flight (see [`Div::hero_part`]). Its opacity
+/// follows the hero's progress from source (0) to home (1), so the two never both show nothing:
+/// the source's content is gone by [`HeroPart::SOURCE_GONE`], the destination's comes in from
+/// [`HeroPart::DESTINATION_FROM`] to [`HeroPart::DESTINATION_IN`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HeroPart {
+    /// What the source shows (a card's title and preview): laid out at the source's size while
+    /// the hero flies, and fading out early in the flight.
+    Source,
+    /// What the hero shows at home (a detail view): laid out at the hero's size at home while it
+    /// flies, and fading in once the source's content is mostly gone.
+    Destination,
+}
+
+impl HeroPart {
+    pub const SOURCE_GONE: f32 = 0.35;
+    pub const DESTINATION_FROM: f32 = 0.2;
+    pub const DESTINATION_IN: f32 = 0.6;
+
+    /// Its opacity at `progress` from source (0) to home (1).
+    pub fn opacity(self, progress: f32) -> f32 {
+        let ramp = |from: f32, to: f32| ((progress - from) / (to - from)).clamp(0., 1.);
+        match self {
+            HeroPart::Source => 1. - ramp(0., Self::SOURCE_GONE),
+            HeroPart::Destination => ramp(Self::DESTINATION_FROM, Self::DESTINATION_IN),
+        }
+    }
 }
 
 /// Where a hero element travels from and back to: the element keyed `id`.
@@ -361,6 +392,7 @@ pub struct Div {
     group_hover: Option<(SharedString, StyleRefinement)>,
     active: Option<Pose>,
     hero: Option<HeroFrom>,
+    hero_part: Option<HeroPart>,
     reports_size: bool,
     motion: Option<MotionSpec>,
     drag: crate::drag::DragSpec,
@@ -414,6 +446,7 @@ impl Div {
             group_hover: None,
             active: None,
             hero: None,
+            hero_part: None,
             reports_size: false,
             motion: None,
             drag: crate::drag::DragSpec::default(),
@@ -540,6 +573,17 @@ impl Div {
         if self.motion.is_none() {
             self.motion = Some(MotionSpec::new(Animation::natural()));
         }
+        self
+    }
+
+    /// Makes the element part of the hero it sits in, a container transform: the hero morphs
+    /// from its source's look (corner radius, border, fill) to its own while it flies, and this
+    /// element follows the flight. Pin it to the hero's top-left (`absolute().top_0().left_0()`);
+    /// in flight it keeps the size it has at its end of the flight, so nothing in it reflows
+    /// while the hero clips it, and its opacity follows [`HeroPart::opacity`] in place of its
+    /// own. Outside a hero it shows as it is.
+    pub fn hero_part(mut self, part: HeroPart) -> Self {
+        self.hero_part = Some(part);
         self
     }
 
@@ -800,6 +844,7 @@ impl IntoElement for Div {
                 group_hover: self.group_hover,
                 active: self.active,
                 hero: self.hero,
+                hero_part: self.hero_part,
                 reports_size: self.reports_size,
                 inert: false,
                 glides: self.motion.as_ref().is_some_and(|m| m.layout.is_some()),

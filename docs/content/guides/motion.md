@@ -186,13 +186,38 @@ The element shows nothing on its first frame, while its own frame is laid out. T
 the source for the fast pace and travels. With reduce motion on, it fades in where it lands, and
 going back it fades out where it is.
 
+A hero also takes on its source's look and grows into its own: a uniform corner radius, border
+width, border colour and solid fill interpolate on the same spring as the frame (premultiplied,
+so a fill or border it does not have fades away rather than greying). The source's look is
+read from the element keyed `id` as it shows when the flight starts, hover style included.
+
+### Container transforms
+
+A hero that holds a view is a container transform, Material's container transform and Apple's
+zoom transition: a card opening into its detail. Pin what it holds to its top-left and mark it
+`.hero_part(..)`:
+
+- `HeroPart::Source`, the card's own content (its title and preview), is laid out at the
+  source's size inside its border while the hero flies, so it rides along without reflowing,
+  and fades out over the first 35% of the flight.
+- `HeroPart::Destination`, the detail, is laid out at the size it has at home, so it is laid out
+  once while the container clips it, and fades in from 20% to 60% of the flight.
+
+The two overlap, so at no frame does the container show nothing. Their opacity follows the
+hero's progress, not a clock: going back plays the same in reverse, and a hero turned around
+mid-flight takes its parts with it. A part's own opacity is replaced while it sits in a hero.
+Give the hero its size in points and `overflow_hidden()`, and keep the parts transparent: the
+hero's fill is the surface. Under reduce motion nothing travels; the hero fades in over its
+base with the destination shown, and back out.
+
 ## Presentations
 
 `presentation` shows a view over a region: an expanded player over the page, a detail over its
 list. The view keeps a `Presentation` handle and opens or closes it. The base stays mounted, so
 it keeps its scroll position, and is hidden while the presentation covers it.
 
-The motion is built around a hero inside the content, `away` set from `is_closing()`. Opening,
+The motion is built around a hero inside the content, `away` set from `is_closing()`. With a
+shared element (the artwork of an expanded player), opening,
 the backdrop fades in on the platform spring while the hero travels out of its source, and the
 rest of the content, marked `.reveal_with(&state)`, fades in once the hero has landed
 (`Pace::Settled`). Closing runs backwards: the revealed content fades first, then the hero
@@ -200,6 +225,28 @@ travels home while the backdrop fades out with it (`Pace::Exit`). The hero is ne
 transparent and nothing draws over it in flight. Closing mid-open turns everything around from
 where it is. With reduce motion on, the backdrop, the hero and the revealed content fade
 together, a crossfade from the base to the presentation and back.
+
+With a container (a card opening into its detail) the content is the hero itself: give it the
+detail's surface, put the card's content in it marked `.hero_content()` and the detail marked
+`.reveal_with(&state)`. The container grows out of the card, its ring and corners easing into
+the detail's, while the card's content fades out and the detail fades in, and closing runs it
+back into the card from wherever it is.
+
+```rust
+presentation("note", &self.presented).base(grid).content(
+    div()
+        .absolute()
+        .top_0()
+        .left_0()
+        .w(px(width))
+        .h(px(height))
+        .bg(theme.surface.raised)
+        .overflow_hidden()
+        .hero_with(&self.presented, card_frame_id)
+        .child(note_page(&theme, &note).hero_content())
+        .child(div().absolute().top_0().left_0().size_full().reveal_with(&self.presented).child(editor)),
+)
+```
 
 ```rust
 // In the view: self.expanded = Presentation::new();

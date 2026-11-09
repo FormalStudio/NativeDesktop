@@ -505,6 +505,92 @@ mod gate_m6 {
         assert!((seen.last().expect("frames") - shut).abs() <= 1., "lands on the shut layout: {seen:?}");
     }
 
+    /// A card opening into its detail and closing back, frame by frame as GPUI paints it: every
+    /// frame shows the card's content or the detail, and the card's ring is gone once open.
+    pub fn gpui_container_transform_never_shows_an_empty_container() {
+        if nd_gpui::gpui_platform::current_headless_renderer().ok().flatten().is_none() {
+            println!("skipped: GPUI has no headless renderer on this OS");
+            return;
+        }
+        unsafe { std::env::set_var("ND_ANIMATION_SLOWDOWN", "4") };
+        let mut cx = headless();
+        type Slot = Rc<RefCell<Option<(WindowId, Entity<Zoom>)>>>;
+        let opened: Slot = Rc::default();
+        let o = opened.clone();
+        let host = cx.update(|cx| {
+            GpuiHost::builder().quit_when_empty(false).start(cx, move |app| {
+                let handle = app.open_window(WindowOptions::main("zoom").size(size(px(400.), px(400.))), |_, cx| {
+                    cx.new(|_| Zoom { detail: Presentation::new() })
+                });
+                *o.borrow_mut() = Some((handle.id(), handle.root().clone()));
+            })
+        });
+        settle(&mut cx, &host);
+        let (window, view) = opened.borrow_mut().take().expect("window");
+        // Pixels of the card's content (red), the detail (blue) and the card's ring (green).
+        let inks = |host: &GpuiHost| {
+            let capture = host.job(|app| app.capture(window)).expect("capture");
+            let image = image::load_from_memory(&capture.png).expect("png").to_rgba8();
+            let mut count = [0usize; 3];
+            for p in image.pixels() {
+                let [r, g, b, _] = p.0.map(i32::from);
+                for (i, (c, o1, o2)) in [(r, g, b), (b, r, g), (g, r, b)].into_iter().enumerate() {
+                    if c > o1 + 30 && c > o2 + 30 {
+                        count[i] += 1;
+                    }
+                }
+            }
+            count
+        };
+        let frames = |cx: &mut HeadlessAppContext, until: &dyn Fn(&HeadlessAppContext) -> bool| {
+            let mut seen = Vec::new();
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            while std::time::Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(16));
+                cx.update(|cx| {
+                    host.pump(cx);
+                    host.draw(cx);
+                });
+                cx.run_until_parked();
+                seen.push(inks(&host));
+                if until(cx) && seen.len() > 3 && seen.iter().rev().take(3).all(|s| *s == seen[seen.len() - 1]) {
+                    break;
+                }
+            }
+            seen
+        };
+        let rest = inks(&host);
+        assert!(rest[2] > 100, "the card's ring shows: {rest:?}");
+        let toggle = |cx: &mut HeadlessAppContext, to: bool| {
+            cx.update(|cx| {
+                host.update(cx, |app| {
+                    view.update(app, |v, cx| {
+                        v.detail.set_open(to);
+                        cx.notify();
+                    })
+                })
+            });
+        };
+        toggle(&mut cx, true);
+        let opening = frames(&mut cx, &|_| true);
+        for (i, [face, detail, _]) in opening.iter().enumerate() {
+            assert!(face + detail > 20, "frame {i} of the open shows nothing in the container: {opening:?}");
+        }
+        let open = *opening.last().expect("frames");
+        assert_eq!(open[0], 0, "the card's content is gone: {open:?}");
+        assert!(open[1] > 1000, "the detail shows: {open:?}");
+        assert_eq!(open[2], 0, "no ring lingers over the open page: {open:?}");
+        assert!(opening.iter().any(|s| s[0] > 20 && s[1] == 0), "the card's content rides out first: {opening:?}");
+
+        toggle(&mut cx, false);
+        let closing = frames(&mut cx, &|_| true);
+        for (i, [face, detail, _]) in closing.iter().enumerate() {
+            assert!(face + detail > 20, "frame {i} of the close shows nothing in the container: {closing:?}");
+        }
+        let shut = *closing.last().expect("frames");
+        assert!(shut[0] > 20 && shut[2] > 100 && shut[1] == 0, "back on the card: {shut:?}");
+    }
+
     pub fn gpui_nav_goldens() {
         // GPUI renders headless only on macOS (Metal) and Linux (wgpu); Windows captures arrive
         // with the Fluent goldens (M3).
@@ -684,6 +770,48 @@ impl Render for Sources {
             .on_middle_click(move |e: &SourceMiddleClicked, _, _| {
                 middle_log.borrow_mut().activated.push(format!("middle {}", e.id));
             })
+    }
+}
+
+/// A card with a red block for content that opens into a detail with a blue block.
+struct Zoom {
+    detail: Presentation,
+}
+
+impl Render for Zoom {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        let white = hsla(0., 0., 1., 1.);
+        let block = |w: f32, h: f32, hue: f32| div().w(px(w)).h(px(h)).bg(hsla(hue, 1., 0.45, 1.));
+        let grid = div().size_full().bg(white).child(
+            div()
+                .id("card")
+                .absolute()
+                .left(px(40.))
+                .top(px(240.))
+                .w(px(120.))
+                .h(px(100.))
+                .rounded(px(20.))
+                .border(px(5.))
+                .border_color(hsla(1. / 3., 1., 0.35, 1.))
+                .bg(white)
+                .child(div().p(px(16.)).child(block(40., 20., 0.))),
+        );
+        let container = div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .w(px(400.))
+            .h(px(400.))
+            .bg(white)
+            .overflow_hidden()
+            .hero_with(&self.detail, "card")
+            .child(div().p(px(16.)).child(block(40., 20., 0.)).hero_content())
+            .child(div().absolute().top_0().left_0().size_full().p(px(40.)).reveal_with(&self.detail).child(block(
+                200.,
+                60.,
+                2. / 3.,
+            )));
+        presentation("zoom", &self.detail).base(grid).content(container)
     }
 }
 
@@ -916,9 +1044,10 @@ fn main() {
             "gate_m6::gpui_source_list_overflow_scrolls_instead_of_squashing",
             gate_m6::gpui_source_list_overflow_scrolls_instead_of_squashing,
         ),
+        ("gate_m6::gpui_tree_expand_settles_on_the_open_layout", gate_m6::gpui_tree_expand_settles_on_the_open_layout),
         (
-            "gate_m6::gpui_tree_expand_settles_on_the_open_layout",
-            gate_m6::gpui_tree_expand_settles_on_the_open_layout,
+            "gate_m6::gpui_container_transform_never_shows_an_empty_container",
+            gate_m6::gpui_container_transform_never_shows_an_empty_container,
         ),
         ("gate_m6::gpui_nav_goldens", gate_m6::gpui_nav_goldens),
     ];

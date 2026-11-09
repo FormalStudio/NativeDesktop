@@ -13,7 +13,9 @@
 use std::time::Duration;
 
 use nd_gesture::{Spring, SpringMotion};
-use nd_gpui::gpui::{AbsoluteLength, DefiniteLength, Length, Pixels, StyleRefinement, px};
+use nd_gpui::gpui::{
+    AbsoluteLength, DefiniteLength, Hsla, Length, Pixels, Rgba, StyleRefinement, px, solid_background,
+};
 
 /// An easing curve for a timed animation.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -297,17 +299,39 @@ impl MotionSpec {
     }
 }
 
-const CHANNELS: usize = 6;
-const OPACITY: usize = 0;
+pub(crate) const CHANNELS: usize = 17;
+pub(crate) const OPACITY: usize = 0;
 const OFFSET_X: usize = 1;
 const OFFSET_Y: usize = 2;
 const SCALE: usize = 3;
 const WIDTH: usize = 4;
 const HEIGHT: usize = 5;
+/// A hero's look, which it carries from its source's to its own: corner radius and border
+/// width in points, fill and border colour as premultiplied RGBA.
+const RADIUS: usize = 6;
+pub(crate) const BORDER: usize = 7;
+const FILL: usize = 8;
+const STROKE: usize = 12;
+/// A hero's flight: 0 on its source, 1 at home. What it holds follows it (see
+/// [`crate::HeroPart`]).
+pub(crate) const PROGRESS: usize = 16;
+/// How far into a hero's flight its source's border has gone.
+const BORDER_GONE: f64 = 0.5;
+/// The channels that move the element, which reduce motion dissolves or jumps.
+fn geometry() -> std::ops::RangeInclusive<usize> {
+    OFFSET_X..=HEIGHT
+}
 
 /// The animatable values of one element: `None` where the element has none to animate (a
-/// size that is not a length in points).
+/// size that is not a length in points, a look on an element that is not a hero).
 pub(crate) type Values = [Option<f64>; CHANNELS];
+
+/// Values with only `channel` set.
+pub(crate) fn only(channel: usize, value: f64) -> Values {
+    let mut out = [None; CHANNELS];
+    out[channel] = Some(value);
+    out
+}
 
 fn px_of(length: Option<Length>) -> Option<f64> {
     match length? {
@@ -318,14 +342,62 @@ fn px_of(length: Option<Length>) -> Option<f64> {
 
 /// The values a div's props and layout style give it.
 pub(crate) fn values(style: &StyleRefinement, transform: &Transform) -> Values {
-    [
-        Some(f64::from(style.opacity.unwrap_or(1.))),
-        Some(f64::from(transform.offset.0)),
-        Some(f64::from(transform.offset.1)),
-        Some(f64::from(transform.scale)),
-        px_of(style.size.width),
-        px_of(style.size.height),
-    ]
+    let mut out = only(OPACITY, f64::from(style.opacity.unwrap_or(1.)));
+    out[OFFSET_X] = Some(f64::from(transform.offset.0));
+    out[OFFSET_Y] = Some(f64::from(transform.offset.1));
+    out[SCALE] = Some(f64::from(transform.scale));
+    out[WIDTH] = px_of(style.size.width);
+    out[HEIGHT] = px_of(style.size.height);
+    out
+}
+
+/// One length for all four corners or sides, in points: `None` when they differ.
+fn uniform(lengths: [Option<f64>; 4]) -> Option<f64> {
+    lengths.iter().all(|l| *l == lengths[0]).then_some(lengths[0].unwrap_or(0.))
+}
+
+fn absolute_px(length: Option<AbsoluteLength>) -> Option<f64> {
+    match length? {
+        AbsoluteLength::Pixels(p) => Some(f64::from(p.as_f32())),
+        AbsoluteLength::Rems(_) => None,
+    }
+}
+
+fn premultiplied(color: Option<Hsla>) -> [f64; 4] {
+    let Some(color) = color else { return [0.; 4] };
+    let c = Rgba::from(color);
+    let a = f64::from(c.a);
+    [f64::from(c.r) * a, f64::from(c.g) * a, f64::from(c.b) * a, a]
+}
+
+fn unpremultiplied(values: &Values, at: usize) -> Option<Hsla> {
+    let [r, g, b, a] = [0, 1, 2, 3].map(|i| values[at + i].unwrap_or(0.).clamp(0., 1.));
+    if a <= 1e-3 {
+        return None;
+    }
+    let channel = |v: f64| (v / a).clamp(0., 1.) as f32;
+    Some(Hsla::from(Rgba { r: channel(r), g: channel(g), b: channel(b), a: a as f32 }))
+}
+
+/// `values` with a hero's look added from `style`, the one it shows at rest: no radius, border
+/// or fill where it sets none. Corners or sides that differ keep their own. `radius_cap` bounds
+/// the radius to half the element's shorter side when that is known, as backends draw it.
+pub(crate) fn with_look(mut values: Values, style: &StyleRefinement, radius_cap: Option<f64>) -> Values {
+    let r = &style.corner_radii;
+    values[RADIUS] = uniform([r.top_left, r.top_right, r.bottom_right, r.bottom_left].map(absolute_px))
+        .map(|r| radius_cap.map_or(r, |cap| r.min(cap)));
+    let b = &style.border_widths;
+    values[BORDER] = uniform([b.top, b.right, b.bottom, b.left].map(absolute_px));
+    let fill = style.background.as_ref().and_then(|f| f.color()).and_then(|b| b.as_solid());
+    let solid = style.background.is_none() || fill.is_some();
+    for (i, v) in premultiplied(fill).into_iter().enumerate() {
+        values[FILL + i] = solid.then_some(v);
+    }
+    for (i, v) in premultiplied(style.border_color).into_iter().enumerate() {
+        values[STROKE + i] = Some(v);
+    }
+    values[PROGRESS] = Some(1.);
+    values
 }
 
 /// `style` and `transform` with `values` in place of their own.
@@ -347,6 +419,26 @@ pub(crate) fn present(style: &mut StyleRefinement, transform: &mut Transform, va
     }
     if let Some(h) = values[HEIGHT] {
         style.size.height = Some(px(h.max(0.) as f32).into());
+    }
+    if let Some(r) = values[RADIUS] {
+        let r = Some(px(r.max(0.) as f32).into());
+        style.corner_radii.top_left = r;
+        style.corner_radii.top_right = r;
+        style.corner_radii.bottom_right = r;
+        style.corner_radii.bottom_left = r;
+    }
+    if let Some(w) = values[BORDER] {
+        let w = Some(px(w.max(0.) as f32).into());
+        style.border_widths.top = w;
+        style.border_widths.right = w;
+        style.border_widths.bottom = w;
+        style.border_widths.left = w;
+    }
+    if values[FILL + 3].is_some() {
+        style.background = unpremultiplied(values, FILL).map(|c| solid_background(c).into());
+    }
+    if values[STROKE + 3].is_some() {
+        style.border_color = Some(unpremultiplied(values, STROKE).unwrap_or_default());
     }
 }
 
@@ -444,11 +536,11 @@ impl Motion {
     }
 }
 
-/// How close a channel must come to rest: a hundredth of opacity, a tenth of a point.
+/// How close a channel must come to rest: a fraction of opacity or colour, a tenth of a point.
 fn epsilon(channel: usize) -> f64 {
     match channel {
-        OPACITY => 0.002,
-        SCALE => 0.001,
+        OPACITY | FILL..PROGRESS => 0.002,
+        SCALE | PROGRESS => 0.001,
         _ => 0.1,
     }
 }
@@ -487,14 +579,11 @@ impl MotionState {
     pub fn new(spec: MotionSpec, targets: Values, now: f64, reduce: bool) -> Self {
         let mut state = MotionState { animation: spec.animation, targets, motions: [None; CHANNELS] };
         if let Some(pose) = spec.enter {
-            let from: Values = [
-                pose.opacity.map(f64::from),
-                pose.offset.map(|o| f64::from(o.0)),
-                pose.offset.map(|o| f64::from(o.1)),
-                pose.scale.map(f64::from),
-                None,
-                None,
-            ];
+            let mut from: Values = [None; CHANNELS];
+            from[OPACITY] = pose.opacity.map(f64::from);
+            from[OFFSET_X] = pose.offset.map(|o| f64::from(o.0));
+            from[OFFSET_Y] = pose.offset.map(|o| f64::from(o.1));
+            from[SCALE] = pose.scale.map(f64::from);
             state.start_from(&from, now, reduce);
         }
         state
@@ -537,7 +626,7 @@ impl MotionState {
         self.animation = animation;
         let mut switch = None;
         if reduce {
-            let travels = (OFFSET_X..CHANNELS).any(|c| match (self.current(c, now), targets[c]) {
+            let travels = geometry().any(|c| match (self.current(c, now), targets[c]) {
                 (Some((from, _)), Some(to)) if targets[c] != self.targets[c] => {
                     shows(c, from, to) || self.holding(c, now)
                 }
@@ -646,7 +735,7 @@ impl MotionState {
         let mut from = *from;
         if reduce
             && from[OPACITY].is_none()
-            && (OFFSET_X..CHANNELS).any(|c| matches!((from[c], self.targets[c]), (Some(f), Some(t)) if f != t))
+            && geometry().any(|c| matches!((from[c], self.targets[c]), (Some(f), Some(t)) if f != t))
         {
             from[OPACITY] = Some(0.);
         }
@@ -660,12 +749,31 @@ impl MotionState {
         }
     }
 
-    /// The values to show at `now`.
+    /// The values to show at `now`. A hero's border leaves faster than the rest of its look:
+    /// a source's ring is gone by [`BORDER_GONE`] of the flight, so it never shows as an outline
+    /// around a container that has nearly grown into its own look.
     pub fn sample(&self, now: f64) -> Values {
         let mut out = self.targets;
         for (c, motion) in self.motions.iter().enumerate() {
             if let Some(m) = motion {
                 out[c] = Some(m.sample(now).0);
+            }
+        }
+        if let Some(p) = out[PROGRESS].filter(|_| self.is_flying()) {
+            // A look channel sits a share 1 - p of the way from home to the source, which is
+            // (1 - p) of its distance to the target going home and p of it going back. The
+            // border's share is 1 - k instead, nothing from `BORDER_GONE` on.
+            let k = (p / BORDER_GONE).min(1.);
+            let home = self.targets[PROGRESS].is_some_and(|t| t > 0.5);
+            let scale = match home {
+                true if p < 1. - 1e-6 => (1. - k) / (1. - p),
+                false if p > 1e-6 => k / p,
+                _ => 0.,
+            };
+            for c in [BORDER, STROKE, STROKE + 1, STROKE + 2, STROKE + 3] {
+                if let (Some(v), Some(t)) = (out[c], self.targets[c]) {
+                    out[c] = Some(t + (v - t) * scale);
+                }
             }
         }
         out
@@ -686,6 +794,11 @@ impl MotionState {
         self.motions.iter().any(Option::is_some)
     }
 
+    /// A hero between its source and home.
+    pub fn is_flying(&self) -> bool {
+        self.motions[PROGRESS].is_some()
+    }
+
     #[cfg(test)]
     fn target(&self, c: usize) -> Option<f64> {
         self.motions[c].map(|m| m.target())
@@ -701,7 +814,11 @@ mod tests {
     }
 
     fn opacity(v: f64) -> Values {
-        [Some(v), Some(0.), Some(0.), Some(1.), None, None]
+        let mut out = only(OPACITY, v);
+        out[OFFSET_X] = Some(0.);
+        out[OFFSET_Y] = Some(0.);
+        out[SCALE] = Some(1.);
+        out
     }
 
     #[test]
@@ -854,7 +971,9 @@ mod tests {
         assert_eq!(v[WIDTH], Some(100.));
         assert_eq!(v[HEIGHT], None);
         let mut t = Transform::default();
-        present(&mut style, &mut t, &[Some(0.5), Some(3.), Some(4.), Some(2.), Some(50.), None]);
+        let mut v = opacity(0.5);
+        (v[OFFSET_X], v[OFFSET_Y], v[SCALE], v[WIDTH]) = (Some(3.), Some(4.), Some(2.), Some(50.));
+        present(&mut style, &mut t, &v);
         assert_eq!(style.opacity, Some(0.5));
         assert_eq!(t, Transform { offset: (3., 4.), scale: 2. });
         assert_eq!(px_of(style.size.width), Some(50.));
