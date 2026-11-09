@@ -29,6 +29,7 @@ mod reveal;
 mod rich;
 mod scrollbar;
 mod split;
+mod tree_motion;
 pub mod status;
 pub mod tab_bar;
 mod virtual_list;

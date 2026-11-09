@@ -20,6 +20,8 @@ The Gallery shows one page per component. Select a component in its source list,
   filtering. Each keystroke reports the query. On macOS, it's a glass card over the window.
 - `source_list` and `source_tree`: sections of items with icons, badges, and per-row actions. On
   macOS, they're an `NSOutlineView` in source-list style, so open branches survive updates.
+  Drawn, a folder opens and closes as a drawer and the selection slides between rows (see
+  [Motion](../guides/motion.md#source-lists)).
   `.meter(0.62)` on an item draws a capacity bar under its title, as Files shows a volume's used
   space. The bar spans the row's text column from the title's start, with the badge and actions
   on the title's line, so every meter in a list has the same length. macOS's sidebar has no such

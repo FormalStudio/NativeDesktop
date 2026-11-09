@@ -20,3 +20,4 @@
 0018-gpui_windows-leave-a-caption-press-to-DefWindowProc.patch
 0019-gpui_linux-give-a-wayland-window-that-is-not-resizab.patch
 0020-gpui_linux-tag-wayland-toplevels-with-xdg-toplevel-t.patch
+0021-gpui-scale-an-element-subtree-with-Window-with_eleme.patch

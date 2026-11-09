@@ -537,9 +537,11 @@ impl<'a> Build<'a> {
                 let element = self.painted(id, own.or(surface), props.style.text.color, "view", || {
                     self.view(id, props, surface, children(window, cx), window)
                 });
-                // GPUI has no element transforms: the offset moves the painted element, a scale
-                // is drawn unscaled.
+                // Scaled about its own centre, then moved by the offset, as CSS's
+                // `translate() scale()` with a centred origin.
                 let (x, y) = props.transform.offset;
+                let scale = props.transform.scale;
+                let element = if scale == 1. { element } else { crate::gestures::scale(element, scale) };
                 let element = if (x, y) == (0., 0.) {
                     element
                 } else {
@@ -552,7 +554,7 @@ impl<'a> Build<'a> {
                 }
                 // A hero in flight crosses what is drawn after it (the player bar under an
                 // expanded player), so it paints over the window's content until it lands.
-                if props.hero.is_some() && (x, y) != (0., 0.) {
+                if props.hero.is_some() && ((x, y) != (0., 0.) || scale != 1.) {
                     return gpui::deferred(element).with_priority(crate::overlay::HERO_PRIORITY).into_any_element();
                 }
                 element
