@@ -2,6 +2,7 @@
 //! offset and scaled elements and tile grid tiles included; text cut to one line ends in an
 //! ellipsis and clamped text keeps its lines; corners of different radii round each corner; a
 //! right click on a source tree row asks for that row's menu and leaves the selection alone; a
+//! control-click or right click on a card's content asks for the card's menu, not its tap; a
 //! card casts its shadow, clipped or not, and dips while a press on it is held.
 //! Prints `ND_NOTES_GAPS_OK`.
 
@@ -25,7 +26,7 @@ mod gaps {
     use nd_backend_appkit::objc2::rc::Retained;
     use nd_backend_appkit::objc2_app_kit::NSView;
     use nd_backend_appkit::objc2_foundation::NSPoint;
-    use nd_components::{source_node, source_tree, tile, tile_grid};
+    use nd_components::{SubtreeOverrides, source_node, source_tree, tile, tile_grid};
     use nd_ui::prelude::*;
 
     pub use rig::{Checks, Rig};
@@ -40,6 +41,7 @@ mod gaps {
         cut_text(&rig, &mut c);
         corners(&rig, &mut c);
         row_menus(&rig, &mut c);
+        inner_menus(&rig, &mut c);
         shadows_and_presses(&rig, &mut c);
         hero_first_frame(&rig, &mut c);
         if c.0 == 0 {
@@ -248,6 +250,71 @@ mod gaps {
         let _ = outline.menuForEvent(&press(NSEventType::LeftMouseDown, NSEventModifierFlags::Control));
         rig.pump();
         c.check(asked.borrow().len() == 2, "row menu: a control-click asks too");
+        rig.close(opened);
+    }
+
+    struct MenuCard {
+        asked: Rc<std::cell::Cell<usize>>,
+        tapped: Rc<std::cell::Cell<usize>>,
+    }
+
+    impl Render for MenuCard {
+        fn render(&mut self, _w: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            let (asked, tapped) = (self.asked.clone(), self.tapped.clone());
+            div().id("tile").size(px(200.)).on_tap(move |_: &TapEvent, _, _| tapped.set(tapped.get() + 1)).child(
+                div()
+                    .id("face")
+                    .size_full()
+                    .context_menu(move |menu, _, _| {
+                        asked.set(asked.get() + 1);
+                        menu
+                    })
+                    .child(div().id("inner").size(px(100.)).bg(hsla(0., 0., 0.5, 1.)).child(text("Groceries"))),
+            )
+        }
+    }
+
+    /// A press on a card's content: the content has no menu of its own, so a control-click asks
+    /// the card's, where the tile around would otherwise take it as a tap.
+    fn inner_menus(rig: &Rig, c: &mut Checks) {
+        use nd_backend_appkit::objc2_app_kit::{NSEvent, NSEventModifierFlags, NSEventType};
+        use nd_backend_appkit::objc2_foundation::NSProcessInfo;
+        let (asked, tapped) = (Rc::new(std::cell::Cell::new(0)), Rc::new(std::cell::Cell::new(0)));
+        let (a, t) = (asked.clone(), tapped.clone());
+        let opened = rig.open("menu card", move |_| MenuCard { asked: a, tapped: t });
+        let win = opened.id();
+        rig.pump();
+        let inner = rig.view(win, "inner");
+        let at = inner.convertPoint_toView(NSPoint::new(10., 10.), None);
+        let event = |kind, flags| {
+            NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
+                kind,
+                at,
+                flags,
+                NSProcessInfo::processInfo().systemUptime(),
+                opened.window.windowNumber(),
+                None,
+                0,
+                1,
+                1.,
+            )
+            .expect("mouse event")
+        };
+        let control = NSEventModifierFlags::Control;
+        inner.mouseDown(&event(NSEventType::LeftMouseDown, control));
+        inner.mouseUp(&event(NSEventType::LeftMouseUp, control));
+        settle(rig);
+        c.check(
+            asked.get() == 1 && tapped.get() == 0,
+            &format!(
+                "inner menu: a control-click asks for the card's menu ({} asked, {} tapped)",
+                asked.get(),
+                tapped.get()
+            ),
+        );
+        inner.rightMouseDown(&event(NSEventType::RightMouseDown, NSEventModifierFlags::empty()));
+        settle(rig);
+        c.check(asked.get() == 2, &format!("inner menu: so does a right click ({} asked)", asked.get()));
         rig.close(opened);
     }
 
