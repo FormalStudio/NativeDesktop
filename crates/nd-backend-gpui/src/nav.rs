@@ -392,6 +392,8 @@ pub fn source_tree_view(
     } else {
         px(1.)
     };
+    // NavigationViewItem: 36 px rows 4 px in from the pane's edge, 4 px apart.
+    let pad = if fluent { px(4.) } else { theme.spacing.sm };
     let mut list = div()
         .id(ElementId::Integer(id.0))
         .role(gpui::Role::Tree)
@@ -400,8 +402,7 @@ pub fn source_tree_view(
         .w_full()
         // A list that fits its rows takes their height and has nothing to scroll.
         .when(!props.fit_rows, |l| l.h_full().overflow_y_scroll())
-        // NavigationViewItem: 36 px rows 4 px in from the pane's edge, 4 px apart.
-        .p(if fluent { px(4.) } else { theme.spacing.sm })
+        .p(pad)
         .gap(gap)
         .text_size(theme.type_scale.body);
     if props.nodes.is_empty() {
@@ -475,14 +476,19 @@ pub fn source_tree_view(
     if let Some(m) = motion
         && props.selected.as_ref().is_some_and(|s| visible.iter().any(|&(i, _)| props.nodes[i].id == *s))
     {
-        // The selection is one pill under the rows, so it can slide from row to row.
+        // The selection is one pill under the rows, so it can slide from row to row. Its canvas
+        // is an empty point at the content's corner: GPUI scrolls a list as far as its children
+        // reach, and a canvas over the padding would leave a list that fits something to scroll.
         let (m, radius) = (m.clone(), theme.radius.md);
         list = list.child(
-            gpui::canvas(|_, _, _| (), move |bounds, (), window, _| m.paint_pill(bounds, selected_fill, radius, window))
-                .absolute()
-                .top_0()
-                .left_0()
-                .size_full(),
+            gpui::canvas(
+                |_, _, _| (),
+                move |bounds, (), window, _| m.paint_pill(bounds, selected_fill, radius, window),
+            )
+            .absolute()
+            .top(pad)
+            .left(pad)
+            .size_0(),
         );
     }
     let mut blocks = Blocks::new(motion, gap, pitch);

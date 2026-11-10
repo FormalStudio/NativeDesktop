@@ -66,6 +66,8 @@ enum Kind {
     Chrome,
     /// A sidebar whose list overflows, with Trash pinned in its footer.
     Footer,
+    /// The same with a list that fits, its first row selected.
+    FittingFooter,
     /// Notes' toolbar: the sidebar toggle, a button, a flexible space and a search field.
     Search,
     /// The same with the search field kept in the header.
@@ -247,12 +249,19 @@ impl Render for Scene {
                     .content(text("Body"))
                     .into_any_element();
             }
-            Kind::Footer => {
-                let rows = (0..40).map(|i| source_node(format!("note{i}"), format!("Note {i}")));
+            Kind::Footer | Kind::FittingFooter => {
+                let rows = (0..if self.kind == Kind::Footer { 40 } else { 3 })
+                    .map(|i| source_node(format!("note{i}"), format!("Note {i}")));
                 return scaffold()
                     .sidebar(
                         sidebar()
-                            .child(source_tree("tree").nodes(rows).flex_1().min_h_0())
+                            .child(
+                                source_tree("tree")
+                                    .nodes(rows)
+                                    .selected(SharedString::from("note0"))
+                                    .flex_1()
+                                    .min_h_0(),
+                            )
                             .footer(source_list("trash").nodes([source_node("trash", "Trash").badge("1")]).fit_rows()),
                     )
                     .content(text("Body"))
@@ -877,6 +886,51 @@ mod gate_m6 {
         assert_eq!(tree.origin.y + tree.size.height, trash.origin.y, "the list above ends where it starts");
     }
 
+    /// A sidebar list whose rows fit has nothing to scroll: a wheel over it leaves its rows where
+    /// they are, the selection pill under them included.
+    pub fn gpui_fitting_list_does_not_scroll() {
+        use nd_gpui::gpui::{
+            Modifiers, MouseMoveEvent, PlatformInput, ScrollDelta, ScrollEvent, ScrollSource, TouchPhase, point,
+        };
+        if nd_gpui::gpui_platform::current_headless_renderer().ok().flatten().is_none() {
+            println!("skipped: GPUI has no headless renderer on this OS");
+            return;
+        }
+        let mut o = open(Kind::FittingFooter);
+        let tree = o.node("tree").bounds.expect("tree");
+        let handle = o.host.window_handle(o.window).expect("gpui window");
+        let at = point(px(tree.origin.x + 40.), px(tree.origin.y + 40.));
+        let hover = MouseMoveEvent { position: at, pressed_button: None, modifiers: Modifiers::default() };
+        o.cx.update(|cx| {
+            let _ = handle.update(cx, |_, window, cx| window.dispatch_event(PlatformInput::MouseMove(hover), cx));
+        });
+        settle(&mut o.cx, &o.host);
+        let before = o.cx.capture_screenshot(handle).expect("capture");
+        for _ in 0..6 {
+            let event = ScrollEvent {
+                position: at,
+                delta: ScrollDelta::Pixels(point(px(0.), px(-40.))),
+                modifiers: Modifiers::default(),
+                touch_phase: TouchPhase::Moved,
+                source: ScrollSource::Pointer,
+            };
+            o.cx.update(|cx| {
+                let _ = handle.update(cx, |_, window, cx| window.dispatch_event(PlatformInput::Scroll(event), cx));
+            });
+            settle(&mut o.cx, &o.host);
+        }
+        let after = o.cx.capture_screenshot(handle).expect("capture");
+        let scale = before.width() as f32 / 800.;
+        let (w, h) = ((tree.size.width * scale) as u32, (tree.size.height * scale) as u32);
+        // The selection may still be finishing its fade in, a step or two of colour.
+        let differs = |x, y| {
+            let (a, b) = (before.get_pixel(x, y).0, after.get_pixel(x, y).0);
+            a.iter().zip(b).any(|(a, b)| a.abs_diff(b) > 8)
+        };
+        let moved = (0..h).flat_map(|y| (0..w).map(move |x| (x, y))).filter(|&(x, y)| differs(x, y)).count();
+        assert_eq!(moved, 0, "the rows and the selection stay put");
+    }
+
     /// A resizable sidebar's and inspector's inner edges drag, inside their widths' range; the
     /// app's width wins once it changes, and a width the app ignores still holds.
     pub fn gpui_side_panes_resize_by_their_edges() {
@@ -1089,6 +1143,7 @@ fn main() {
         ("gate_m6::gpui_split_echo_and_refusal", gate_m6::gpui_split_echo_and_refusal),
         ("gate_m6::gpui_side_panes_resize_by_their_edges", gate_m6::gpui_side_panes_resize_by_their_edges),
         ("gate_m6::gpui_footer_list_fits_its_rows", gate_m6::gpui_footer_list_fits_its_rows),
+        ("gate_m6::gpui_fitting_list_does_not_scroll", gate_m6::gpui_fitting_list_does_not_scroll),
         ("gate_m6::gpui_rich_text_inherits_size_and_shrinks", gate_m6::gpui_rich_text_inherits_size_and_shrinks),
         (
             "gate_m6::gpui_persistent_toolbar_search_stays_in_the_header",
