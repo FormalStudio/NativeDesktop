@@ -74,6 +74,26 @@ pub fn spawn<T: Send + 'static>(
     });
 }
 
+/// Calls `done` on the main thread once `delay` has passed: a notice that goes away, a hover
+/// that waits. A thread of its own sleeps out the delay, so [`spawn`]'s two task threads stay
+/// free. Nothing runs `done` while no host runs.
+pub fn after(delay: std::time::Duration, done: impl FnOnce(&mut App) + 'static) {
+    let (tx, rx) = futures_channel::oneshot::channel::<()>();
+    std::thread::Builder::new()
+        .name("nd-after".into())
+        .spawn(move || {
+            std::thread::sleep(delay);
+            let _ = tx.send(());
+        })
+        .expect("a timer thread");
+    spawn(
+        async move {
+            let _ = rx.await;
+        },
+        move |(), app| done(app),
+    );
+}
+
 /// Calls `handler` on the main thread with every event `system` reports from now on (open
 /// requests from the launch included, when this is the first subscription). Call it on the
 /// main thread; every handler sees the events of the first subscription's system.
