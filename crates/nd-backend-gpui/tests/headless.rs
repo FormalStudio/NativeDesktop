@@ -96,11 +96,11 @@ impl OsHooks for Captions {
 #[derive(Clone, Default)]
 struct Asked(Rc<std::cell::RefCell<Vec<AskedFor>>>);
 
-type AskedFor = (gpui::WindowKind, Option<gpui::ForeignParent>);
+type AskedFor = (gpui::WindowKind, Option<gpui::ForeignParent>, bool);
 
 impl OsHooks for Asked {
     fn window_options(&self, _: WindowId, options: &mut gpui::WindowOptions) {
-        self.0.borrow_mut().push((options.kind.clone(), options.foreign_parent.clone()));
+        self.0.borrow_mut().push((options.kind.clone(), options.foreign_parent.clone(), options.is_resizable));
     }
 }
 
@@ -344,14 +344,30 @@ mod gate_m2 {
         let asked = asked.0.borrow().clone();
         let expected = if cfg!(target_os = "linux") {
             vec![
-                (gpui::WindowKind::Dialog, Some(parent.clone())),
-                (gpui::WindowKind::Floating, Some(parent)),
-                (gpui::WindowKind::Normal, None),
+                (gpui::WindowKind::Dialog, Some(parent.clone()), true),
+                (gpui::WindowKind::Floating, Some(parent), true),
+                (gpui::WindowKind::Normal, None, true),
             ]
         } else {
-            vec![(gpui::WindowKind::Normal, None); 3]
+            vec![(gpui::WindowKind::Normal, None, true); 3]
         };
         assert_eq!(asked, expected);
+    }
+
+    pub fn the_settings_window_asks_for_a_fixed_floating_window() {
+        let mut cx = headless();
+        let asked = Asked::default();
+        let host = cx.update(|cx| {
+            GpuiHost::builder().quit_when_empty(false).hooks(asked.clone()).start(cx, |app| {
+                app.open_window(WindowOptions::main("main"), |_, cx| cx.new(|_| TitleRow));
+                let settings =
+                    WindowOptions::main("settings").kind(nd_ui::WindowKind::Settings).size(size(px(560.), px(420.)));
+                app.open_window(settings, |_, cx| cx.new(|_| TitleRow));
+            })
+        });
+        settle(&mut cx, &host);
+        let kind = if cfg!(target_os = "linux") { gpui::WindowKind::Floating } else { gpui::WindowKind::Normal };
+        assert_eq!(asked.0.borrow().clone(), vec![(gpui::WindowKind::Normal, None, true), (kind, None, false)]);
     }
 
     pub fn capture_renders_the_window() {
@@ -910,6 +926,10 @@ fn main() {
         (
             "gate_m2::a_window_of_another_app_parents_a_modal_child",
             gate_m2::a_window_of_another_app_parents_a_modal_child,
+        ),
+        (
+            "gate_m2::the_settings_window_asks_for_a_fixed_floating_window",
+            gate_m2::the_settings_window_asks_for_a_fixed_floating_window,
         ),
         ("gate_m2::capture_renders_the_window", gate_m2::capture_renders_the_window),
         (

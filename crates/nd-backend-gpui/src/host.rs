@@ -789,6 +789,16 @@ impl Inner {
             options.is_resizable = false;
             options.is_minimizable = false;
         }
+        if opened.as_ref().is_some_and(|o| o.kind == nd_ui::WindowKind::Settings) {
+            // Fixed size: GPUI's Wayland window then sends min == max, and the floating kind
+            // parents it to the focused window (xdg set_parent, WM_TRANSIENT_FOR on X11). Tiling
+            // compositors float either, instead of tiling it next to the main window.
+            options.is_resizable = false;
+            options.is_minimizable = false;
+            if cfg!(any(target_os = "linux", target_os = "freebsd")) {
+                options.kind = gpui::WindowKind::Floating;
+            }
+        }
         // Only GPUI's Linux platform reads a foreign parent; elsewhere the window opens on its own.
         if cfg!(any(target_os = "linux", target_os = "freebsd"))
             && let Some(opened) = opened
