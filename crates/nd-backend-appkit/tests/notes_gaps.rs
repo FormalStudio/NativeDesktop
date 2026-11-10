@@ -322,15 +322,18 @@ mod gaps {
         rig.close(opened);
     }
 
+    /// Rows with a menu of their own, but for row 4, which has the column's around the list.
     struct MenuRows {
         state: nd_virtual::ListState<u64>,
         asked: Rc<RefCell<Vec<u64>>>,
+        picked: Rc<RefCell<Vec<Vec<u64>>>>,
     }
 
     impl Render for MenuRows {
         fn render(&mut self, _w: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
             let asked = self.asked.clone();
             let column = self.asked.clone();
+            let picked = self.picked.clone();
             div()
                 .size_full()
                 .context_menu(move |menu, _, _| {
@@ -340,19 +343,23 @@ mod gaps {
                 .child(
                     nd_virtual::list("menu rows", &self.state, move |key: u64, _, _| {
                         let asked = asked.clone();
-                        div()
+                        let row = div()
                             .id(format!("menu-row-{key}"))
                             .w_full()
                             .h(px(28.))
                             .px(px(8.))
                             .rounded(px(6.))
                             .hover(|s| s.bg(hsla(0., 0., 0.5, 0.2)))
-                            .on_hover(|_: &bool, _, _| {})
-                            .context_menu(move |menu, _, _| {
+                            .on_hover(|_: &bool, _, _| {});
+                        let row = if key == 4 {
+                            row
+                        } else {
+                            row.context_menu(move |menu, _, _| {
                                 asked.borrow_mut().push(key);
                                 menu
                             })
-                            .flex()
+                        };
+                        row.flex()
                             .flex_row()
                             .items_center()
                             .child(nd_components::icon(nd_icons::Icon::Globe, 16.))
@@ -372,7 +379,10 @@ mod gaps {
                             .into_any_element()
                     })
                     .inset()
-                    .selection(nd_virtual::Selection::single()),
+                    .selection(nd_virtual::Selection::single())
+                    .on_selection_change(move |e: &nd_virtual::SelectionChanged<u64>, _, _| {
+                        picked.borrow_mut().push(e.keys.clone())
+                    }),
                 )
         }
     }
@@ -384,16 +394,17 @@ mod gaps {
         use nd_backend_appkit::objc2_app_kit::{NSApplication, NSEvent, NSEventModifierFlags, NSEventType};
         use nd_backend_appkit::objc2_foundation::{MainThreadMarker, NSProcessInfo};
         let asked = Rc::new(RefCell::new(Vec::new()));
-        let a = asked.clone();
+        let picked = Rc::new(RefCell::new(Vec::new()));
+        let (a, p) = (asked.clone(), picked.clone());
         let opened = rig.open("menu rows", move |cx| {
             let mut state = nd_virtual::ListState::new(cx).estimated_row_height(px(28.));
-            state.set_items(vec![1, 2, 3], cx);
-            MenuRows { state, asked: a }
+            state.set_items(vec![1, 2, 3, 4], cx);
+            MenuRows { state, asked: a, picked: p }
         });
         settle(rig);
         // A row drawn again (its hover changed) keeps its menu.
         rig.update(&opened, |rows, cx| {
-            rows.state.set_items_versioned(vec![(1, 0), (2, 1), (3, 0)], cx);
+            rows.state.set_items_versioned(vec![(1, 0), (2, 1), (3, 0), (4, 0)], cx);
             rows.state.set_selected(vec![2], cx);
         });
         settle(rig);
@@ -432,6 +443,19 @@ mod gaps {
         c.check(
             *asked.borrow() == [2, 3, 3, 1],
             &format!("list row menu: each click asks its own row's menu, 2, 3, 3, 1 ({:?})", asked.borrow()),
+        );
+        c.check(
+            picked.borrow().is_empty() && rig.update(&opened, |rows, _| rows.state.selected()) == [2],
+            &format!("list row menu: a row's own menu leaves the selection alone ({:?})", picked.borrow()),
+        );
+        send(NSEventType::RightMouseDown, none, "menu-row-4", None);
+        c.check(
+            *asked.borrow() == [2, 3, 3, 1, 0] && *picked.borrow() == [vec![4]],
+            &format!(
+                "list row menu: the column's menu on a row selects it alone first ({:?}, {:?})",
+                asked.borrow(),
+                picked.borrow()
+            ),
         );
         rig.close(opened);
     }

@@ -105,7 +105,8 @@ Both presenters select the way AppKit does. A click selects one row. The seconda
 on macOS, Control elsewhere) toggles a row. Shift selects the range from the anchor, and Shift
 with the secondary key adds that range. A plain press on a row of a multiple selection keeps the
 group until the release, so the group can be dragged. A right click outside the selection selects
-that row alone before the context menu opens. With the list focused, the arrow keys move the
+that row alone before the list's context menu opens; a row with a `.context_menu` of its own
+opens that menu and leaves the selection alone, as a browser's tab list does. With the list focused, the arrow keys move the
 cursor (by line and by cell in a grid), Home, End, Page Up and Page Down jump, Shift extends from
 the anchor, the secondary key with A selects every row, and the row moved to scrolls into view.
 In a tree, Left and Right collapse and expand, then move to the parent or the first child. In a

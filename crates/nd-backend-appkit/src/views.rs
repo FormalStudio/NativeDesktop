@@ -601,11 +601,15 @@ impl NdLayerView {
         raise_menu_from(Retained::into_super(self.retain()), event)
     }
 
-    fn raise_menu(&self, event: &NSEvent) -> bool {
+    /// Opens this view's menu, if it has one. `row` is the table row the click came out of when
+    /// the menu is around the list rather than the row's own.
+    fn raise_menu(&self, event: &NSEvent, row: Option<(&objc2_app_kit::NSTableView, isize)>) -> bool {
         let menu = self.ivars().menu.borrow();
         let Some((emit, wake)) = menu.as_ref() else { return false };
         let at = self.convertPoint_fromView(event.locationInWindow(), None);
-        select_row_for_menu(self);
+        if let Some((table, row)) = row {
+            select_row_alone(table, row);
+        }
         emit.emit(ContextMenuRequested { node: emit.node(), x: at.x as f32, y: at.y as f32 });
         wake.wake();
         true
@@ -1095,30 +1099,35 @@ pub(crate) fn ns_rect(rect: nd_core::Rect) -> NSRect {
 
 /// Asks the nearest view from `view` outwards that has a menu for it.
 pub(crate) fn raise_menu_from(view: Retained<NSView>, event: &NSEvent) -> bool {
+    let mut row: Option<(Retained<objc2_app_kit::NSTableView>, isize)> = None;
+    let mut below: Option<Retained<NSView>> = None;
     let mut cursor = Some(view);
     while let Some(v) = cursor {
-        if v.downcast_ref::<NdLayerView>().is_some_and(|layer| layer.raise_menu(event)) {
+        let passed = row.as_ref().map(|(table, row)| (&**table, *row));
+        if v.downcast_ref::<NdLayerView>().is_some_and(|layer| layer.raise_menu(event, passed)) {
             return true;
+        }
+        if row.is_none()
+            && let (Ok(table), Some(child)) = (v.clone().downcast::<objc2_app_kit::NSTableView>(), below.as_deref())
+        {
+            let at = table.rowForView(child);
+            if at >= 0 {
+                row = Some((table, at));
+            }
         }
         // SAFETY: main thread, a view in a live window; the superview is retained before use.
         cursor = unsafe { v.superview() };
+        below = Some(v);
     }
     false
 }
 
-/// A menu opened on a row of a table or outline acts on the selection, so a row outside it is
-/// selected alone first, as in Finder. NSTableView itself only outlines the clicked row.
-fn select_row_for_menu(view: &NSView) {
-    let mut up = unsafe { view.superview() };
-    while let Some(v) = up {
-        if let Ok(table) = v.clone().downcast::<objc2_app_kit::NSTableView>() {
-            let row = table.rowForView(view);
-            if row >= 0 && !table.isRowSelected(row) {
-                let set = objc2_foundation::NSIndexSet::indexSetWithIndex(row as usize);
-                table.selectRowIndexes_byExtendingSelection(&set, false);
-            }
-            return;
-        }
-        up = unsafe { v.superview() };
+/// A list's menu opened on one of its rows acts on the selection, so a row outside it is
+/// selected alone first, as in Finder. NSTableView itself only outlines the clicked row. A row's
+/// own menu acts on its row and leaves the selection alone, as a browser's tab strip does.
+fn select_row_alone(table: &objc2_app_kit::NSTableView, row: isize) {
+    if !table.isRowSelected(row) {
+        let set = objc2_foundation::NSIndexSet::indexSetWithIndex(row as usize);
+        table.selectRowIndexes_byExtendingSelection(&set, false);
     }
 }
