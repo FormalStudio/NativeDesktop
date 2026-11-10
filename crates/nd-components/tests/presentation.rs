@@ -333,3 +333,248 @@ fn under_reduce_motion_a_container_crossfades_without_travel() {
     assert!(opened.iter().any(|s| s.opacity > 0.05 && s.opacity < 0.95), "a crossfade, not a cut");
     assert!(closed.iter().any(|s| s.opacity > 0.05 && s.opacity < 0.95), "a crossfade back");
 }
+
+/// A note over pages of cards, as a notes app draws it: the page under the note is keyed by
+/// where the window is and rises in as the one it replaces fades out where it stood. The note
+/// grows out of its card and goes back into it, or into its folder's card on a page without it.
+struct Pages {
+    detail: Presentation,
+    page: Page,
+    /// Where the note's card stands on the folder page.
+    card_at: (f32, f32),
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Page {
+    /// The note's folder: the note's card.
+    Folder,
+    /// Home: the folder's card.
+    Home,
+    /// Neither.
+    Empty,
+}
+
+const FOLDER: (f32, f32, f32, f32) = (240., 120., 140., 110.);
+
+fn pages(s: &Pages, _cx: &mut Context<Host<Pages>>) -> AnyElement {
+    let (key, tile) = match s.page {
+        Page::Folder => (
+            "page:folder",
+            Some(
+                div()
+                    .id("card")
+                    .absolute()
+                    .left(px(s.card_at.0))
+                    .top(px(s.card_at.1))
+                    .w(px(CARD.2))
+                    .h(px(CARD.3))
+                    .rounded(px(20.))
+                    .border(px(5.))
+                    .border_color(hsla(0., 0., 0.5, 1.))
+                    .bg(hsla(0., 0., 1., 1.)),
+            ),
+        ),
+        Page::Home => (
+            "page:home",
+            Some(
+                div()
+                    .id("folder")
+                    .absolute()
+                    .left(px(FOLDER.0))
+                    .top(px(FOLDER.1))
+                    .w(px(FOLDER.2))
+                    .h(px(FOLDER.3))
+                    .rounded(px(12.)),
+            ),
+        ),
+        Page::Empty => ("page:empty", None),
+    };
+    let page = div()
+        .id(key)
+        .size_full()
+        .animate(Animation::natural())
+        // The window opens with its page in place: only a page after the first comes in.
+        .when(s.detail.is_shown(), |d| d.enter_from(|p| p.opacity(0.).offset(px(0.), px(8.))))
+        .exit_to(|p| p.opacity(0.))
+        .children(tile);
+    let container = div()
+        .id("container")
+        .absolute()
+        .top_0()
+        .left_0()
+        .w(px(480.))
+        .h(px(640.))
+        .bg(hsla(0., 0., 1., 1.))
+        .overflow_hidden()
+        .hero_with(&s.detail, "card")
+        .hero_fallback("folder")
+        .child(div().id("face").p(px(16.)).child(div().h(px(20.))).hero_content())
+        .child(div().id("detail").absolute().top_0().left_0().size_full().reveal_with(&s.detail));
+    presentation("sheet", &s.detail).base(div().size_full().child(page)).content(container).into_any_element()
+}
+
+/// One frame of a note going back: where the container stands in the window and how it shows.
+#[derive(Debug, Clone, Copy)]
+struct Back {
+    x: f32,
+    y: f32,
+    width: f32,
+    opacity: f32,
+    scale: f32,
+    face: f32,
+    detail: f32,
+}
+
+fn back_shot(rig: &Rig<Pages>, [container, face, detail]: [NodeId; 3]) -> Option<Back> {
+    let backend = rig.cx.backend();
+    let div = |n: NodeId| backend.props(n).and_then(|p| p.downcast_ref::<DivProps>().cloned());
+    let shell = div(container)?;
+    let frame = backend.window_frame_of(container)?;
+    Some(Back {
+        x: frame.origin.x + shell.transform.offset.0,
+        y: frame.origin.y + shell.transform.offset.1,
+        width: frame.size.width,
+        opacity: shell.style.opacity.unwrap_or(1.),
+        scale: shell.transform.scale,
+        face: div(face)?.style.opacity.unwrap_or(1.),
+        detail: div(detail)?.style.opacity.unwrap_or(1.),
+    })
+}
+
+fn pages_parts(rig: &Rig<Pages>) -> Option<[NodeId; 3]> {
+    let tree = rig.cx.semantic_tree();
+    let find = |id: &str| tree.nodes().find(|(_, n)| n.test_id.as_deref() == Some(id)).map(|(_, n)| n.id);
+    Some([find("container")?, find("face")?, find("detail")?])
+}
+
+/// `count` frames, or until `until` holds and nothing moves, each one recorded while the
+/// container is mounted.
+fn back_frames(rig: &mut Rig<Pages>, count: usize, until: impl Fn(&Pages) -> bool) -> Vec<Back> {
+    let mut shots = Vec::new();
+    let mut ids = pages_parts(rig);
+    for _ in 0..count {
+        rig.cx.advance_clock(FRAME);
+        rig.cx.frame();
+        ids = ids.or_else(|| pages_parts(rig));
+        shots.extend(ids.and_then(|ids| back_shot(rig, ids)));
+        if until(rig.state()) && !rig.cx.needs_frame() {
+            return shots;
+        }
+    }
+    assert!(count < 300, "still moving after five seconds");
+    shots
+}
+
+/// A note open over its folder's page.
+fn opened() -> Rig<Pages> {
+    let mut rig = Rig::sized(
+        Size { width: 480., height: 640. },
+        |_| Pages { detail: Presentation::new(), page: Page::Folder, card_at: (CARD.0, CARD.1) },
+        pages,
+    );
+    rig.win.root().clone().update(&mut rig.cx, |h, cx| {
+        h.s.detail.set_open(true);
+        cx.notify();
+    });
+    back_frames(&mut rig, 300, |s| s.detail.is_open());
+    rig
+}
+
+/// Closes the note and shows `page` in the same render, as leaving it for another page does.
+fn leave_for(rig: &mut Rig<Pages>, page: Page) {
+    rig.win.root().clone().update(&mut rig.cx, |h, cx| {
+        h.s.detail.set_open(false);
+        h.s.page = page;
+        cx.notify();
+    });
+}
+
+fn near(a: f32, b: f32) -> bool {
+    (a - b).abs() < 1.
+}
+
+#[test]
+fn a_note_closing_onto_its_page_lands_on_its_cards_frame_as_it_is_then() {
+    let mut rig = opened();
+    // The card has moved since the note opened (the grid laid out again under it).
+    rig.win.root().clone().update(&mut rig.cx, |h, cx| {
+        h.s.detail.set_open(false);
+        h.s.card_at = (300., 60.);
+        cx.notify();
+    });
+    let mut shots = back_frames(&mut rig, 6, |_| false);
+    // And it moves again in flight: the container follows it.
+    rig.win.root().clone().update(&mut rig.cx, |h, cx| {
+        h.s.card_at = (200., 420.);
+        cx.notify();
+    });
+    shots.extend(back_frames(&mut rig, 300, |s| !s.detail.is_shown()));
+    let landed = shots.iter().rev().find(|s| s.opacity > 0.).copied().expect("frames");
+    assert!(near(landed.x, 200.) && near(landed.y, 420.) && near(landed.width, CARD.2), "on the card: {landed:?}");
+    assert!(landed.face > 0.99 && landed.detail < 0.01, "showing the card's content: {landed:?}");
+    let stale = shots.iter().any(|s| near(s.x, CARD.0) && near(s.y, CARD.1) && near(s.width, CARD.2));
+    assert!(!stale, "never on the frame the card had when the note opened");
+    let xs: Vec<f32> = shots.iter().map(|s| s.x).collect();
+    assert!(xs.windows(2).all(|w| (w[1] - w[0]).abs() < 80.), "follows without a jump: {xs:?}");
+}
+
+#[test]
+fn a_note_closing_onto_a_page_with_only_its_folder_shrinks_into_the_folder() {
+    let mut rig = opened();
+    leave_for(&mut rig, Page::Home);
+    let shots = back_frames(&mut rig, 300, |s| !s.detail.is_shown());
+    let on_card = shots.iter().any(|s| near(s.x, CARD.0) && near(s.y, CARD.1) && near(s.width, CARD.2));
+    assert!(!on_card, "never flies to the card on the page going out");
+    let landed = shots.iter().rev().find(|s| s.width < 470.).copied().expect("a frame in flight");
+    assert!(near(landed.x, FOLDER.0) && near(landed.y, FOLDER.1) && near(landed.width, FOLDER.2), "{landed:?}");
+    for (i, s) in shots.iter().enumerate() {
+        assert_eq!(s.face, 0., "frame {i}: the note's card content does not belong in the folder: {s:?}");
+    }
+    assert!(landed.detail < 0.01 && landed.opacity < 0.05, "faded as it landed: {landed:?}");
+    let early = shots.iter().filter(|s| s.width > 300.).map(|s| s.opacity).fold(1f32, f32::min);
+    assert!(early > 0.99, "solid while it is still large, fading only near the folder: {early}");
+    let widths: Vec<f32> = shots.iter().map(|s| s.width).collect();
+    assert!(widths.windows(2).all(|w| w[1] <= w[0] + 0.5), "only shrinks: {widths:?}");
+}
+
+#[test]
+fn a_note_closing_onto_a_page_with_neither_fades_and_shrinks_in_place() {
+    let mut rig = opened();
+    leave_for(&mut rig, Page::Empty);
+    let shots = back_frames(&mut rig, 300, |s| !s.detail.is_shown());
+    assert!(!shots.is_empty(), "frames");
+    for (i, s) in shots.iter().enumerate() {
+        assert!(near(s.x, 0.) && near(s.y, 0.) && near(s.width, 480.), "frame {i} travels: {s:?}");
+    }
+    let opacities: Vec<f32> = shots.iter().map(|s| s.opacity).collect();
+    assert!(opacities.windows(2).all(|w| w[1] <= w[0] + 1e-4), "only fades: {opacities:?}");
+    let last = *shots.last().expect("frames");
+    assert!(last.opacity < 0.02 && last.scale < 0.97 && last.scale > 0.9, "faded, a little smaller: {last:?}");
+    assert!(shots.iter().all(|s| s.face == 0.), "no card content without a card");
+}
+
+#[test]
+fn a_note_reopened_while_it_closes_turns_around_from_where_it_is() {
+    let mut rig = opened();
+    leave_for(&mut rig, Page::Home);
+    let mut shots = back_frames(&mut rig, 10, |_| false);
+    let mid = *shots.last().expect("frames");
+    assert!(mid.width < 470. && mid.width > FOLDER.2 + 10., "mid-flight: {mid:?}");
+    rig.win.root().clone().update(&mut rig.cx, |h, cx| {
+        h.s.detail.set_open(true);
+        h.s.page = Page::Folder;
+        cx.notify();
+    });
+    shots.extend(back_frames(&mut rig, 300, |s| s.detail.is_open()));
+    let widths: Vec<f32> = shots.iter().map(|s| s.width).collect();
+    let jumps = widths.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0f32, f32::max);
+    assert!(jumps < 80., "turns around from where it is: {widths:?}");
+    let last = *shots.last().expect("frames");
+    assert!(near(last.x, 0.) && near(last.y, 0.) && near(last.width, 480.), "home again: {last:?}");
+    assert_eq!((last.opacity, last.scale, last.face, last.detail), (1., 1., 0., 1.), "open again: {last:?}");
+    // Closed now onto the card, it lands there in the card's look.
+    leave_for(&mut rig, Page::Folder);
+    let back = back_frames(&mut rig, 300, |s| !s.detail.is_shown());
+    let landed = back.iter().rev().find(|s| s.opacity > 0.).copied().expect("frames");
+    assert!(near(landed.x, CARD.0) && near(landed.y, CARD.1) && landed.face > 0.99, "on the card: {landed:?}");
+}

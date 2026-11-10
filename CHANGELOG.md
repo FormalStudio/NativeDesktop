@@ -5,6 +5,15 @@ and the one it moves to.
 
 ## Unreleased
 
+- Heroes go back to the source as it is, or to a fallback. A hero's source is read from what is
+  on screen when its flight starts and followed while it goes back, so a presentation closing
+  onto a page that is being replaced no longer lands on the old page's card (which, fading out,
+  left the hero over whatever stood there on the new page), and one whose card moved lands where
+  the card is now. An element on its way out is never a source, and on GPUI one not laid out yet
+  is waited for. `.hero_fallback(id)` (called again for more) names elements to use when the
+  source is not on screen: the hero flies into the first one there with its frame and corners,
+  its source's content hidden, fading as it lands. With neither, going back fades the hero out
+  where it is and shrinks it a little.
 - GPUI draws each icon as one alpha mask, tinted once. A dimmed icon (a status page's, a
   secondary toolbar button's) showed brighter wherever its strokes crossed, as each stroke was
   its own translucent path; Lucide's round caps and joins now show too, where the paths drew

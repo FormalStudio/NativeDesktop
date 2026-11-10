@@ -303,7 +303,7 @@ pub(crate) const CHANNELS: usize = 17;
 pub(crate) const OPACITY: usize = 0;
 const OFFSET_X: usize = 1;
 const OFFSET_Y: usize = 2;
-const SCALE: usize = 3;
+pub(crate) const SCALE: usize = 3;
 const WIDTH: usize = 4;
 const HEIGHT: usize = 5;
 /// A hero's look, which it carries from its source's to its own: corner radius and border
@@ -398,6 +398,15 @@ pub(crate) fn with_look(mut values: Values, style: &StyleRefinement, radius_cap:
     }
     values[PROGRESS] = Some(1.);
     values
+}
+
+/// `look` with the fill of `own` where it has none: a hero landing on a source that draws no
+/// surface of its own keeps its surface instead of thinning to nothing on the way.
+pub(crate) fn fill_from(mut look: Values, own: &Values) -> Values {
+    if look[FILL + 3].is_none_or(|a| a <= 1e-3) {
+        look[FILL..FILL + 4].copy_from_slice(&own[FILL..FILL + 4]);
+    }
+    look
 }
 
 /// `style` and `transform` with `values` in place of their own.

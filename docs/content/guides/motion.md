@@ -191,6 +191,27 @@ width, border colour and solid fill interpolate on the same spring as the frame 
 so a fill or border it does not have fades away rather than greying). The source's look is
 read from the element keyed `id` as it shows when the flight starts, hover style included.
 
+The source is whatever is on screen when the flight starts, read again every frame while the
+hero goes back: a hero closing onto a card lands on the card where it stands then, and follows
+it if it moves before the hero lands (its page rising in, its grid laying out again). An element
+on its way out (a page being replaced, still fading under its `.exit_to`) is never a source, and
+one mounted with the new page but not laid out yet is waited for a few frames rather than
+guessed at.
+
+`.hero_fallback(id)` names an element to use when the one keyed by the hero's id is not on
+screen, and each further call another, tried in order: a note whose card is not on the page
+closes into the card of the folder holding it, as Finder does. With a fallback the hero takes
+its frame and corners, keeps its own fill if the fallback draws none, leaves its source's content
+(`HeroPart::Source`) hidden, since it does not belong there, and fades out over the last 40% of
+the way. With neither on screen there is no flight: the hero fades out where it is, shrinking a
+little, and coming in it rises into place as it fades in.
+
+```rust
+div()
+    .hero_with(&self.presented, format!("frame:note:{id}"))
+    .hero_fallback(format!("face:folder:{folder}"))
+```
+
 ### Container transforms
 
 A hero that holds a view is a container transform, Material's container transform and Apple's

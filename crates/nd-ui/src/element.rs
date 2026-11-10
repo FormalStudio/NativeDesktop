@@ -322,10 +322,13 @@ impl HeroPart {
     }
 }
 
-/// Where a hero element travels from and back to: the element keyed `id`.
+/// Where a hero element travels from and back to: the element keyed `id`, else the first of
+/// `fallbacks` that is on screen.
 #[derive(Clone, Debug, PartialEq)]
 pub struct HeroFrom {
     pub id: SharedString,
+    /// Elements standing in for `id` when it is not on screen (see [`Div::hero_fallback`]).
+    pub fallbacks: Vec<SharedString>,
     /// Going back: the element moves onto the source's frame.
     pub away: bool,
 }
@@ -568,10 +571,28 @@ impl Div {
     /// platform's spring (or `.animate`'s animation); with `away` it travels back onto that
     /// frame. Its size animates when given in points, so the element sits in a box of its
     /// final size (absolute in it) to move nothing else. Reduce motion fades it in place.
+    ///
+    /// The source is the element as it is when the flight starts, and going back the hero
+    /// follows it if it moves before the hero lands. An element on its way out (`.exit_to`) is
+    /// not a source. With none on screen the hero rises in as it fades in, and going back it
+    /// fades and shrinks a little where it is.
     pub fn hero_from(mut self, id: impl Into<SharedString>, away: bool) -> Self {
-        self.hero = Some(HeroFrom { id: id.into(), away });
+        self.hero = Some(HeroFrom { id: id.into(), fallbacks: Vec::new(), away });
         if self.motion.is_none() {
             self.motion = Some(MotionSpec::new(Animation::natural()));
+        }
+        self
+    }
+
+    /// Where the hero (`.hero_from`, set before this) travels from and back to when the element
+    /// keyed by its id is not on screen: the element keyed `id`, a note's folder for a note whose
+    /// card is not on the page. Called again, each one stands in for the ones before. The hero
+    /// takes on the fallback's frame and look, and what it holds of its source
+    /// ([`HeroPart::Source`]) stays hidden, as it does not belong there: going back it shrinks
+    /// into the fallback with its own content fading as it lands.
+    pub fn hero_fallback(mut self, id: impl Into<SharedString>) -> Self {
+        if let Some(hero) = &mut self.hero {
+            hero.fallbacks.push(id.into());
         }
         self
     }

@@ -31,6 +31,13 @@ use nd_gpui::layout::MinMax;
 const HERO_WAIT_FRAMES: u32 = 4;
 /// How far below its place a hero with no source on screen starts as it fades in, in points.
 const HERO_RISE: f64 = 16.;
+/// The scale a hero going back with no source on screen shrinks to as it fades out.
+const HERO_SHRINK: f64 = 0.95;
+/// The share of its flight, nearest a fallback, over which a hero fades out as it lands there
+/// (and in as it leaves it).
+const HERO_FALLBACK_FADE: f64 = 0.4;
+/// How far a hero's source must move, in points, before a hero going back follows it.
+const HERO_FOLLOW: f32 = 0.5;
 
 mod semantic_walk;
 
@@ -209,6 +216,35 @@ fn pose_on(targets: &Values, source: Rect, home: Rect, look: &Values) -> Values 
     out
 }
 
+/// Where a hero's source is now.
+#[derive(Clone, Copy, Debug)]
+enum Source {
+    /// Node `node`, the first of the hero's keys mounted and not on its way out, laid out at
+    /// `rect`; `fallback` when it is not the hero's own key.
+    At { node: NodeId, rect: Rect, fallback: bool },
+    /// Mounted but not laid out yet: on a backend that lays out as it paints, until its first
+    /// paint.
+    Unmeasured,
+    /// Not on screen.
+    Gone,
+}
+
+/// A hero going back: the source node it lands on, at `rect` when last looked at, and the
+/// hero's frame at home.
+#[derive(Clone, Copy, Debug)]
+struct Onto {
+    node: NodeId,
+    rect: Rect,
+    home: Rect,
+}
+
+/// Whether `a` and `b` differ by more than [`HERO_FOLLOW`] in any edge.
+fn moved(a: Rect, b: Rect) -> bool {
+    [a.origin.x - b.origin.x, a.origin.y - b.origin.y, a.size.width - b.size.width, a.size.height - b.size.height]
+        .iter()
+        .any(|d| d.abs() > HERO_FOLLOW)
+}
+
 /// A hero in flight: the sizes its parts keep, inside its source's border and inside its own
 /// at home.
 #[derive(Clone, Copy, Debug)]
@@ -303,6 +339,11 @@ pub(crate) struct Tree {
     hero_away: HashMap<NodeId, Values>,
     /// A hero's frame at rest, for going back from mid-flight.
     hero_home: HashMap<NodeId, Rect>,
+    /// Heroes going back onto a source, which they follow until they are home again.
+    hero_onto: HashMap<NodeId, Onto>,
+    /// Heroes whose flight is to or from a fallback ([`crate::Div::hero_fallback`]): their
+    /// source's content stays hidden.
+    hero_fallback: HashSet<NodeId>,
     /// Heroes in flight between a source and home.
     flights: HashMap<NodeId, Flight>,
     /// Nodes that are part of a hero (`.hero_part`), with the props and layout they show of
@@ -476,6 +517,8 @@ impl Tree {
             away_pending: Vec::new(),
             hero_away: HashMap::new(),
             hero_home: HashMap::new(),
+            hero_onto: HashMap::new(),
+            hero_fallback: HashSet::new(),
             flights: HashMap::new(),
             parts: HashMap::new(),
             resized: Vec::new(),
@@ -584,6 +627,7 @@ impl Tree {
         let away = hero.as_ref().is_some_and(|h| h.away);
         if !away {
             self.hero_away.remove(&id);
+            self.hero_onto.remove(&id);
             self.away_pending.retain(|n| *n != id);
         } else if node.is_some() && !self.hero_away.contains_key(&id) && !self.away_pending.contains(&id) {
             self.away_pending.push(id);
@@ -709,7 +753,8 @@ impl Tree {
         values
     }
 
-    /// Works out where heroes come from and go back to, from the frames the backend drew last.
+    /// Works out where heroes come from and go back to, from the frames the backend drew last,
+    /// and keeps heroes going back on their source as it moves.
     /// Returns the heroes going back that have nowhere to go: they are already done.
     pub(crate) fn place_heroes(
         &mut self,
@@ -724,47 +769,62 @@ impl Tree {
                 self.hero_waits.remove(&id);
                 continue;
             };
-            let source = self.source_rect(backend, &hero);
+            let source = self.source_of(backend, &hero);
             let home = backend.probe(id).bounds.filter(|r| r.size.width > 0. && r.size.height > 0.);
-            // A backend that lays out as it paints (GPUI) knows the frame a frame later: the hero
-            // stays hidden until then rather than appearing in place.
-            if source.is_some() && home.is_none() {
-                let tries = self.hero_waits.entry(id).or_insert(0);
-                *tries += 1;
-                if *tries <= HERO_WAIT_FRAMES {
-                    self.heroes_still_pending.push(id);
-                    continue;
-                }
+            // A backend that lays out as it paints (GPUI) knows a frame a frame later: the hero
+            // stays hidden until both ends are known rather than appearing in place.
+            let unknown = match source {
+                Source::At { .. } => home.is_none(),
+                Source::Unmeasured => true,
+                Source::Gone => false,
+            };
+            if unknown && self.wait_for_frames(id) {
+                self.heroes_still_pending.push(id);
+                continue;
             }
             self.hero_waits.remove(&id);
-            let look = source.map(|s| self.source_look(&hero, s));
-            let Some(node) = self.nodes.get_mut(&id) else { continue };
-            let Some(anim) = node.motion.as_mut() else { continue };
-            if let (Some(source), Some(home), Some(look)) = (source, home, look) {
+            let Some(anim) = self.nodes.get(&id).and_then(|n| n.motion.as_ref()) else { continue };
+            let targets = anim.state.targets();
+            let own = border_of(&anim.layout);
+            if let (Source::At { node, rect: source, fallback }, Some(home)) = (source, home) {
+                let look = self.flight_look(id, node, source, fallback);
                 self.hero_home.insert(id, home);
-                let from = pose_on(&anim.state.targets(), source, home, &look);
+                self.set_fallback(id, fallback);
+                self.flights.insert(id, Flight { source: inside(source, look_border(&look)), home: inside(home, own) });
+                let from = pose_on(&targets, source, home, &look);
+                let Some(anim) = self.nodes.get_mut(&id).and_then(|n| n.motion.as_mut()) else { continue };
                 anim.state.start_from(&from, now, reduce);
-                let flight =
-                    Flight { source: inside(source, look_border(&look)), home: inside(home, border_of(&anim.layout)) };
-                self.flights.insert(id, flight);
             } else {
                 // Nothing on screen to come out of: it rises into place as it fades in.
                 let mut from = animation::only(animation::OPACITY, 0.);
-                from[2] = anim.state.targets()[2].map(|y| y + HERO_RISE);
+                from[2] = targets[2].map(|y| y + HERO_RISE);
+                let Some(anim) = self.nodes.get_mut(&id).and_then(|n| n.motion.as_mut()) else { continue };
                 anim.state.start_from(&from, now, reduce);
             }
             self.animating.insert(id);
         }
         self.heroes_pending.append(&mut self.heroes_still_pending);
+        let mut waiting = Vec::new();
         for id in mem::take(&mut self.away_pending) {
             let Some(hero) = self.hero_of(id).filter(|h| h.away) else { continue };
             // Reduce motion leaves out the travel, and a source no longer on screen leaves
             // nowhere to travel to: it fades out where it is.
-            let source = if reduce { None } else { self.source_rect(backend, &hero) };
-            let Some(source) = source else {
-                self.fade_away(id, now, reduce, &mut stranded);
-                continue;
+            let source = if reduce { Source::Gone } else { self.source_of(backend, &hero) };
+            let (node, rect, fallback) = match source {
+                Source::At { node, rect, fallback } => (node, rect, fallback),
+                // Mounted with the page it went back to, and not laid out yet: the hero holds
+                // until it is, so it never flies to where the page will not have it.
+                Source::Unmeasured if self.wait_for_frames(id) => {
+                    waiting.push(id);
+                    continue;
+                }
+                Source::Unmeasured | Source::Gone => {
+                    self.hero_waits.remove(&id);
+                    self.fade_away(id, now, reduce, &mut stranded);
+                    continue;
+                }
             };
+            self.hero_waits.remove(&id);
             let moving = self.nodes.get(&id).and_then(|n| n.motion.as_ref()).is_some_and(|m| m.state.is_moving());
             let probed = backend.probe(id).bounds.filter(|r| r.size.width > 0. && r.size.height > 0.);
             let home = if moving { self.hero_home.get(&id).copied().or(probed) } else { probed };
@@ -772,27 +832,73 @@ impl Tree {
                 self.fade_away(id, now, reduce, &mut stranded);
                 continue;
             };
-            let look = self.source_look(&hero, source);
-            let Some(anim) = self.nodes.get(&id).and_then(|n| n.motion.as_ref()) else { continue };
-            let mut base = anim.props.downcast_ref::<DivProps>().map_or_else(Transform::default, |d| d.transform);
-            base.scale = 1.;
-            let targets = animation::values(&anim.layout, &base);
-            let flight =
-                Flight { source: inside(source, look_border(&look)), home: inside(home, border_of(&anim.layout)) };
-            self.hero_away.insert(id, pose_on(&targets, source, home, &look));
-            self.flights.insert(id, flight);
             // From rest it waits for the view around it to fade, then travels home; parts that
             // follow the flight fade with it instead.
             let at = if moving || self.holds_parts(id) { now } else { now + tokens.hero_hold(reduce) };
-            self.retarget_shown(id, at, reduce);
+            self.fly_back(id, Onto { node, rect, home }, fallback, at, reduce);
+        }
+        self.away_pending = waiting;
+        // A source that moves while its hero goes back (the page it is on rising in, its grid
+        // laying out again) or leaves takes the hero with it, or sends it to a fallback.
+        let mut onto: Vec<(NodeId, Onto)> = self.hero_onto.iter().map(|(id, o)| (*id, *o)).collect();
+        onto.sort_by_key(|(id, _)| *id);
+        for (id, was) in onto {
+            let Some(hero) = self.hero_of(id).filter(|h| h.away) else {
+                self.hero_onto.remove(&id);
+                continue;
+            };
+            match self.source_of(backend, &hero) {
+                Source::At { node, rect, fallback } if node != was.node || moved(rect, was.rect) => {
+                    self.fly_back(id, Onto { node, rect, home: was.home }, fallback, now, reduce);
+                }
+                Source::At { .. } | Source::Unmeasured => {}
+                Source::Gone => self.fade_away(id, now, reduce, &mut stranded),
+            }
         }
         stranded
     }
 
-    /// Fades hero `id` out where it is, for one going back with nowhere to travel. It lands when
-    /// the fade does, or at once when it already shows nothing.
+    /// Counts a frame hero `id` has waited for a frame to be known: true while it may wait
+    /// longer.
+    fn wait_for_frames(&mut self, id: NodeId) -> bool {
+        let tries = self.hero_waits.entry(id).or_insert(0);
+        *tries += 1;
+        *tries <= HERO_WAIT_FRAMES
+    }
+
+    fn set_fallback(&mut self, id: NodeId, fallback: bool) {
+        if fallback {
+            self.hero_fallback.insert(id);
+        } else {
+            self.hero_fallback.remove(&id);
+        }
+    }
+
+    /// Sends hero `id` back onto `onto`'s source from `at`, in the source's look.
+    fn fly_back(&mut self, id: NodeId, onto: Onto, fallback: bool, at: f64, reduce: bool) {
+        let look = self.flight_look(id, onto.node, onto.rect, fallback);
+        let Some(anim) = self.nodes.get(&id).and_then(|n| n.motion.as_ref()) else { return };
+        let mut base = anim.props.downcast_ref::<DivProps>().map_or_else(Transform::default, |d| d.transform);
+        base.scale = 1.;
+        let targets = animation::values(&anim.layout, &base);
+        let flight =
+            Flight { source: inside(onto.rect, look_border(&look)), home: inside(onto.home, border_of(&anim.layout)) };
+        self.hero_away.insert(id, pose_on(&targets, onto.rect, onto.home, &look));
+        self.hero_onto.insert(id, onto);
+        self.set_fallback(id, fallback);
+        self.flights.insert(id, flight);
+        self.retarget_shown(id, at, reduce);
+    }
+
+    /// Fades hero `id` out where it is, shrinking a little, for one going back with nowhere to
+    /// travel. It lands when the fade does, or at once when it already shows nothing.
     fn fade_away(&mut self, id: NodeId, now: f64, reduce: bool, stranded: &mut Vec<NodeId>) {
-        self.hero_away.insert(id, animation::only(animation::OPACITY, 0.));
+        let mut away = animation::only(animation::OPACITY, 0.);
+        if !reduce {
+            away[animation::SCALE] = Some(HERO_SHRINK);
+        }
+        self.hero_away.insert(id, away);
+        self.hero_onto.remove(&id);
         self.retarget_shown(id, now, reduce);
         if !self.nodes.get(&id).and_then(|n| n.motion.as_ref()).is_some_and(|m| m.state.is_moving()) {
             stranded.push(id);
@@ -803,19 +909,58 @@ impl Tree {
         self.nodes.get(&id)?.props.downcast_ref::<DivProps>()?.hero.clone()
     }
 
-    fn source_rect(&self, backend: &dyn Backend, hero: &crate::element::HeroFrom) -> Option<Rect> {
-        let (node, _) = self.keyed(&hero.id)?;
-        backend.probe(node).bounds.filter(|r| r.size.width > 0. && r.size.height > 0.)
+    /// Where `hero`'s source is: the element keyed its id, else the first of its fallbacks on
+    /// screen. Elements on their way out (a page being replaced) are not on screen.
+    fn source_of(&self, backend: &dyn Backend, hero: &crate::element::HeroFrom) -> Source {
+        let keys = std::iter::once(&hero.id).chain(&hero.fallbacks);
+        for (i, key) in keys.enumerate() {
+            let Some(node) = self.live_keyed(key) else { continue };
+            return match backend.probe(node).bounds.filter(|r| r.size.width > 0. && r.size.height > 0.) {
+                Some(rect) => Source::At { node, rect, fallback: i > 0 },
+                None => Source::Unmeasured,
+            };
+        }
+        Source::Gone
     }
 
-    /// The look a hero takes on its source, laid out at `source`: the source's corner radius,
-    /// border and fill as it shows now, at the start of the flight.
-    fn source_look(&self, hero: &crate::element::HeroFrom, source: Rect) -> Values {
+    /// The first node keyed `id` in tree order that is not on its way out.
+    fn live_keyed(&self, id: &str) -> Option<NodeId> {
+        let mut stack = vec![self.root];
+        while let Some(n) = stack.pop() {
+            if self.inert.contains(&n) {
+                continue;
+            }
+            let node = &self.nodes[&n];
+            if matches!(&node.ident.key, Key::Id(k) if k.as_ref() == id) {
+                return Some(n);
+            }
+            stack.extend(node.native.iter().rev().copied());
+        }
+        None
+    }
+
+    /// The look hero `id` takes on its source `node`, laid out at `rect`. A fallback with no
+    /// fill of its own (a folder's card, drawn by what it holds) leaves the hero its own.
+    fn flight_look(&self, id: NodeId, node: NodeId, rect: Rect, fallback: bool) -> Values {
+        let look = self.source_look(node, rect);
+        let own = self.nodes.get(&id).and_then(|n| n.motion.as_ref()).map(|m| &m.layout);
+        match own.filter(|_| fallback) {
+            Some(layout) => {
+                animation::fill_from(look, &animation::with_look([None; animation::CHANNELS], layout, None))
+            }
+            None => look,
+        }
+    }
+
+    /// The look a hero takes on its source `node`, laid out at `rect`: the source's corner
+    /// radius, border and fill as it shows now.
+    fn source_look(&self, node: NodeId, rect: Rect) -> Values {
         let style = self
-            .keyed(&hero.id)
-            .and_then(|(n, _)| self.nodes.get(&n)?.props.downcast_ref::<DivProps>().map(|d| d.style.clone()))
+            .nodes
+            .get(&node)
+            .and_then(|n| n.props.downcast_ref::<DivProps>().map(|d| d.style.clone()))
             .unwrap_or_default();
-        let cap = f64::from(source.size.width.min(source.size.height)) / 2.;
+        let cap = f64::from(rect.size.width.min(rect.size.height)) / 2.;
         let mut look = animation::with_look([None; animation::CHANNELS], &style, Some(cap));
         look[animation::PROGRESS] = Some(0.);
         look
@@ -849,8 +994,9 @@ impl Tree {
     }
 
     /// Presents each part of a hero as its flight has it now: its opacity from the hero's
-    /// progress and, while the hero flies, its size from the flight's end it belongs to. Runs
-    /// last in a frame, over what the render and the motions presented.
+    /// progress and, while the hero flies, its size from the flight's end it belongs to. A hero
+    /// flying to or from a fallback fades out near it. Runs last in a frame, over what the
+    /// render and the motions presented.
     pub(crate) fn follow_heroes(&mut self, now: f64) {
         self.flights
             .retain(|id, _| self.nodes.get(id).and_then(|n| n.motion.as_ref()).is_some_and(|m| m.state.is_flying()));
@@ -864,7 +1010,8 @@ impl Tree {
             let (props, layout) = &self.parts[&id];
             let Some(own) = props.downcast_ref::<DivProps>() else { continue };
             let Some(part) = own.hero_part else { continue };
-            let opacity = part.opacity(progress as f32);
+            let hidden = part == HeroPart::Source && self.hero_fallback.contains(&hero);
+            let opacity = if hidden { 0. } else { part.opacity(progress as f32) };
             let size = flight.map(|f| match part {
                 HeroPart::Source => f.source,
                 HeroPart::Destination => f.home,
@@ -890,6 +1037,24 @@ impl Tree {
                 let style = self.taffy_style(&node.layout, &node.props, node.boundary);
                 self.needs_layout |= self.taffy.set_style(node.taffy, style).is_ok();
             }
+        }
+        let mut fading: Vec<NodeId> = self.hero_fallback.iter().copied().collect();
+        fading.sort();
+        for id in fading {
+            let Some(node) = self.nodes.get(&id) else { continue };
+            let Some(anim) = node.motion.as_ref() else { continue };
+            let values = anim.state.sample(now);
+            let near = (values[animation::PROGRESS].unwrap_or(1.) / HERO_FALLBACK_FADE).min(1.);
+            let opacity = (values[animation::OPACITY].unwrap_or(1.) * near) as f32;
+            let Some(div) = node.props.downcast_ref::<DivProps>().filter(|d| d.style.opacity != Some(opacity)) else {
+                continue;
+            };
+            let mut div = div.clone();
+            div.style.opacity = Some(opacity);
+            let props: Props = Rc::new(div);
+            let Some(node) = self.nodes.get_mut(&id) else { continue };
+            let patch = PropsPatch { old: mem::replace(&mut node.props, props), new: node.props.clone() };
+            self.tx.push(Op::Update { node: id, patch });
         }
     }
 
@@ -1352,6 +1517,8 @@ impl Tree {
                 self.hovered_groups.remove(&n);
                 self.hero_away.remove(&n);
                 self.hero_home.remove(&n);
+                self.hero_onto.remove(&n);
+                self.hero_fallback.remove(&n);
                 self.flights.remove(&n);
                 self.parts.remove(&n);
                 self.retired.remove(&n);

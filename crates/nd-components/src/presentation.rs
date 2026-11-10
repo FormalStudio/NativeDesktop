@@ -237,7 +237,8 @@ pub trait PresentationExt: Styled + Sized {
 
     /// The presentation's shared element: it travels from the element keyed `from` as the
     /// presentation opens and back onto it as it closes ([`Div::hero_from`]), and the
-    /// presentation stays on screen until it has landed.
+    /// presentation stays on screen until it has landed. Chain [`Div::hero_fallback`] for where
+    /// it goes when `from` is not on screen.
     fn hero_with(self, state: &Presentation, from: impl Into<SharedString>) -> Self;
 }
 
