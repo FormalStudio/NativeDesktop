@@ -26,7 +26,7 @@ pub fn provide<T: Settings>(cx: &mut App, handle: SettingsHandle<T>) {
 
 /// The settings form for `T`. Without a provided handle it shows the defaults, read-only.
 pub fn settings_form<T: Settings>() -> SettingsForm<T> {
-    SettingsForm { only: None, without: Vec::new(), settings: std::marker::PhantomData }
+    SettingsForm { only: None, without: Vec::new(), after: Vec::new(), settings: std::marker::PhantomData }
 }
 
 /// A [`settings_form`], every row by default. [`SettingsForm::sections`] and
@@ -34,6 +34,7 @@ pub fn settings_form<T: Settings>() -> SettingsForm<T> {
 pub struct SettingsForm<T: Settings> {
     only: Option<Vec<SharedString>>,
     without: Vec<SharedString>,
+    after: Vec<AnyElement>,
     settings: std::marker::PhantomData<fn() -> T>,
 }
 
@@ -48,6 +49,13 @@ impl<T: Settings> SettingsForm<T> {
     /// Every row but these sections', by name as for [`SettingsForm::sections`].
     pub fn without_sections(mut self, names: impl IntoIterator<Item = impl Into<SharedString>>) -> Self {
         self.without.extend(names.into_iter().map(Into::into));
+        self
+    }
+
+    /// A section of the app's own after the settings' rows, in the same form: what a tab keeps
+    /// outside the settings file (a key in the keychain).
+    pub fn child(mut self, section: impl IntoElement) -> Self {
+        self.after.push(section.into_any_element());
         self
     }
 
@@ -66,7 +74,8 @@ impl<T: Settings> SettingsForm<T> {
 }
 
 impl<T: Settings> IntoElement for SettingsForm<T> {
-    fn into_any_element(self) -> AnyElement {
+    fn into_any_element(mut self) -> AnyElement {
+        let after = std::mem::take(&mut self.after);
         deferred(move |_window, cx| {
             let handle = cx.try_global::<SettingsSource<T>>().map(|s| s.0.clone());
             let schema = handle.as_ref().map_or_else(SettingsSchema::of::<T>, |h| h.schema().clone());
@@ -75,7 +84,7 @@ impl<T: Settings> IntoElement for SettingsForm<T> {
                 None => serde_json::to_value(T::default()),
             }
             .unwrap_or(Value::Null);
-            build::<T>(&schema, &values, handle.as_ref(), |section| self.shows(section))
+            build::<T>(&schema, &values, handle.as_ref(), |section| self.shows(section), after)
         })
     }
 }
@@ -119,6 +128,7 @@ fn build<T: Settings>(
     values: &Value,
     handle: Option<&SettingsHandle<T>>,
     shows: impl Fn(Option<&str>) -> bool,
+    after: Vec<AnyElement>,
 ) -> AnyElement {
     let mut groups: Vec<(Option<&str>, Vec<&Field>)> = vec![(None, Vec::new())];
     for section in &schema.sections {
@@ -142,7 +152,7 @@ fn build<T: Settings>(
         }
         section.children(fields.into_iter().map(|f| field_row(f, values, handle)))
     });
-    form().children(sections).into_any_element()
+    form().children(sections).children(after).into_any_element()
 }
 
 fn write<T: Settings>(handle: Option<&SettingsHandle<T>>, path: &str, value: Value, cx: &mut App) {

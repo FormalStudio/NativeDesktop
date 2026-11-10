@@ -21,6 +21,7 @@ and the one it moves to.
 - `settings_form::<T>()` returns a `SettingsForm<T>` (an element, as before) that picks sections
   by field name: `.sections(["assistant"])` renders only those, `.without_sections([..])` every
   other row, so one settings struct can fill several settings tabs.
+  `.child(section)` adds a section of the app's own after them.
 
 - Heroes go back to the source as it is, or to a fallback. A hero's source is read from what is
   on screen when its flight starts and followed while it goes back, so a presentation closing

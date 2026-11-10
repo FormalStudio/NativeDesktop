@@ -70,6 +70,8 @@ To spread one settings struct over a settings window's tabs, pick its sections b
 `.sections(["assistant"])` renders only the `assistant` section, and
 `.without_sections(["assistant"])` renders every other row, the rows outside any section
 included. A name takes in the sections nested under it (`editor` covers `editor.fonts`).
+`.child(section)` adds a `form_section()` of your own after the settings' rows, in the same form,
+for what a tab keeps outside the settings file.
 
 The form reads the handle from a global that you set with
 `nd_components::forms::settings::provide(cx, handle)`. Without one, it shows the defaults as
