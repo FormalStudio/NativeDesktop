@@ -126,7 +126,7 @@ pub(crate) fn date_picker(
                 .child(glyph(g, look.icon_size - px(4.), look.text, look.glyph_stroke));
             if p.enabled {
                 let (sink, p) = (ctl.sink.clone(), p.clone());
-                a = a.occlude().cursor(look.cursor).hover(move |s| s.bg(look.fill_hover)).on_click(
+                a = a.block_mouse_except_scroll().cursor(look.cursor).hover(move |s| s.bg(look.fill_hover)).on_click(
                     move |_, window, cx| {
                         sink.take_focus(window, cx);
                         changed(&sink, &p, step(&p, n), cx);

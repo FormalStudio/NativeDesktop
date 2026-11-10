@@ -1272,8 +1272,9 @@ fn edge_button<E: Clone + 'static>(
     if !enabled {
         return button;
     }
+    // Blocks presses only: a wheel over it still reaches the scroll view it sits in.
     button
-        .occlude()
+        .block_mouse_except_scroll()
         .cursor(look.cursor)
         .hover(move |s| s.bg(look.fill_hover))
         .on_click(move |_, _, cx| sink.send(event.clone(), cx))
@@ -1688,7 +1689,7 @@ pub(crate) fn combo_box(
         .rounded(look.radius)
         .child(glyph(Glyph::ChevronDown, look.chevron_size, look.chevron_color, look.glyph_stroke));
     if p.enabled {
-        button = button.occlude().hover(move |s| s.bg(look.fill_hover)).on_click(toggle);
+        button = button.block_mouse_except_scroll().hover(move |s| s.bg(look.fill_hover)).on_click(toggle);
     }
     field = field.child(button);
     let mut root = div().flex().flex_col().child(with_style(field, &p.style));

@@ -155,6 +155,30 @@ fn sections_become_form_sections_and_doc_comments_become_help() {
     assert!(rig.cx.backend().props(wrap_section).unwrap().downcast_ref::<FormSectionProps>().is_some());
 }
 
+fn section_titles<S>(rig: &Rig<S>) -> Vec<Option<String>> {
+    rig.find_props::<FormSectionProps>()
+        .into_iter()
+        .map(|n| rig.cx.backend().props(n).unwrap().downcast_ref::<FormSectionProps>().unwrap().title.clone())
+        .map(|t| t.map(|t| t.to_string()))
+        .collect()
+}
+
+fn has<S>(rig: &Rig<S>, id: &str) -> bool {
+    rig.cx.semantic_tree().nodes().any(|(_, n)| n.test_id.as_deref() == Some(id))
+}
+
+#[test]
+fn chosen_sections_render_alone_for_a_tab_of_their_own() {
+    let only = Rig::new((), |_, _| v_flex().child(settings_form::<Prefs>().sections(["editor"])).into_any_element());
+    assert_eq!(section_titles(&only), [Some("Editor".to_owned())], "the rows outside any section stay out");
+    assert!(has(&only, "editor.wrap") && !has(&only, "show_hidden"));
+
+    let rest =
+        Rig::new((), |_, _| v_flex().child(settings_form::<Prefs>().without_sections(["editor"])).into_any_element());
+    assert_eq!(section_titles(&rest), [None], "the rows outside any section, without Editor");
+    assert!(has(&rest, "show_hidden") && !has(&rest, "editor.wrap"));
+}
+
 #[test]
 fn a_provided_handle_makes_the_controls_editable() {
     let rig = loaded();

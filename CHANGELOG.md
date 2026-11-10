@@ -5,6 +5,23 @@ and the one it moves to.
 
 ## Unreleased
 
+- GPUI toolbar tabs show which one is selected, in each platform's selector: libadwaita's view
+  switcher (icon and label, the selected one on a flat 10% tint) and a macOS preferences toolbar
+  (icon over label, the selected icon in the accent) sit in the middle of the row in place of the
+  window's title; WinUI's selector bar keeps the caption title at the leading edge and marks the
+  selected tab with an accent pill. The tabs were plain labels, and the title read as one more.
+  `Toolbar::hide_title` now hides the title on GPUI too.
+- A form scrolls to its end under a toolbar that sits outside a scaffold (a settings window's
+  tabs over its body). On GPUI the view holding the toolbar is a column of the title row over
+  the rest, as on AppKit, where the toolbar takes no part in the content's layout; a `size_full`
+  body ran past the window by the row's height, so the form's last rows could not be reached.
+- A wheel over a combo box's toggle, a text field's edge button or a date stepper's arrows
+  scrolls the form or list the control sits in. Those buttons blocked the wheel along with
+  presses, so a form stopped scrolling wherever the pointer crossed one.
+- `settings_form::<T>()` returns a `SettingsForm<T>` (an element, as before) that picks sections
+  by field name: `.sections(["assistant"])` renders only those, `.without_sections([..])` every
+  other row, so one settings struct can fill several settings tabs.
+
 - Heroes go back to the source as it is, or to a fallback. A hero's source is read from what is
   on screen when its flight starts and followed while it goes back, so a presentation closing
   onto a page that is being replaced no longer lands on the old page's card (which, fading out,

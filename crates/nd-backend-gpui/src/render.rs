@@ -688,7 +688,10 @@ impl<'a> Build<'a> {
                 let surface = props.style.background.is_none().then(|| self.top().surface).flatten();
                 let painted = self.paints.borrow().len();
                 let element = self.painted(id, own.or(surface), props.style.text.color, "view", || {
-                    self.view(id, props, surface, children(window, cx), window)
+                    match self.headed_by_toolbar(node, props, children(window, cx)) {
+                        Ok((headed, children)) => self.view(id, &headed, surface, children, window),
+                        Err(children) => self.view(id, props, surface, children, window),
+                    }
                 });
                 // Scaled about its own centre, then moved by the offset, as CSS's
                 // `translate() scale()` with a centred origin.

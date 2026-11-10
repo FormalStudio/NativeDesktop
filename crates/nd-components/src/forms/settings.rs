@@ -25,17 +25,59 @@ pub fn provide<T: Settings>(cx: &mut App, handle: SettingsHandle<T>) {
 }
 
 /// The settings form for `T`. Without a provided handle it shows the defaults, read-only.
-pub fn settings_form<T: Settings>() -> AnyElement {
-    deferred(|_window, cx| {
-        let handle = cx.try_global::<SettingsSource<T>>().map(|s| s.0.clone());
-        let schema = handle.as_ref().map_or_else(SettingsSchema::of::<T>, |h| h.schema().clone());
-        let values = match &handle {
-            Some(h) => serde_json::to_value(&*h.get()),
-            None => serde_json::to_value(T::default()),
+pub fn settings_form<T: Settings>() -> SettingsForm<T> {
+    SettingsForm { only: None, without: Vec::new(), settings: std::marker::PhantomData }
+}
+
+/// A [`settings_form`], every row by default. [`SettingsForm::sections`] and
+/// [`SettingsForm::without_sections`] split one settings struct over a window's tabs.
+pub struct SettingsForm<T: Settings> {
+    only: Option<Vec<SharedString>>,
+    without: Vec<SharedString>,
+    settings: std::marker::PhantomData<fn() -> T>,
+}
+
+impl<T: Settings> SettingsForm<T> {
+    /// Only these `#[settings(section)]` fields, by name (`brain_dumps`, `editor.fonts` for a
+    /// nested one, which `editor` also takes in). The rows outside any section are left out.
+    pub fn sections(mut self, names: impl IntoIterator<Item = impl Into<SharedString>>) -> Self {
+        self.only = Some(names.into_iter().map(Into::into).collect());
+        self
+    }
+
+    /// Every row but these sections', by name as for [`SettingsForm::sections`].
+    pub fn without_sections(mut self, names: impl IntoIterator<Item = impl Into<SharedString>>) -> Self {
+        self.without.extend(names.into_iter().map(Into::into));
+        self
+    }
+
+    fn shows(&self, section: Option<&str>) -> bool {
+        let under = |name: &SharedString, path: &str| {
+            path.strip_prefix(name.as_ref()).is_some_and(|rest| rest.is_empty() || rest.starts_with('.'))
+        };
+        match section {
+            None => self.only.is_none(),
+            Some(path) => {
+                self.only.as_ref().is_none_or(|only| only.iter().any(|n| under(n, path)))
+                    && !self.without.iter().any(|n| under(n, path))
+            }
         }
-        .unwrap_or(Value::Null);
-        build::<T>(&schema, &values, handle.as_ref())
-    })
+    }
+}
+
+impl<T: Settings> IntoElement for SettingsForm<T> {
+    fn into_any_element(self) -> AnyElement {
+        deferred(move |_window, cx| {
+            let handle = cx.try_global::<SettingsSource<T>>().map(|s| s.0.clone());
+            let schema = handle.as_ref().map_or_else(SettingsSchema::of::<T>, |h| h.schema().clone());
+            let values = match &handle {
+                Some(h) => serde_json::to_value(&*h.get()),
+                None => serde_json::to_value(T::default()),
+            }
+            .unwrap_or(Value::Null);
+            build::<T>(&schema, &values, handle.as_ref(), |section| self.shows(section))
+        })
+    }
 }
 
 fn pointer(path: &str) -> String {
@@ -72,7 +114,12 @@ fn section_of<'a>(schema: &'a SettingsSchema, field: &Field) -> Option<&'a str> 
         .map(|s| s.path.as_str())
 }
 
-fn build<T: Settings>(schema: &SettingsSchema, values: &Value, handle: Option<&SettingsHandle<T>>) -> AnyElement {
+fn build<T: Settings>(
+    schema: &SettingsSchema,
+    values: &Value,
+    handle: Option<&SettingsHandle<T>>,
+    shows: impl Fn(Option<&str>) -> bool,
+) -> AnyElement {
     let mut groups: Vec<(Option<&str>, Vec<&Field>)> = vec![(None, Vec::new())];
     for section in &schema.sections {
         groups.push((Some(section.path.as_str()), Vec::new()));
@@ -83,7 +130,8 @@ fn build<T: Settings>(schema: &SettingsSchema, values: &Value, handle: Option<&S
             group.1.push(field);
         }
     }
-    let sections = groups.into_iter().filter(|(_, fields)| !fields.is_empty()).map(|(path, fields)| {
+    let shown = groups.into_iter().filter(|(path, fields)| !fields.is_empty() && shows(*path));
+    let sections = shown.map(|(path, fields)| {
         let info = path.and_then(|p| schema.sections.iter().find(|s| s.path == p));
         let mut section: FormSection = form_section();
         if let Some(info) = info {

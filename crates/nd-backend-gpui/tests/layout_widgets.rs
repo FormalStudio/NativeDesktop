@@ -75,6 +75,9 @@ enum Kind {
     /// A path bar too long for the header between a sidebar and an inspector, as a flexible
     /// item before two buttons.
     FlexibleItem,
+    /// A settings window: a toolbar of tabs over a padded body holding a form longer than the
+    /// window, its rows holding text fields, steppers, combo boxes and pickers.
+    Settings,
 }
 
 #[derive(Default)]
@@ -267,6 +270,34 @@ impl Render for Scene {
                     .content(text("Body"))
                     .into_any_element();
             }
+            Kind::Settings => {
+                let tabs = toolbar()
+                    .tab("general", "General", Icon::Settings)
+                    .tab("assistant", "Assistant", Icon::Lightbulb)
+                    .tab("account", "Account", Icon::User)
+                    .selected_tab("assistant");
+                let sections = (0..6).map(|i| {
+                    form_section()
+                        .title(format!("Section {i}"))
+                        .child(
+                            form_row("Folder")
+                                .help("Where the notes go.")
+                                .child(text_field(format!("text{i}")).w(px(220.))),
+                        )
+                        .child(form_row("Minutes").child(stepper(format!("stepper{i}"), 5.).range(0.0..=60.)))
+                        .child(form_row("Model").child(combo_box(format!("combo{i}"), ["One", "Two"]).w(px(170.))))
+                        .child(
+                            form_row("Theme")
+                                .id(format!("last{i}"))
+                                .child(select(format!("select{i}"), ["System", "Dark"])),
+                        )
+                });
+                return div()
+                    .size_full()
+                    .child(tabs)
+                    .child(div().id("body").size_full().p(px(24.)).child(form().children(sections)))
+                    .into_any_element();
+            }
             Kind::Bar { title, leading_item } => {
                 let bar = toolbar().sidebar_toggle();
                 let bar = match title {
@@ -335,7 +366,11 @@ fn open_hooked(kind: Kind, preset: Preset, scheme: Scheme, end_controls: bool, w
             backend.set_theme(registry_in(preset, scheme));
             app.set_global(Chrome(GpuiChrome::new(backend)));
             let options = WindowOptions::main("layout").size(size(px(width), px(560.)));
-            let options = if matches!(kind, Kind::Bar { .. }) { options.title("Notes") } else { options };
+            let options = match kind {
+                Kind::Bar { .. } => options.title("Notes"),
+                Kind::Settings => options.title("Settings"),
+                _ => options,
+            };
             let handle = app.open_window(options, |_, cx| {
                 cx.new(|_| Scene { kind, log: l, ratio: 0.5, refuse: false, search: None, widths: (220., 260.) })
             });
@@ -931,6 +966,99 @@ mod gate_m6 {
         assert_eq!(moved, 0, "the rows and the selection stay put");
     }
 
+    /// Wheels the window at `at`, `steps` times by `dy` points (negative scrolls down).
+    fn wheel(o: &mut Opened, at: Point, dy: f32, steps: usize) {
+        use nd_gpui::gpui::{
+            Modifiers, MouseMoveEvent, PlatformInput, ScrollDelta, ScrollEvent, ScrollSource, TouchPhase, point,
+        };
+        let handle = o.host.window_handle(o.window).expect("gpui window");
+        let at = point(px(at.x), px(at.y));
+        let hover = MouseMoveEvent { position: at, pressed_button: None, modifiers: Modifiers::default() };
+        o.cx.update(|cx| {
+            let _ = handle.update(cx, |_, window, cx| window.dispatch_event(PlatformInput::MouseMove(hover), cx));
+        });
+        settle(&mut o.cx, &o.host);
+        for _ in 0..steps {
+            let event = ScrollEvent {
+                position: at,
+                delta: ScrollDelta::Pixels(point(px(0.), px(dy))),
+                modifiers: Modifiers::default(),
+                touch_phase: TouchPhase::Moved,
+                source: ScrollSource::Pointer,
+            };
+            o.cx.update(|cx| {
+                let _ = handle.update(cx, |_, window, cx| window.dispatch_event(PlatformInput::Scroll(event), cx));
+            });
+            settle(&mut o.cx, &o.host);
+        }
+    }
+
+    /// A wheel over any control in a long form scrolls the form: a control's buttons take
+    /// presses, never the wheel.
+    pub fn gpui_wheel_over_a_form_control_scrolls_the_form() {
+        let mut o = open(Kind::Settings);
+        let row = |o: &Opened| o.node("last0").bounds.expect("row laid out").origin.y;
+        for id in ["stepper0", "combo0", "text0", "select0"] {
+            let control = o.node(id).bounds.expect("control laid out");
+            // The trailing end: a stepper's arrows, a combo box's toggle.
+            let at =
+                Point { x: control.origin.x + control.size.width - 6., y: control.origin.y + control.size.height / 4. };
+            let before = row(&o);
+            wheel(&mut o, at, -20., 1);
+            let after = row(&o);
+            assert!(after < before, "a wheel over {id} scrolls the form: {before} -> {after}");
+            wheel(&mut o, at, 20., 1);
+        }
+    }
+
+    /// A form under a window's toolbar of tabs scrolls to both of its ends: the last row comes
+    /// fully into the window, and the first one back.
+    pub fn gpui_form_under_toolbar_tabs_scrolls_to_both_ends() {
+        let mut o = open(Kind::Settings);
+        let body = o.node("body").bounds.expect("body laid out");
+        let first = o.node("last0").bounds.expect("first section laid out").origin.y;
+        let at = Point { x: body.origin.x + 30., y: body.origin.y + 60. };
+        wheel(&mut o, at, -200., 30);
+        let last = o.node("last5").bounds.expect("last row laid out");
+        assert!(
+            last.origin.y + last.size.height <= 560. - 24.,
+            "the last row shows whole above the body's padding: ends at {}",
+            last.origin.y + last.size.height
+        );
+        assert!(body.origin.y + body.size.height <= 560.5, "the body fits under the tabs: {body:?}");
+        wheel(&mut o, at, 200., 30);
+        assert_eq!(o.node("last0").bounds.expect("laid out").origin.y, first, "back at the top");
+    }
+
+    /// A toolbar's selected tab is marked on every look, and the window's title never sits
+    /// among the tabs: libadwaita's view switcher and a macOS preferences toolbar take the
+    /// title's place in the middle of the row, a WinUI title bar keeps its caption ahead of them.
+    pub fn gpui_toolbar_tabs_mark_the_selected_one() {
+        for preset in [Preset::Adwaita, Preset::Fluent, Preset::MacOs, Preset::Plain] {
+            let o = open_in(Kind::Settings, preset, Scheme::Light);
+            let paints = o.host.backend().paints(o.window).expect("paints");
+            let marked: Vec<_> = paints.iter().filter(|p| p.label == "selected tab").collect();
+            let selected = o.node("nd-tab-assistant");
+            assert_eq!(marked.len(), 1, "{preset:?}: one tab is marked");
+            assert_eq!(marked[0].node, Some(selected.id), "{preset:?}: the selected one");
+            assert!(marked[0].color.a > 0., "{preset:?}: the mark shows");
+            let general = o.node("nd-tab-general").bounds.expect("tab laid out");
+            let account = o.node("nd-tab-account").bounds.expect("tab laid out");
+            let title = paints.iter().any(|p| p.label == "Settings");
+            match preset {
+                Preset::Fluent => {
+                    assert!(title, "the caption stays in a WinUI title bar");
+                    assert!(general.origin.x > 60., "the tabs follow the caption: {general:?}");
+                }
+                _ => assert!(!title, "{preset:?}: the tabs take the title's place"),
+            }
+            if matches!(preset, Preset::Adwaita | Preset::MacOs) {
+                let middle = (general.origin.x + account.origin.x + account.size.width) / 2.;
+                assert!((middle - 400.).abs() < 1., "{preset:?}: the tabs sit in the middle: {middle}");
+            }
+        }
+    }
+
     /// A resizable sidebar's and inspector's inner edges drag, inside their widths' range; the
     /// app's width wins once it changes, and a width the app ignores still holds.
     pub fn gpui_side_panes_resize_by_their_edges() {
@@ -1032,15 +1160,23 @@ mod gate_m6 {
         }
         let mut failed = Vec::new();
         for scheme in [Scheme::Light, Scheme::Dark] {
-            for view in ["split", "status", "alert", "about", "chrome", "chrome-backdrop", "search", "search-open"] {
+            for view in
+                ["split", "status", "alert", "about", "chrome", "chrome-backdrop", "search", "search-open", "settings"]
+            {
                 if let Err(e) = golden(view, scheme) {
                     failed.push(e);
                 }
             }
             // The Fluent look as `ND_PRESET=fluent` draws it off Windows.
             {
-                for view in ["alert-fluent", "about-fluent", "chrome-fluent", "chrome-backdrop-fluent", "search-fluent"]
-                {
+                for view in [
+                    "alert-fluent",
+                    "about-fluent",
+                    "chrome-fluent",
+                    "chrome-backdrop-fluent",
+                    "search-fluent",
+                    "settings-fluent",
+                ] {
                     if let Err(e) = golden(view, scheme) {
                         failed.push(e);
                     }
@@ -1067,6 +1203,7 @@ fn golden(view: &str, scheme: Scheme) -> Result<(), String> {
         "status" => Kind::Status,
         v if v.starts_with("chrome") => Kind::Chrome,
         v if v.starts_with("search") => Kind::Search,
+        v if v.starts_with("settings") => Kind::Settings,
         _ => Kind::Plain,
     };
     let (shown, preset) = match view.strip_suffix("-fluent") {
@@ -1075,7 +1212,7 @@ fn golden(view: &str, scheme: Scheme) -> Result<(), String> {
     };
     let mut o = open_in(kind, preset, scheme);
     match shown {
-        "chrome" | "search" | "search-open" => o.activate(),
+        "chrome" | "search" | "search-open" | "settings" => o.activate(),
         "chrome-backdrop" => o.deactivate(),
         "alert" => o.alert(
             Alert::confirm("Delete the note?", "Delete").message("The note and its attachments are removed for good."),
@@ -1144,6 +1281,15 @@ fn main() {
         ("gate_m6::gpui_side_panes_resize_by_their_edges", gate_m6::gpui_side_panes_resize_by_their_edges),
         ("gate_m6::gpui_footer_list_fits_its_rows", gate_m6::gpui_footer_list_fits_its_rows),
         ("gate_m6::gpui_fitting_list_does_not_scroll", gate_m6::gpui_fitting_list_does_not_scroll),
+        (
+            "gate_m6::gpui_wheel_over_a_form_control_scrolls_the_form",
+            gate_m6::gpui_wheel_over_a_form_control_scrolls_the_form,
+        ),
+        ("gate_m6::gpui_toolbar_tabs_mark_the_selected_one", gate_m6::gpui_toolbar_tabs_mark_the_selected_one),
+        (
+            "gate_m6::gpui_form_under_toolbar_tabs_scrolls_to_both_ends",
+            gate_m6::gpui_form_under_toolbar_tabs_scrolls_to_both_ends,
+        ),
         ("gate_m6::gpui_rich_text_inherits_size_and_shrinks", gate_m6::gpui_rich_text_inherits_size_and_shrinks),
         (
             "gate_m6::gpui_persistent_toolbar_search_stays_in_the_header",

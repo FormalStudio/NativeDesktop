@@ -238,7 +238,12 @@ impl Build<'_> {
                 centered = Some((at, Center::Search { min }));
             }
             let over_sidebar = self.over_sidebar(node);
-            if let Some((at, title)) = self.toolbar_title(id, node) {
+            let tabbed = self.group_tabs(node, &mut items, &mut centered);
+            // libadwaita's view switcher takes the title's place in the header bar, and a macOS
+            // preferences toolbar shows its tabs where the title would be. A WinUI title bar
+            // keeps its caption at the leading edge, ahead of the tabs and set apart from them.
+            let title = if tabbed && preset != nd_theme::Preset::Fluent { None } else { self.toolbar_title(id, node) };
+            if let Some((at, title)) = title {
                 // libadwaita centres the title widget between the start and end widgets; the
                 // start ones run up to the first flexible space.
                 let adwaita = preset == nd_theme::Preset::Adwaita && centered.is_none();
@@ -381,25 +386,7 @@ impl Build<'_> {
             }
         } else if is::<ToolbarTab>(kind) {
             let p = props::<ToolbarTabProps>(node)?;
-            let tab = p.id.clone();
-            let toolbar = node.parent?;
-            let emit = self.backend.state.borrow().events.emitter(toolbar);
-            let wake = self.wake.clone();
-            let color = self.text_run(id, &p.label, Run::BODY, None, None);
-            div()
-                .id(ElementId::Integer(id.0))
-                .px_2()
-                .py_1()
-                .rounded(px(6.))
-                .text_color(color)
-                .hover(move |s| s.bg(look.control_hover))
-                .occlude()
-                .child(p.label.clone())
-                .on_click(move |_, _, cx| {
-                    emit.emit(TabSelected { id: tab.clone() });
-                    wake(cx);
-                })
-                .into_any_element()
+            self.toolbar_tab(id, node, p)?
         } else if is::<TitlebarInset>(kind) {
             div().into_any_element()
         } else if is::<Glass>(kind) {
@@ -506,6 +493,52 @@ impl Build<'_> {
 }
 
 impl Build<'_> {
+    /// A view holding a toolbar outside a scaffold (a settings window's tabs over its body), as
+    /// a column: the title row on top, then a body with the view's own layout and padding in
+    /// the height the row leaves. On AppKit the toolbar takes no part in the content's layout,
+    /// so a `size_full` sibling fits the window; drawn in the view's flow, it would run past
+    /// the window's bottom by the row's height. `Err` hands the children back unchanged.
+    pub(crate) fn headed_by_toolbar(
+        &self,
+        node: &Node,
+        props: &nd_ui::DivProps,
+        children: Vec<AnyElement>,
+    ) -> Result<(nd_ui::DivProps, Vec<AnyElement>), Vec<AnyElement>> {
+        let bars: Vec<bool> = node.children.iter().map(|c| self.nodes.get(c).is_some_and(is_kind::<Toolbar>)).collect();
+        // A view nd scrolls shifts its own children, which a body between them would break.
+        if !bars.contains(&true) || bars.len() != children.len() || props.gestures.scroll.any() {
+            return Err(children);
+        }
+        let mut column = Vec::new();
+        let mut rest = Vec::new();
+        for (child, bar) in children.into_iter().zip(bars) {
+            if bar { column.push(child) } else { rest.push(child) }
+        }
+        let own = &props.style;
+        let mut body = div().flex_1().min_h_0().w_full();
+        let style = body.style();
+        style.display = own.display;
+        style.flex_direction = own.flex_direction;
+        style.flex_wrap = own.flex_wrap;
+        style.align_items = own.align_items;
+        style.align_content = own.align_content;
+        style.justify_content = own.justify_content;
+        style.gap = own.gap.clone();
+        style.padding = own.padding.clone();
+        column.push(body.children(rest).into_any_element());
+        let mut headed = props.clone();
+        let style = &mut headed.style;
+        style.display = Some(gpui::Display::Flex);
+        style.flex_direction = Some(gpui::FlexDirection::Column);
+        style.flex_wrap = None;
+        style.align_items = None;
+        style.align_content = None;
+        style.justify_content = None;
+        style.gap = Default::default();
+        style.padding = Default::default();
+        Ok((headed, column))
+    }
+
     /// Marks `scaffold` narrow while its window leaves the content less than [`NARROW_CONTENT`]
     /// beside the sidebar among `panes` at its narrowest. Folding and unfolding is immediate, as at a libadwaita
     /// breakpoint; widening past it drops an overlaid sidebar back into the row.
@@ -847,6 +880,131 @@ impl Build<'_> {
             .into_any_element()
     }
 
+    /// A toolbar tab in the platform's own selector: libadwaita's view switcher button (icon and
+    /// label on a flat toggle, checked at a 10% tint), WinUI's `SelectorBar` item (secondary
+    /// text at rest, an accent pill under the selected one), a macOS preferences toolbar item
+    /// (icon over label, the selected one on a rounded fill with its icon in the accent), and
+    /// on plain GPUI the flat toggle.
+    fn toolbar_tab(&self, id: NodeId, node: &Node, p: &ToolbarTabProps) -> Option<AnyElement> {
+        let toolbar = node.parent?;
+        let selected = self.nodes.get(&toolbar).and_then(props::<ToolbarProps>).and_then(|t| t.selected_tab.as_ref())
+            == Some(&p.id);
+        let theme = self.theme();
+        let preset = theme.preset;
+        let ink = self.ink_text();
+        let secondary = theme.text.secondary;
+        // `%button_basic_flat`, as the search toggle: 7% hovered, 16% pressed; checked 10%, 13%
+        // hovered, 19% pressed.
+        let tint = |share: f32| nd_theme::color::with_alpha(ink, ink.a * share);
+        let fluent = preset == nd_theme::Preset::Fluent;
+        let (rest, hover, active) = match (selected, fluent) {
+            (true, false) => (tint(0.10), tint(0.13), tint(0.19)),
+            _ => (gpui::transparent_black(), tint(0.07), tint(0.16)),
+        };
+        let emit = self.backend.state.borrow().events.emitter(toolbar);
+        let wake = self.wake.clone();
+        let tab_id = p.id.clone();
+        let tab = div()
+            .id(ElementId::Integer(id.0))
+            .role(gpui::Role::Tab)
+            .aria_label(p.label.clone())
+            .aria_selected(selected)
+            .relative()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(theme.radius.md)
+            .bg(rest)
+            .hover(move |s| s.bg(hover))
+            .active(move |s| s.bg(active))
+            .occlude()
+            .on_click(move |_, _, cx| {
+                emit.emit(TabSelected { id: tab_id.clone() });
+                wake(cx);
+            });
+        let icon = |color: gpui::Hsla, size: f32| p.icon.map(|i| glyph(Glyph::of(i), px(size), color, px(1.75)));
+        let label = |color: gpui::Hsla, run: Run| {
+            let color = self.text_run(id, &p.label, run, Some(color), None);
+            div().text_color(color).child(p.label.clone())
+        };
+        let s = &theme.spacing;
+        let element = match preset {
+            nd_theme::Preset::Fluent => {
+                let color = if selected { ink } else { secondary };
+                let pill = selected.then(|| {
+                    self.painted(id, Some(theme.accent), None, "selected tab", || {
+                        // SelectorBarItem's selection indicator: 16 by 3, centred under the item.
+                        div()
+                            .absolute()
+                            .left_0()
+                            .right_0()
+                            .bottom(px(1.))
+                            .flex()
+                            .justify_center()
+                            .child(div().w(px(16.)).h(px(3.)).rounded_full().bg(theme.accent))
+                    })
+                });
+                tab.h(theme.control.regular)
+                    .px(s.md)
+                    .gap(s.sm)
+                    .children(icon(color, 16.))
+                    .child(label(color, Run::BODY))
+                    .children(pill)
+            }
+            nd_theme::Preset::MacOs => self.painted(id, selected.then_some(rest), None, "selected tab", || {
+                let (glyph, text) = if selected { (theme.accent, ink) } else { (secondary, secondary) };
+                tab.flex_col().gap(px(2.)).px(s.sm).py(px(3.)).min_w(px(56.)).children(icon(glyph, 20.)).child(
+                    label(text, Run::sized(theme.type_scale.footnote.as_f32())).text_size(theme.type_scale.footnote),
+                )
+            }),
+            nd_theme::Preset::Adwaita | nd_theme::Preset::Plain => {
+                self.painted(id, selected.then_some(rest), None, "selected tab", || {
+                    tab.h(theme.control.regular)
+                        .px(s.md)
+                        .gap(s.sm)
+                        .children(icon(ink, 16.))
+                        .child(label(ink, Run::BODY))
+                })
+            }
+        };
+        Some(element.into_any_element())
+    }
+
+    /// Gathers a toolbar's run of tabs into one selector among `items`: centred in the row as
+    /// libadwaita's view switcher and a macOS preferences toolbar sit, unless the row centres
+    /// something else, and set apart from the caption before it on Windows. Whether the toolbar
+    /// has tabs.
+    fn group_tabs(&self, node: &Node, items: &mut Vec<AnyElement>, centered: &mut Option<(usize, Center)>) -> bool {
+        let tabs: Vec<usize> = node
+            .children
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| self.nodes.get(c).is_some_and(is_kind::<ToolbarTab>))
+            .map(|(at, _)| at)
+            .collect();
+        let (Some(&first), Some(&last)) = (tabs.first(), tabs.last()) else { return false };
+        if last + 1 - first != tabs.len() || items.len() != node.children.len() {
+            return true;
+        }
+        let theme = self.theme();
+        let group: Vec<AnyElement> = items.drain(first..=last).collect();
+        let selector = div().flex().flex_row().items_center().gap(theme.spacing.xs).children(group);
+        let selector = match theme.preset {
+            nd_theme::Preset::Fluent => selector.ml(theme.spacing.md),
+            _ => selector,
+        };
+        items.insert(first, selector.into_any_element());
+        if let Some((c, _)) = centered.as_mut()
+            && *c > last
+        {
+            *c -= last - first;
+        }
+        if centered.is_none() && matches!(theme.preset, nd_theme::Preset::Adwaita | nd_theme::Preset::MacOs) {
+            *centered = Some((first, Center::Item));
+        }
+        true
+    }
+
     /// A title row: it moves the window and keeps clear of the OS controls by `insets`.
     #[allow(clippy::too_many_arguments)]
     fn title_row(
@@ -1152,7 +1310,7 @@ impl Build<'_> {
     /// without one, the window's title fills the leading run when the app put nothing before the
     /// first flexible space.
     fn toolbar_title(&self, id: NodeId, node: &Node) -> Option<(usize, AnyElement)> {
-        let props = props::<ToolbarProps>(node)?;
+        let props = props::<ToolbarProps>(node).filter(|p| !p.hide_title)?;
         let system =
             |c: &NodeId| self.nodes.get(c).and_then(|n| n.props.downcast_ref::<SystemItemProps>()).map(|p| p.item);
         let item = |c: &NodeId| self.nodes.get(c).and_then(|n| n.props.downcast_ref::<ToolbarItemProps>());

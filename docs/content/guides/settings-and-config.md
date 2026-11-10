@@ -66,6 +66,11 @@ feature on `nd`). Edits go through the handle, so the file's comments survive.
 
 <!-- docs:snippet examples/notes/src/settings.rs#form -->
 
+To spread one settings struct over a settings window's tabs, pick its sections by field name.
+`.sections(["assistant"])` renders only the `assistant` section, and
+`.without_sections(["assistant"])` renders every other row, the rows outside any section
+included. A name takes in the sections nested under it (`editor` covers `editor.fonts`).
+
 The form reads the handle from a global that you set with
 `nd_components::forms::settings::provide(cx, handle)`. Without one, it shows the defaults as
 read-only. A key that a Nix-managed file sets is shown read-only, with its option path and a
