@@ -4,9 +4,17 @@
 //! manifest for the browsers it knows, so the manifests of those browsers are linked into ours.
 //! Chromium reads the manifest when an extension connects, so linking again before an action
 //! runs picks up a host installed while the app runs.
+//!
+//! On Windows Chromium finds hosts in the registry instead, under
+//! `SOFTWARE\Google\Chrome\NativeMessagingHosts` of `HKEY_CURRENT_USER` and then
+//! `HKEY_LOCAL_MACHINE`, whatever the browser's brand; desktop apps register theirs there for
+//! Chrome, so nothing is linked.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(unix)]
+use std::path::PathBuf;
 
+#[cfg(unix)]
 fn sources() -> Vec<PathBuf> {
     let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
     #[cfg(target_os = "macos")]
@@ -52,8 +60,13 @@ fn sources() -> Vec<PathBuf> {
     }
 }
 
+/// Chromium reads Windows hosts from the registry (see above).
+#[cfg(windows)]
+pub(crate) fn link_hosts(_root: &Path) {}
+
 /// Links every host manifest the known browsers have into `root/NativeMessagingHosts`. A
 /// manifest of our own (a regular file) wins over a link; links whose target went away go.
+#[cfg(unix)]
 pub(crate) fn link_hosts(root: &Path) {
     let dest = root.join("NativeMessagingHosts");
     if std::fs::create_dir_all(&dest).is_err() {

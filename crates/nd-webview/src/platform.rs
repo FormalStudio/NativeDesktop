@@ -14,7 +14,7 @@ mod gpui;
 pub(crate) const SYSTEM_ENGINE_MISSING: &str = "WKWebView failed to load";
 #[cfg(target_os = "windows")]
 pub(crate) const SYSTEM_ENGINE_MISSING: &str =
-    "web views on Windows need the WebView2 engine, which nd does not implement yet (M8 Windows lane)";
+    "the system engine on Windows is WebView2, which nd does not implement yet: use `[webview] engine = \"cef\"`";
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
 pub(crate) const SYSTEM_ENGINE_MISSING: &str = "Linux has no system web engine; pages render with Chromium (nd-cef)";
 

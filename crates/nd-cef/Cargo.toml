@@ -13,34 +13,60 @@ nd-webview.workspace = true
 tracing = "0.1.44"
 serde_json.workspace = true
 
-[target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
+[target.'cfg(any(target_os = "macos", target_os = "linux", target_os = "windows"))'.dependencies]
 # CEF 154. Its build script downloads the binary distribution into $CEF_PATH (the dev shell
 # points it at a cache directory) and builds the C++ wrapper. On macOS the framework is loaded at
-# run time from the app bundle, so nothing of Chromium is linked into the binary; on Linux the
-# executable links libcef.so, which sits beside it.
+# run time from the app bundle, so nothing of Chromium is linked into the binary; on Linux and
+# Windows the executable links libcef.so or libcef.dll, which sits beside it.
 cef = { version = "=154.5.0", default-features = false }
 # Named directly only for its `CEF_DIR` build metadata (build.rs), the dev fallback for
 # finding the runtime.
 cef-dll-sys = { version = "=154.5.0", default-features = false }
-libc = "0.2.190"
 base64 = "0.22.1"
 sha2 = "0.10.9"
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 # Fetches a Web Store package for its manifest (`extensions::install_from_store`).
 ureq = "3.4"
 
-[target.'cfg(target_os = "linux")'.dependencies]
+[target.'cfg(any(target_os = "macos", target_os = "linux"))'.dependencies]
+libc = "0.2.190"
+
+# The off-screen page as a GPUI element (gpui/).
+[target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
 nd-backend-gpui.workspace = true
 nd-gpui.workspace = true
 nd-components.workspace = true
 futures = "0.3.34"
 image = { version = "0.25.10", default-features = false }
+raw-window-handle = "0.6.2"
+
+[target.'cfg(target_os = "linux")'.dependencies]
 # A Chrome-style page's X11 container window, shaped around overlays (linux/chrome.rs).
 x11rb = { version = "0.13.2", features = ["shape"] }
-raw-window-handle = "0.6.2"
 # Printing through the desktop portal (linux/print.rs).
 zbus = "5.19"
 serde.workspace = true
+
+[target.'cfg(target_os = "windows")'.dependencies.windows]
+version = "0.62"
+features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Dwm",
+    "Win32_Graphics_Gdi",
+    "Win32_Security",
+    "Win32_Storage_Xps",
+    "Win32_System_Com",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Ole",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+    "Win32_System_Variant",
+    "Win32_UI_Accessibility",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+]
 
 [target.'cfg(target_os = "macos")'.dependencies]
 nd-backend-appkit.workspace = true

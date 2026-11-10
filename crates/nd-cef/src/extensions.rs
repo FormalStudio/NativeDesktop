@@ -53,7 +53,7 @@ const TRIGGER_PATIENCE: Duration = Duration::from_secs(15);
 const POPUP_WAIT: Duration = Duration::from_millis(6000);
 /// How long the platform looks for a click's popup window: the click's wait for Chromium and
 /// the popup's own. A click that ends without a popup stops the search sooner.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub(crate) const POPUP_SEARCH: Duration = TRIGGER_PATIENCE.saturating_add(POPUP_WAIT);
 /// A press on the action's button that dismissed its popup (a click outside it) arrives this
 /// soon after the close; it ends there, as a second click on Chrome's button does.

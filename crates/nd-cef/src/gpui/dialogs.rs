@@ -1,5 +1,5 @@
 //! The page's JavaScript dialogs as nd's drawn alerts on its window, and its file choosers
-//! through GPUI's path prompts (the desktop portal).
+//! through GPUI's path prompts (the desktop portal on Linux, the common item dialog on Windows).
 
 use std::path::PathBuf;
 

@@ -4,9 +4,9 @@
 //! Chromium; text and compositions come through GPUI's input handler; `<select>` popups draw over
 //! the page and context menus are nd's drawn menus.
 //!
-//! A Chrome-style page ([`super::chrome`]) is a window of Chromium's over the element instead,
-//! which takes its own input and draws itself: the element places it, shapes it around overlays
-//! and hands it the keyboard.
+//! A Chrome-style page (`platform::chrome`) is a native window of Chromium's over the element
+//! instead, which takes its own input and draws itself: the element places it, shapes it around
+//! overlays ([`super::shape`]) and hands it the keyboard.
 
 use std::cell::RefCell;
 use std::ops::Range;
@@ -16,7 +16,7 @@ use std::sync::Arc;
 use cef::{
     BrowserHost, BrowserSettings, CefString, Client, CompositionUnderline, CompositionUnderlineStyle, CursorType,
     DragData, DragOperationsMask, ImplBrowserHost, ImplMenuModel, KeyEvent, KeyEventType, MenuItemType, MenuModel,
-    MouseButtonType, MouseEvent, Rect, RequestContext, RuntimeStyle, WindowInfo, browser_host_create_browser,
+    MouseButtonType, MouseEvent, Rect, RequestContext, RuntimeStyle, WindowInfo,
 };
 use nd_backend_gpui::custom::{CustomCx, FocusReporter};
 use nd_backend_gpui::{GpuiBackend, MenuRow};
@@ -31,11 +31,12 @@ use nd_gpui::gpui::{
 use nd_webview::WebViewProps;
 use nd_webview::menu::Entry;
 
-use super::chrome::{self, Chrome, R};
 use super::keys;
+use super::shape::R;
 use crate::keys::flag;
 use crate::menu::Choice;
 use crate::page::{self, CefPage};
+use crate::platform::chrome::{self, Chrome};
 
 /// A page's view, as the shared page code holds it.
 pub(crate) type View = Rc<OsrView>;
@@ -44,17 +45,9 @@ pub(crate) fn new(id: u64) -> View {
     Rc::new(OsrView { id, st: RefCell::default(), chrome: RefCell::default() })
 }
 
-/// Chrome style parents Chromium's window to the page's, which takes an X11 window: in a Wayland
-/// window the page is off-screen instead.
+/// The style a page gets here: one the platform cannot host falls back to off-screen.
 pub(crate) fn supported(style: nd_webview::CefStyle) -> nd_webview::CefStyle {
-    if style == nd_webview::CefStyle::Chrome && !nd_backend_gpui::on_x11() {
-        tracing::warn!(
-            "nd-cef: Chrome style needs the window on X11; this page is off-screen. Set \
-             `[webview.cef] style = \"chrome\"` for the app, which puts its windows on XWayland"
-        );
-        return nd_webview::CefStyle::Osr;
-    }
-    style
+    chrome::supported(style)
 }
 
 thread_local! {
@@ -165,53 +158,42 @@ impl OsrView {
         Ok(chrome)
     }
 
-    /// Creates the browser of a Chrome-style page, windowed in a container of this view's.
+    /// Creates the browser of a Chrome-style page, in a native window of the platform's. The
+    /// browser arrives through `on_after_created`.
     pub(crate) fn create_chrome(
         &self,
-        mut client: Client,
+        client: Client,
         settings: &BrowserSettings,
-        mut context: Option<RequestContext>,
+        context: Option<RequestContext>,
     ) -> Result<(), String> {
-        let info = self.become_chrome()?.window_info();
-        // Asynchronous: a windowed browser's creation waits on Chromium's loop, which only runs
-        // once this returns. The browser arrives through `on_after_created`.
-        let created = browser_host_create_browser(
-            Some(&info),
-            Some(&mut client),
-            Some(&CefString::from("")),
-            Some(settings),
-            None,
-            context.as_mut(),
-        );
-        if created == 0 {
-            return Err("Chromium could not create the browser".into());
-        }
-        Ok(())
+        self.become_chrome()?.create(client, settings, context)
     }
 
-    /// This view's page is the popup a Chrome-style opener is about to create, in a container of
-    /// this view's.
+    /// This view's page is the popup a Chrome-style opener is about to create.
     pub(crate) fn expect_chrome_popup(&self, info: &mut WindowInfo) {
         match self.become_chrome() {
-            Ok(chrome) => *info = chrome.window_info(),
+            Ok(chrome) => chrome.expect_popup(info),
             Err(e) => tracing::warn!("nd-cef: {e}"),
         }
     }
 
     /// The browser exists: its window takes the page's place on the next frame.
     pub(crate) fn browser_created(self: &Rc<Self>) {
-        if self.chrome().is_some() {
+        if let Some(chrome) = self.chrome() {
+            chrome.browser_created();
             self.painted();
         }
     }
 
-    pub(crate) fn browser_closed(&self) {}
+    pub(crate) fn browser_closed(&self) {
+        if let Some(chrome) = self.chrome() {
+            chrome.browser_closed();
+        }
+    }
 
-    /// Whether Chromium can run an extension action on this page: it needs the toolbar model a
-    /// Views-hosted browser has, and a page in a native parent window has none (Chromium
-    /// dereferences the missing toolbar).
+    /// Whether Chromium can run an extension action on this page.
     pub(crate) fn extension_actions(&self) -> Result<(), String> {
-        Err("extension actions on Linux need a Views-hosted page, which nd does not create yet".into())
+        chrome::extension_actions()
     }
 
     /// An extension action ran on this page: its popup, if it opens one, goes under `anchor`.
@@ -379,7 +361,7 @@ impl OsrView {
     /// runs before the window's own interceptors record the key, so this runs a turn later.
     pub(crate) fn forward_current_key(&self) {
         let id = self.id;
-        super::run_later(move || {
+        super::pump::later(Box::new(move || {
             let Some(page) = page::get(id) else { return };
             let (Some(host), Some(key)) = (page.host(), page.view.st.borrow().last_key.clone()) else { return };
             host.send_key_event(Some(&keys::key_event(&key, KeyEventType::RAWKEYDOWN, false)));
@@ -387,7 +369,7 @@ impl OsrView {
             if typed.character != 0 {
                 host.send_key_event(Some(&typed));
             }
-        });
+        }));
     }
 
     /// Pops the context menu up at `at` (view coordinates) as nd's drawn menu; `done` hears the
@@ -539,7 +521,7 @@ impl OsrView {
     /// Moves the page's window to the element, shapes it around this frame's overlays, and
     /// fills the holes they cut with a snapshot of the page, which the element paints.
     fn place_chrome(self: &Rc<Self>, chrome: &Rc<Chrome>, bounds: Bounds<Pixels>, window: &mut Window) {
-        let Some(parent) = x11_window(window) else { return };
+        let Some(parent) = chrome::parent(window) else { return };
         let scale = window.scale_factor();
         let device = |b: Bounds<Pixels>| {
             let (x, y) = ((b.origin.x.as_f32() * scale).round() as i32, (b.origin.y.as_f32() * scale).round() as i32);
@@ -720,16 +702,6 @@ impl OsrView {
             host.send_key_event(Some(&typed));
         }
         true
-    }
-}
-
-/// The X11 window GPUI draws `window` into.
-fn x11_window(window: &Window) -> Option<u32> {
-    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-    match HasWindowHandle::window_handle(window).ok()?.as_raw() {
-        RawWindowHandle::Xcb(h) => Some(h.window.get()),
-        RawWindowHandle::Xlib(h) => u32::try_from(h.window).ok(),
-        _ => None,
     }
 }
 

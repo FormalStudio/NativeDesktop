@@ -1,15 +1,19 @@
 //! The Linux side: where `libcef.so` and its resources are, the switches Chromium needs on a
-//! Wayland or X11 desktop, and the GPUI element, menus and dialogs a page uses.
+//! Wayland or X11 desktop, Chrome-style pages as X11 child windows, and the GLib work Chrome
+//! style needs pumped. The element, the pump and the dialogs are shared with Windows
+//! (`crate::gpui`).
 
 pub(crate) mod chrome;
-pub(crate) mod dialogs;
 pub(crate) mod install_prompt;
-mod keys;
+pub(crate) mod keys;
 mod print;
-pub(crate) mod pump;
-pub(crate) mod view;
 
+use std::ffi::{c_char, c_int, c_void};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+use std::time::Duration;
+
+pub(crate) use crate::gpui::{dialogs, pump, view};
 
 use cef::*;
 
@@ -96,4 +100,39 @@ pub(crate) fn print_handler() -> Option<PrintHandler> {
 /// Runs `f` on the main thread, from any thread.
 pub(crate) fn on_main(f: impl FnOnce() + Send + 'static) {
     pump::send(pump::Msg::Run(Box::new(f)));
+}
+
+/// How often the pump runs Chromium while a Chrome-style page is open: Chromium reads its X
+/// events only when polled.
+pub(crate) fn pump_fallback() -> Option<Duration> {
+    (chrome::live() > 0).then_some(Duration::from_millis(4))
+}
+
+unsafe extern "C" {
+    fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
+}
+
+/// After each `do_message_loop_work`, while a Chrome-style page is open: dispatches what is
+/// ready on glib's default context. Chromium's UI loop on Linux is glib's, and a Chrome-style
+/// page's X connection is a source on that context, which CEF leaves to the app's GTK loop under
+/// `external_message_pump`; GPUI runs none. glib comes in with libcef.
+pub(crate) fn after_work() {
+    if chrome::live() == 0 {
+        return;
+    }
+    type Iteration = unsafe extern "C" fn(*mut c_void, c_int) -> c_int;
+    static ITERATION: OnceLock<Option<Iteration>> = OnceLock::new();
+    let iteration = ITERATION.get_or_init(|| {
+        // SAFETY: a lookup in the loaded objects; the symbol has this signature.
+        let f = unsafe { dlsym(std::ptr::null_mut(), c"g_main_context_iteration".as_ptr()) };
+        (!f.is_null()).then(|| unsafe { std::mem::transmute::<*mut c_void, Iteration>(f) })
+    });
+    let Some(iteration) = iteration else { return };
+    // A bound, so a source that is always ready cannot hold the main thread.
+    for _ in 0..64 {
+        // SAFETY: the default context (null), without blocking, on the thread Chromium runs on.
+        if unsafe { iteration(std::ptr::null_mut(), 0) } == 0 {
+            break;
+        }
+    }
 }

@@ -1098,7 +1098,7 @@ impl EngineView for CefPage {
         objc2::rc::Retained::into_super(self.view.clone())
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
     fn element(
         &self,
         cx: &nd_backend_gpui::custom::CustomCx<'_>,

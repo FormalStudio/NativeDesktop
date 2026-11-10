@@ -6,8 +6,8 @@
 //! `OUT_DIR`, builds it into one static library and emits the link arguments for the app's
 //! binaries. Every package must export a library product named like its package. Packages that
 //! depend on the framework package take its path from the `ND_SWIFT_PATH` environment variable.
-//! On Windows it raises the main thread's stack to 8 MB and embeds `[app] icon` as the executable's
-//! icon. On Linux it gives the app's binaries an
+//! On Windows it raises the main thread's stack to 8 MB and embeds the application manifest and
+//! `[app] icon` as the executable's icon. On Linux it gives the app's binaries an
 //! `$ORIGIN` run path, so the Chromium runtime web views link (`libcef.so`) loads from beside the
 //! executable, where builds and packages put it. On the web it does nothing.
 
@@ -32,7 +32,7 @@ pub fn app() {
         Ok("macos") => {}
         Ok("windows") => {
             windows_stack();
-            if let Err(message) = windows_icon() {
+            if let Err(message) = windows_resources() {
                 println!("cargo::error=nd::build::app: {message}");
                 std::process::exit(1);
             }
@@ -59,14 +59,40 @@ fn windows_stack() {
     println!("cargo::rustc-link-arg={flag}");
 }
 
-/// Embeds `[app] icon` as icon resource 1. GPUI's window class, the tray's fallback icon,
-/// Explorer and the taskbar all read that resource, so without it every one of them is blank.
-fn windows_icon() -> Result<(), String> {
+/// The application manifest's compatibility section. Without it Windows reports itself to the
+/// process as Windows 8, and Chromium, which needs 10, will not start.
+const WINDOWS_MANIFEST: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
+    </application>
+  </compatibility>
+</assembly>
+"#;
+
+/// Embeds the application manifest, and `[app] icon` as icon resource 1.
+fn windows_resources() -> Result<(), String> {
+    let out_dir = PathBuf::from(var("OUT_DIR")?);
+    let manifest = out_dir.join("app.manifest");
+    write_if_changed(&manifest, WINDOWS_MANIFEST)?;
+    let mut rc = format!("1 24 \"{}\"\n", manifest.to_str().ok_or("non-UTF-8 OUT_DIR")?.replace('\\', "/"));
+    if let Some(ico) = windows_icon(&out_dir)? {
+        rc.push_str(&format!("1 ICON \"{}\"\n", ico.to_str().ok_or("non-UTF-8 OUT_DIR")?.replace('\\', "/")));
+    }
+    let path = out_dir.join("app.rc");
+    write_if_changed(&path, &rc)?;
+    embed_resource::compile(&path, embed_resource::NONE).manifest_required().map_err(|e| e.to_string())
+}
+
+/// `[app] icon` as an `.ico` in `out_dir`. GPUI's window class, the tray's fallback icon,
+/// Explorer and the taskbar all read icon resource 1, so without it every one of them is blank.
+fn windows_icon(out_dir: &Path) -> Result<Option<PathBuf>, String> {
     let manifest_dir = PathBuf::from(var("CARGO_MANIFEST_DIR")?);
     let config = manifest_dir.join("nativedesktop.toml");
-    let Ok(text) = fs::read_to_string(&config) else { return Ok(()) };
+    let Ok(text) = fs::read_to_string(&config) else { return Ok(None) };
     let table: toml::Table = text.parse().map_err(|e| format!("{}: {e}", config.display()))?;
-    let Some(icon) = table.get("app").and_then(|a| a.get("icon")).and_then(|v| v.as_str()) else { return Ok(()) };
+    let Some(icon) = table.get("app").and_then(|a| a.get("icon")).and_then(|v| v.as_str()) else { return Ok(None) };
     let source = manifest_dir.join(icon);
     println!("cargo::rerun-if-changed={}", source.display());
     if source.extension().is_some_and(|e| e == "icon") {
@@ -81,14 +107,10 @@ fn windows_icon() -> Result<(), String> {
         })
         .collect::<Result<Vec<_>, _>>()
         .map_err(|e| e.to_string())?;
-    let out_dir = PathBuf::from(var("OUT_DIR")?);
     let ico = out_dir.join("app.ico");
     let file = fs::File::create(&ico).map_err(|e| format!("{}: {e}", ico.display()))?;
     IcoEncoder::new(std::io::BufWriter::new(file)).encode_images(&frames).map_err(|e| e.to_string())?;
-    let rc = out_dir.join("app-icon.rc");
-    let path = ico.to_str().ok_or("non-UTF-8 OUT_DIR")?.replace('\\', "/");
-    write_if_changed(&rc, &format!("1 ICON \"{path}\"\n"))?;
-    embed_resource::compile(&rc, embed_resource::NONE).manifest_required().map_err(|e| e.to_string())
+    Ok(Some(ico))
 }
 
 fn build() -> Result<(), String> {

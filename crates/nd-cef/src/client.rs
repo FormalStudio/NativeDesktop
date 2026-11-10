@@ -279,7 +279,7 @@ wrap_render_handler! {
             }
         }
 
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
         fn on_paint(
             &self,
             _browser: Option<&mut Browser>,
@@ -490,11 +490,11 @@ wrap_display_handler! {
             1
         }
 
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "windows"))]
         fn on_cursor_change(
             &self,
             _browser: Option<&mut Browser>,
-            _cursor: std::os::raw::c_ulong,
+            _cursor: CursorHandle,
             type_: CursorType,
             _custom_cursor_info: Option<&CursorInfo>,
         ) -> c_int {
@@ -788,7 +788,7 @@ wrap_focus_handler! {
             with(self.id, |p| {
                 p.page.report_focus(true);
                 // A click in a Chrome-style page's window reaches Chromium alone: nd focus follows.
-                #[cfg(target_os = "linux")]
+                #[cfg(any(target_os = "linux", target_os = "windows"))]
                 if p.view.chrome().is_some() {
                     p.view.focus();
                 }
@@ -820,9 +820,9 @@ wrap_keyboard_handler! {
 
     impl KeyboardHandler {
         /// Keys the page did not handle go back to AppKit, so the main menu's key equivalents
-        /// (an app's accelerators) still run when a page has the keyboard. On Linux the app's
-        /// bindings see every key before an off-screen page does, and a Chrome-style page's
-        /// chords before Chromium does.
+        /// (an app's accelerators) still run when a page has the keyboard. On Linux and Windows
+        /// the app's bindings see every key before an off-screen page does, and a Chrome-style
+        /// page's chords before Chromium does.
         #[cfg(target_os = "macos")]
         fn on_key_event(&self, _browser: Option<&mut Browser>, event: Option<&KeyEvent>, os_event: *mut u8) -> c_int {
             let Some(event) = event else { return 0 };
@@ -835,6 +835,12 @@ wrap_keyboard_handler! {
 
         #[cfg(target_os = "linux")]
         fn on_pre_key_event(&self, _browser: Option<&mut Browser>, event: Option<&KeyEvent>, _os_event: Option<&mut cef::sys::XEvent>, _is_keyboard_shortcut: Option<&mut c_int>) -> c_int {
+            let Some(event) = event else { return 0 };
+            with(self.id, |p| p.view.pre_key(event)) as c_int
+        }
+
+        #[cfg(target_os = "windows")]
+        fn on_pre_key_event(&self, _browser: Option<&mut Browser>, event: Option<&KeyEvent>, _os_event: Option<&mut cef::sys::MSG>, _is_keyboard_shortcut: Option<&mut c_int>) -> c_int {
             let Some(event) = event else { return 0 };
             with(self.id, |p| p.view.pre_key(event)) as c_int
         }

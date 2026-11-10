@@ -1,6 +1,6 @@
 +++
 title = "Webview"
-description = "Show web pages in a window with WebView and webview(): the app-owned handle, commands, events, WKWebView and CEF, the Linux setup, and what Windows doesn't have yet."
+description = "Show web pages in a window with WebView and webview(): the app-owned handle, commands, events, WKWebView and CEF, the Linux setup, and Chromium on Windows."
 +++
 
 A page is a `WebView` handle that your app owns. The `webview(id, &page)` element only shows it.
@@ -10,8 +10,8 @@ never reloads the page, because the element doesn't hold it.
 <!-- docs:example browser -->
 
 On macOS, the framework ships WKWebView and, as an opt-in, Chromium through CEF. Linux renders
-with Chromium ([Linux](#linux)). The Windows engine isn't written yet
-([what's missing](#windows)).
+with Chromium ([Linux](#linux)). On Windows, Chromium is the only engine so far
+([Windows](#windows)).
 
 ## The handle and the element
 
@@ -122,7 +122,7 @@ chooses one of your items, it arrives as `ContextMenuItemClicked` with the page 
 | | System | CEF |
 | --- | --- | --- |
 | macOS | WKWebView, an `NSView` beside the window's other views | Chromium rendering off-screen, composited into the window |
-| Windows | Not written yet | Not packaged yet |
+| Windows | Not written yet | Chromium rendering off-screen, drawn by the window |
 | Linux | Chromium (the same as CEF; see [Linux](#linux)) | Chromium rendering off-screen, drawn by the window |
 | Web | Not available | Not available |
 
@@ -212,6 +212,11 @@ The list mirrors `cefLibs` in [flake.nix](../../../flake.nix). Debian package na
 
 ## Windows
 
-`webview()` renders a notice with the reason, and every command fails with that reason. The
-planned engine is WebView2 in composition mode. Write the app against the handle as you would on
-macOS, and it works once the engine lands. Until then, test the web parts on macOS or Linux.
+Set `[webview] engine = "cef"` and build with nd's `cef` feature. The system engine, WebView2 in
+composition mode, isn't written yet: with `engine = "system"`, `webview()` renders a notice with
+the reason, and every command fails with that reason.
+
+`libcef.dll` and its resources sit beside the executable. The build copies them there, and
+`nd package windows` copies them into the package. `ND_CEF_DIR` points at the resources instead.
+Chrome-style pages (`[webview.cef] style = "chrome"`) are child windows of the app's window, with
+the same overlay rules as on Linux. The Windows side of the engine has not run on Windows yet.

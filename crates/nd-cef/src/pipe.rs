@@ -3,15 +3,20 @@
 //! (`devtools.rs`) cannot: Chromium answers its `Extensions` and `Target.attachToBrowserTarget`
 //! calls with "not allowed".
 //!
-//! Chromium reads the pipe's requests from fd 3 and writes replies to fd 4, of its own process,
-//! which is this one. Both are claimed in [`reserve`], the first thing the app runs, before
-//! anything else can take those numbers; descriptors a launcher left there move up. A run with
-//! no session (socket activation owns 3 and 4) says so from the calls that need it. Messages are JSON, each ended by a NUL. A reader thread collects
-//! Chromium's and posts a task to the main thread, where replies and events are dispatched.
+//! On macOS and Linux Chromium reads the pipe's requests from fd 3 and writes replies to fd 4, of
+//! its own process, which is this one. Both are claimed in [`reserve`], the first thing the app
+//! runs, before anything else can take those numbers; descriptors a launcher left there move up.
+//! A run with no session (socket activation owns 3 and 4) says so from the calls that need it.
+//! On Windows the CRT that would map fds 3 and 4 is libcef's own, so Chromium's ends are two
+//! anonymous pipes named by handle value in `--remote-debugging-io-pipes`; the browser process
+//! is this one, so the handles need no inheritance. Messages are JSON, each ended by a NUL. A
+//! reader thread collects Chromium's and posts a task to the main thread, where replies and
+//! events are dispatched.
 
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
 use std::io::{Read, Write};
+#[cfg(unix)]
 use std::os::fd::{FromRawFd, OwnedFd};
 use std::rc::Rc;
 use std::sync::{Mutex, OnceLock};
@@ -19,20 +24,26 @@ use std::sync::{Mutex, OnceLock};
 use cef::*;
 use serde_json::{Value, json};
 
+#[cfg(unix)]
 const CHROME_READS: i32 = 3;
+#[cfg(unix)]
 const CHROME_WRITES: i32 = 4;
 
 type Reply = Box<dyn FnOnce(Result<Value, String>)>;
 type Listener = Rc<dyn Fn(&str, &Value, Option<&str>)>;
 
-/// Our ends: what we write Chromium reads at fd 3, what Chromium writes at fd 4 we read.
+/// Our ends: what we write Chromium reads (fd 3, or its read handle), what Chromium writes (fd 4,
+/// or its write handle) we read.
 struct Ends {
-    to_chrome: OwnedFd,
-    from_chrome: OwnedFd,
+    to_chrome: std::fs::File,
+    from_chrome: std::fs::File,
 }
 
 static RESERVED: OnceLock<Mutex<Option<Ends>>> = OnceLock::new();
 static INBOX: Mutex<VecDeque<Vec<u8>>> = Mutex::new(VecDeque::new());
+/// `--remote-debugging-io-pipes`: Chromium's read and write handles.
+#[cfg(windows)]
+static IO_PIPES: OnceLock<String> = OnceLock::new();
 
 thread_local! {
     static WRITER: RefCell<Option<std::fs::File>> = const { RefCell::new(None) };
@@ -42,6 +53,7 @@ thread_local! {
     static BROKEN: RefCell<Option<String>> = const { RefCell::new(None) };
 }
 
+#[cfg(unix)]
 fn is_open(fd: i32) -> bool {
     // SAFETY: F_GETFD only reads the descriptor's flags.
     unsafe { libc::fcntl(fd, libc::F_GETFD) != -1 }
@@ -49,6 +61,7 @@ fn is_open(fd: i32) -> bool {
 
 /// A pipe whose descriptors sit above 3 and 4, so placing Chromium's ends there cannot close
 /// one of them. Both are close-on-exec.
+#[cfg(unix)]
 fn pipe() -> std::io::Result<(OwnedFd, OwnedFd)> {
     let mut fds = [0; 2];
     // SAFETY: `fds` has room for the two descriptors pipe(2) writes.
@@ -70,12 +83,14 @@ fn pipe() -> std::io::Result<(OwnedFd, OwnedFd)> {
     Ok(unsafe { (OwnedFd::from_raw_fd(high[0]), OwnedFd::from_raw_fd(high[1])) })
 }
 
+#[cfg(unix)]
 fn cloexec(fd: i32) {
     // SAFETY: sets a flag on a descriptor this process owns.
     unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) };
 }
 
 /// Claims fds 3 and 4 for Chromium's pipe. Runs once, first thing in the browser process.
+#[cfg(unix)]
 pub(crate) fn reserve() {
     RESERVED.get_or_init(|| {
         if std::env::var_os("LISTEN_FDS").is_some() && (is_open(CHROME_READS) || is_open(CHROME_WRITES)) {
@@ -115,10 +130,45 @@ pub(crate) fn reserve() {
             for fd in [CHROME_READS, CHROME_WRITES] {
                 cloexec(fd);
             }
-            Ok(Ends { to_chrome, from_chrome })
+            Ok(Ends { to_chrome: std::fs::File::from(to_chrome), from_chrome: std::fs::File::from(from_chrome) })
         };
         match claim() {
             Ok(ends) => Mutex::new(Some(ends)),
+            Err(e) => {
+                tracing::warn!("nd-cef: the DevTools pipe: {e}");
+                Mutex::new(None)
+            }
+        }
+    });
+}
+
+/// Makes Chromium's two pipes. Runs once, first thing in the browser process, before
+/// `CefInitialize` reads the switch.
+#[cfg(windows)]
+pub(crate) fn reserve() {
+    use std::os::windows::io::FromRawHandle;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::System::Pipes::CreatePipe;
+    RESERVED.get_or_init(|| {
+        let pipe = || -> windows::core::Result<(HANDLE, HANDLE)> {
+            let (mut read, mut write) = (HANDLE::default(), HANDLE::default());
+            // SAFETY: CreatePipe writes the two handles it creates.
+            unsafe { CreatePipe(&mut read, &mut write, None, 1 << 20)? };
+            Ok((read, write))
+        };
+        match pipe().and_then(|to| pipe().map(|from| (to, from))) {
+            Ok(((chrome_reads, to_chrome), (from_chrome, chrome_writes))) => {
+                // Chromium's ends stay open for the life of the process: Chromium owns them.
+                let _ = IO_PIPES.set(format!("{},{}", chrome_reads.0 as usize, chrome_writes.0 as usize));
+                // SAFETY: our ends were just created and are owned by nobody else.
+                let ends = unsafe {
+                    Ends {
+                        to_chrome: std::fs::File::from_raw_handle(to_chrome.0),
+                        from_chrome: std::fs::File::from_raw_handle(from_chrome.0),
+                    }
+                };
+                Mutex::new(Some(ends))
+            }
             Err(e) => {
                 tracing::warn!("nd-cef: the DevTools pipe: {e}");
                 Mutex::new(None)
@@ -138,6 +188,13 @@ pub(crate) fn switches(line: &mut CommandLine) {
         return;
     }
     line.append_switch(Some(&CefString::from("remote-debugging-pipe")));
+    #[cfg(windows)]
+    if let Some(pipes) = IO_PIPES.get() {
+        line.append_switch_with_value(
+            Some(&CefString::from("remote-debugging-io-pipes")),
+            Some(&CefString::from(pipes.as_str())),
+        );
+    }
     line.append_switch(Some(&CefString::from("enable-unsafe-extension-debugging")));
     let name = CefString::from("disable-blink-features");
     let existing = crate::text(&line.switch_value(Some(&name)));
@@ -152,8 +209,8 @@ pub(crate) fn switches(line: &mut CommandLine) {
 /// Starts reading Chromium's side, once Chromium is up.
 pub(crate) fn start() {
     let Some(ends) = RESERVED.get().and_then(|r| r.lock().ok()?.take()) else { return };
-    WRITER.with(|w| *w.borrow_mut() = Some(std::fs::File::from(ends.to_chrome)));
-    let mut reader = std::fs::File::from(ends.from_chrome);
+    WRITER.with(|w| *w.borrow_mut() = Some(ends.to_chrome));
+    let mut reader = ends.from_chrome;
     let spawned = std::thread::Builder::new().name("nd-cef-devtools-pipe".into()).spawn(move || {
         let mut buf = vec![0u8; 64 * 1024];
         let mut message = Vec::new();
