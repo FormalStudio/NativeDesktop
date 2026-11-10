@@ -80,14 +80,18 @@ pub(crate) fn start() {
     std::mem::forget(token);
 }
 
-/// Closes every browser, lets Chromium finish closing them, then shuts it down.
-fn shutdown() {
+/// Closes every browser and lets Chromium finish closing them.
+fn close_browsers() {
     crate::page::close_all();
     let deadline = Instant::now() + Duration::from_secs(3);
     while crate::page::browser_count() > 0 && Instant::now() < deadline {
         do_message_loop_work();
         std::thread::sleep(Duration::from_millis(5));
     }
+}
+
+fn shutdown() {
+    close_browsers();
     cef::shutdown();
 }
 
@@ -107,6 +111,17 @@ define_class!(
         #[unsafe(method(setHandlingSendEvent:))]
         fn set_handling_send_event(&self, handling: Bool) {
             HANDLING_SEND_EVENT.with(|h| h.set(handling.as_bool()));
+        }
+
+        /// Chromium's own will-terminate observer runs before ours and waits for its browsers
+        /// to close, then kills the process from a watchdog; they close here, before AppKit
+        /// posts the notification.
+        #[unsafe(method(terminate:))]
+        fn terminate(&self, sender: Option<&AnyObject>) {
+            if crate::runtime::started() {
+                close_browsers();
+            }
+            let _: () = unsafe { msg_send![super(self), terminate: sender] };
         }
 
         #[unsafe(method(sendEvent:))]

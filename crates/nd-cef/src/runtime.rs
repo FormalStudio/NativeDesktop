@@ -74,8 +74,8 @@ pub(crate) fn start() -> Result<(), String> {
     platform::load()?;
     platform::pump::prepare();
     let root = root_cache();
-    let _ = std::fs::create_dir_all(&root);
     forget_windows(&root.join("Default"));
+    quiet_profile(&root.join("Default"));
     crate::native_messaging::link_hosts(&root);
     let s = |p: &std::path::Path| CefString::from(p.to_string_lossy().as_ref());
     let settings = Settings {
@@ -92,7 +92,8 @@ pub(crate) fn start() -> Result<(), String> {
     };
     let args = cef::args::Args::new();
     let mut app = crate::client::app(nd_webview::schemes());
-    if initialize(Some(args.as_main_args()), Some(&settings), Some(&mut app), std::ptr::null_mut()) != 1 {
+    let ok = keep_signals(|| initialize(Some(args.as_main_args()), Some(&settings), Some(&mut app), std::ptr::null_mut()));
+    if ok != 1 {
         return Err("CefInitialize failed (another instance holding the profile, or a broken runtime)".into());
     }
     APP.with(|a| *a.borrow_mut() = Some(app));
@@ -103,6 +104,31 @@ pub(crate) fn start() -> Result<(), String> {
     crate::origin::install();
     crate::extensions::started();
     Ok(())
+}
+
+/// Chrome style installs its shutdown handlers for SIGTERM, SIGINT and SIGHUP while it
+/// initializes, and their exit request never reaches the app, so the process would outlive a
+/// SIGTERM. The dispositions the app had (its own handler, or the default) go back afterwards.
+#[cfg(unix)]
+fn keep_signals<R>(f: impl FnOnce() -> R) -> R {
+    const SIGNALS: [libc::c_int; 3] = [libc::SIGTERM, libc::SIGINT, libc::SIGHUP];
+    // SAFETY: a zeroed sigaction is a valid out value; each slot is filled before it is read.
+    let mut saved: [libc::sigaction; 3] = unsafe { std::mem::zeroed() };
+    for (signal, old) in SIGNALS.iter().zip(&mut saved) {
+        // SAFETY: reads the current disposition into `old`.
+        unsafe { libc::sigaction(*signal, std::ptr::null(), old) };
+    }
+    let result = f();
+    for (signal, old) in SIGNALS.iter().zip(&saved) {
+        // SAFETY: `old` came from sigaction above.
+        unsafe { libc::sigaction(*signal, old, std::ptr::null_mut()) };
+    }
+    result
+}
+
+#[cfg(not(unix))]
+fn keep_signals<R>(f: impl FnOnce() -> R) -> R {
+    f()
 }
 
 pub(crate) fn started() -> bool {
@@ -129,7 +155,11 @@ pub(crate) fn root_cache() -> PathBuf {
     }
     let name = app_name();
     let name = if name.is_empty() { "nd-app".to_owned() } else { name };
-    nd_core::paths::app_data_dir(&name).join("cef")
+    let root = nd_core::paths::app_data_dir(&name).join("cef");
+    let _ = std::fs::create_dir_all(&root);
+    // Chromium resolves symlinks in the root (/var is /private/var on macOS) but not in a cache
+    // path, then finds the cache outside the root and keeps that profile in memory.
+    std::fs::canonicalize(&root).unwrap_or(root)
 }
 
 /// The request context a profile's pages share: the global one for `Default`, an in-memory one
@@ -159,6 +189,7 @@ pub(crate) fn context(profile: &Profile) -> Option<RequestContext> {
                 name.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
             let path = root_cache().join(format!("profile-{safe}"));
             forget_windows(&path);
+            quiet_profile(&path);
             let settings = RequestContextSettings {
                 cache_path: CefString::from(path.to_string_lossy().as_ref()),
                 persist_session_cookies: 1,
@@ -198,17 +229,60 @@ pub(crate) fn chrome_switches(line: &mut CommandLine) {
     );
 }
 
-/// Chrome-style pages show Chrome's bubbles (save password, translate, the download bubble)
-/// anchored to a toolbar nobody sees: the preferences that open them are off in their profile.
+/// The preferences behind Chrome's bubbles (the download bubble, save password, autofill save,
+/// translate), which Chrome style anchors to a toolbar nobody sees.
+const QUIET: [&str; 6] = [
+    "download_bubble.partial_view_enabled",
+    "credentials_enable_service",
+    "credentials_enable_autosignin",
+    "autofill.profile_enabled",
+    "autofill.credit_card_enabled",
+    "translate.enabled",
+];
+
+/// Turns the bubbles' preferences off in a profile's Preferences before Chromium loads it. The
+/// global context refuses them through `set_preference` (it returns false with no error), so a
+/// persistent profile gets them on disk. A file Chromium could not read either is left alone.
+fn quiet_profile(profile: &std::path::Path) {
+    let path = profile.join("Preferences");
+    let mut prefs = match std::fs::read(&path) {
+        Ok(bytes) => match serde_json::from_slice::<serde_json::Value>(&bytes) {
+            Ok(prefs) if prefs.is_object() => prefs,
+            _ => return,
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => serde_json::json!({}),
+        Err(e) => return tracing::debug!("nd-cef: {}: {e}", path.display()),
+    };
+    let mut changed = false;
+    for name in QUIET {
+        let mut at = &mut prefs;
+        let mut keys = name.split('.').peekable();
+        while let Some(key) = keys.next() {
+            let Some(object) = at.as_object_mut() else { break };
+            if keys.peek().is_none() {
+                if object.get(key) != Some(&serde_json::Value::Bool(false)) {
+                    object.insert(key.to_owned(), serde_json::Value::Bool(false));
+                    changed = true;
+                }
+                break;
+            }
+            at = object.entry(key).or_insert_with(|| serde_json::json!({}));
+        }
+    }
+    if !changed {
+        return;
+    }
+    let written = std::fs::create_dir_all(profile)
+        .and_then(|()| std::fs::write(profile.join("Preferences.nd"), prefs.to_string()))
+        .and_then(|()| std::fs::rename(profile.join("Preferences.nd"), &path));
+    if let Err(e) = written {
+        tracing::debug!("nd-cef: {}: {e}", path.display());
+    }
+}
+
+/// The same preferences on a context Chromium already loaded, for an in-memory one.
 pub(crate) fn quiet_chrome(context: &RequestContext) {
-    for name in [
-        "download_bubble.partial_view_enabled",
-        "credentials_enable_service",
-        "credentials_enable_autosignin",
-        "autofill.profile_enabled",
-        "autofill.credit_card_enabled",
-        "translate.enabled",
-    ] {
+    for name in QUIET {
         let Some(mut value) = value_create() else { return };
         value.set_bool(0);
         let name = CefString::from(name);
