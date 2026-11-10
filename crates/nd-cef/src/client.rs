@@ -611,7 +611,14 @@ wrap_jsdialog_handler! {
         ) -> c_int {
             let Some(callback) = callback else { return 0 };
             let callback = callback.clone();
-            with(self.id, |p| p.before_unload(is_reload != 0, callback)) as c_int
+            // The app closed the page for good, after asking it (`request_close`) or on purpose:
+            // Chrome style still runs the handlers on the forced close, and its own prompt would
+            // open unseen on the hidden anchor and take the keyboard.
+            let Some(page) = page::get(self.id) else {
+                callback.cont(1, None);
+                return 1;
+            };
+            c_int::from(page.before_unload(is_reload != 0, callback))
         }
     }
 }
