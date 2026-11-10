@@ -1,0 +1,480 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: FormalSnake <kyaniserni@gmail.com>
+Date: Tue, 10 Nov 2026 19:42:41 +0000
+Subject: [PATCH 23/23] gpui_wgpu: paint embedder textures as surfaces on an
+ adopted device
+
+---
+ crates/gpui/src/scene.rs              |  28 ++++++
+ crates/gpui/src/window.rs             |  29 ++++++
+ crates/gpui_wgpu/src/shaders.wgsl     |  30 +++++++
+ crates/gpui_wgpu/src/wgpu_context.rs  |  75 ++++++++++++++++
+ crates/gpui_wgpu/src/wgpu_renderer.rs | 125 +++++++++++++++++++++++---
+ 5 files changed, 277 insertions(+), 10 deletions(-)
+
+diff --git a/crates/gpui/src/scene.rs b/crates/gpui/src/scene.rs
+index a4116aa..6992dc0 100644
+--- a/crates/gpui/src/scene.rs
++++ b/crates/gpui/src/scene.rs
+@@ -771,6 +771,34 @@ pub struct PaintSurface {
+     pub content_mask: ContentMask<ScaledPixels>,
+     #[cfg(any(target_os = "macos", target_os = "ios"))]
+     pub image_buffer: objc2_core_foundation::CFRetained<objc2_core_video::CVPixelBuffer>,
++    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
++    pub corner_radii: Corners<ScaledPixels>,
++    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
++    pub texture: SurfaceTexture,
++}
++
++/// A texture an embedder rendered on the renderer's own GPU device, drawn as a surface.
++/// The wgpu renderer takes `handle` to be a `wgpu::TextureView` of a texture with
++/// `TEXTURE_BINDING` usage, `size` texels large, holding premultiplied colour.
++#[cfg(not(any(target_os = "macos", target_os = "ios")))]
++#[derive(Clone)]
++pub struct SurfaceTexture {
++    /// The texture view, type-erased so this crate needs no GPU backend.
++    pub handle: std::sync::Arc<dyn std::any::Any + Send + Sync>,
++    /// The texture's size in texels.
++    pub size: Size<crate::DevicePixels>,
++    /// Draw every texel at full alpha, whatever the texture's alpha channel holds.
++    pub opaque: bool,
++}
++
++#[cfg(not(any(target_os = "macos", target_os = "ios")))]
++impl Debug for SurfaceTexture {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        f.debug_struct("SurfaceTexture")
++            .field("size", &self.size)
++            .field("opaque", &self.opaque)
++            .finish_non_exhaustive()
++    }
+ }
+ 
+ impl From<PaintSurface> for Primitive {
+diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
+index be42eb4..20fdcb0 100644
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -5578,6 +5578,35 @@ impl Window {
+         });
+     }
+ 
++    /// Paint a texture the embedder rendered on the renderer's GPU device into the scene
++    /// for the next frame at the current z-index, clipped to `corner_radii`.
++    ///
++    /// This method should only be called as part of the paint phase of element drawing.
++    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
++    pub fn paint_surface_texture(
++        &mut self,
++        bounds: Bounds<Pixels>,
++        corner_radii: Corners<Pixels>,
++        texture: crate::SurfaceTexture,
++    ) {
++        use crate::PaintSurface;
++
++        self.invalidator.debug_assert_paint();
++
++        let content_mask = self.snapped_content_mask();
++        let corner_radii = corner_radii
++            .clamp_radii_for_quad_size(bounds.size)
++            .scale(self.scale_factor());
++        let bounds = self.snap_bounds(bounds);
++        self.next_frame.scene.insert_primitive(PaintSurface {
++            order: 0,
++            bounds,
++            content_mask,
++            corner_radii,
++            texture,
++        });
++    }
++
+     /// Removes an image from the sprite atlas.
+     pub fn drop_image(&mut self, data: Arc<RenderImage>) -> Result<()> {
+         for frame_index in 0..data.frame_count() {
+diff --git a/crates/gpui_wgpu/src/shaders.wgsl b/crates/gpui_wgpu/src/shaders.wgsl
+index 9be210b..dec2bdc 100644
+--- a/crates/gpui_wgpu/src/shaders.wgsl
++++ b/crates/gpui_wgpu/src/shaders.wgsl
+@@ -1310,6 +1310,36 @@ fn fs_poly_sprite(input: PolySpriteVarying) -> @location(0) vec4<f32> {
+     return blend_color(color, sprite.opacity * saturate(0.5 - distance));
+ }
+ 
++// Embedder textures (`SurfaceTexture`) hold premultiplied colour, which blend_color
++// would multiply by alpha a second time.
++fn surface_texture_color(input: PolySpriteVarying, opaque: bool) -> vec4<f32> {
++    var sample = textureSample(t_sprite, s_sprite, input.tile_position);
++    if (any(input.clip_distances < vec4<f32>(0.0))) {
++        return vec4<f32>(0.0);
++    }
++    if (opaque) {
++        sample.a = 1.0;
++    }
++    let sprite = load_poly_sprite(input.sprite_id);
++    let distance = quad_sdf(input.position.xy, sprite.bounds, sprite.corner_radii);
++    let coverage = sprite.opacity * saturate(0.5 - distance);
++    if (globals.premultiplied_alpha != 0u) {
++        return sample * coverage;
++    }
++    let straight = select(vec3<f32>(0.0), sample.rgb / sample.a, sample.a > 0.0);
++    return vec4<f32>(straight, sample.a * coverage);
++}
++
++@fragment
++fn fs_surface_texture(input: PolySpriteVarying) -> @location(0) vec4<f32> {
++    return surface_texture_color(input, false);
++}
++
++@fragment
++fn fs_surface_texture_opaque(input: PolySpriteVarying) -> @location(0) vec4<f32> {
++    return surface_texture_color(input, true);
++}
++
+ // --- surfaces --- //
+ 
+ struct SurfaceParams {
+diff --git a/crates/gpui_wgpu/src/wgpu_context.rs b/crates/gpui_wgpu/src/wgpu_context.rs
+index 8e03552..8f79f6e 100644
+--- a/crates/gpui_wgpu/src/wgpu_context.rs
++++ b/crates/gpui_wgpu/src/wgpu_context.rs
+@@ -133,6 +133,38 @@ const BACKEND_ATTEMPTS: [(wgpu::Backends, bool); 2] = [
+     (wgpu::Backends::VULKAN.union(wgpu::Backends::GL), false),
+ ];
+ 
++/// A device the embedding application opened, which windows render with instead of opening
++/// their own, so textures the application renders on it can be painted as surfaces
++/// (`Window::paint_surface_texture`).
++#[derive(Clone)]
++pub struct AdoptedDevice {
++    pub instance: wgpu::Instance,
++    pub adapter: wgpu::Adapter,
++    pub device: wgpu::Device,
++    pub queue: wgpu::Queue,
++}
++
++static ADOPTED: Mutex<Option<AdoptedDevice>> = Mutex::new(None);
++static OWN_DEVICE: AtomicBool = AtomicBool::new(false);
++
++/// Render every window created after this call with `device`, when it can present to the
++/// window's surface. A device it cannot present with is passed over for the usual selection.
++pub fn adopt_device(device: AdoptedDevice) {
++    *ADOPTED.lock() = Some(device);
++}
++
++/// Whether windows render with a device of their own: none was adopted before the first
++/// window, the adopted one could not present, or it was lost.
++pub fn renders_with_own_device() -> bool {
++    OWN_DEVICE.load(Ordering::Relaxed)
++}
++
++/// Stop offering the adopted device to new windows. A lost device stays lost, so recovery
++/// that picked it again would lose it again.
++pub(crate) fn forget_adopted_device() {
++    ADOPTED.lock().take();
++}
++
+ #[derive(Clone, Copy)]
+ pub struct CompositorGpuHint {
+     pub vendor_id: u32,
+@@ -517,6 +549,13 @@ impl WgpuContext {
+         compositor_gpu: Option<CompositorGpuHint>,
+         reject_software: bool,
+     ) -> anyhow::Result<(Self, wgpu::Surface<'static>)> {
++        if let Some(adopted) = ADOPTED.lock().clone() {
++            match Self::from_adopted(&adopted, &mut create_surface, config) {
++                Ok(context_and_surface) => return Ok(context_and_surface),
++                Err(error) => log::warn!("the adopted GPU device cannot present: {error:#}"),
++            }
++        }
++        OWN_DEVICE.store(true, Ordering::Relaxed);
+         let mut last_error = anyhow::anyhow!("No GPU backend was attempted");
+         for (backends, always_reject_software) in BACKEND_ATTEMPTS {
+             let instance = Self::instance_with_backends(Some(display()), backends);
+@@ -542,6 +581,42 @@ impl WgpuContext {
+         Err(last_error)
+     }
+ 
++    #[cfg(not(target_family = "wasm"))]
++    fn from_adopted(
++        adopted: &AdoptedDevice,
++        create_surface: &mut impl FnMut(&wgpu::Instance) -> anyhow::Result<wgpu::Surface<'static>>,
++        config: &WgpuSurfaceConfig,
++    ) -> anyhow::Result<(Self, wgpu::Surface<'static>)> {
++        let surface = create_surface(&adopted.instance)?;
++        anyhow::ensure!(
++            adopted.adapter.is_surface_supported(&surface),
++            "{} cannot present to this surface",
++            adopted.adapter.get_info().name
++        );
++        // A new context's surface comes configured, as adapter selection leaves it.
++        let (surface_config, _, _) =
++            WgpuRenderer::surface_configuration(&surface, &adopted.adapter, &adopted.device, config)?;
++        let error_scope = adopted.device.push_error_scope(wgpu::ErrorFilter::Validation);
++        surface.configure(&adopted.device, &surface_config);
++        if let Some(e) = gpui::block_on(error_scope.pop()) {
++            anyhow::bail!("surface configuration failed: {e}");
++        }
++        let dual_source_blending = adopted
++            .device
++            .features()
++            .contains(wgpu::Features::DUAL_SOURCE_BLENDING);
++        let color_texture_format = Self::select_color_texture_format(&adopted.adapter)?;
++        let context = Self::from_native_adapter_and_device(
++            adopted.instance.clone(),
++            adopted.adapter.clone(),
++            adopted.device.clone(),
++            adopted.queue.clone(),
++            dual_source_blending,
++            color_texture_format,
++        );
++        Ok((context, surface))
++    }
++
+     pub fn check_compatible_with_surface(&self, surface: &wgpu::Surface<'_>) -> anyhow::Result<()> {
+         let caps = surface.get_capabilities(&self.adapter);
+         if caps.formats.is_empty() {
+diff --git a/crates/gpui_wgpu/src/wgpu_renderer.rs b/crates/gpui_wgpu/src/wgpu_renderer.rs
+index 6eae346..e8aed26 100644
+--- a/crates/gpui_wgpu/src/wgpu_renderer.rs
++++ b/crates/gpui_wgpu/src/wgpu_renderer.rs
+@@ -134,6 +134,8 @@ struct WgpuPipelines {
+     poly_sprites: wgpu::RenderPipeline,
+     #[allow(dead_code)]
+     surfaces: wgpu::RenderPipeline,
++    surface_textures: wgpu::RenderPipeline,
++    surface_textures_opaque: wgpu::RenderPipeline,
+ }
+ 
+ /// One frame allocation of instance data, ready to bind.
+@@ -154,6 +156,8 @@ struct InstanceBindings {
+     monochrome_sprites: InstanceBinding,
+     subpixel_sprites: InstanceBinding,
+     polychrome_sprites: InstanceBinding,
++    /// Embedder textures, drawn as polychrome sprites over the whole texture.
++    surfaces: InstanceBinding,
+ }
+ 
+ struct WgpuBindGroupLayouts {
+@@ -572,6 +576,7 @@ impl WgpuRenderer {
+         let window_handle = window
+             .window_handle()
+             .map_err(|e| anyhow::anyhow!("Failed to get window handle: {e}"))?;
++        let display_handle = window.display_handle().ok().map(|d| d.as_raw());
+ 
+         // Safety: The caller guarantees that the window handle is valid for the
+         // lifetime of this renderer. In practice, the RawWindow struct is created
+@@ -580,7 +585,7 @@ impl WgpuRenderer {
+         let surface_configured = ctx_ref.is_none();
+         let (context, surface) = match ctx_ref.as_mut() {
+             Some(context) => {
+-                let surface = create_surface(&context.instance, window_handle.as_raw())
++                let surface = create_surface(&context.instance, display_handle, window_handle.as_raw())
+                     .map_err(|e| anyhow::anyhow!("Failed to create surface: {e}"))?;
+                 context.check_compatible_with_surface(&surface)?;
+                 (context, surface)
+@@ -588,7 +593,7 @@ impl WgpuRenderer {
+             None => {
+                 let (context, surface) = WgpuContext::new_with_surface(
+                     || Box::new(window.clone()),
+-                    |instance| create_surface(instance, window_handle.as_raw()),
++                    |instance| create_surface(instance, display_handle, window_handle.as_raw()),
+                     &config,
+                     compositor_gpu,
+                     false,
+@@ -1202,6 +1207,32 @@ impl WgpuRendererCore {
+             &shader_module,
+         );
+ 
++        let surface_textures = create_pipeline(
++            "surface_textures",
++            "vs_poly_sprite",
++            "fs_surface_texture",
++            &layouts.globals,
++            &layouts.instances,
++            Some(&layouts.texture),
++            wgpu::PrimitiveTopology::TriangleStrip,
++            &[Some(color_target.clone())],
++            1,
++            &shader_module,
++        );
++
++        let surface_textures_opaque = create_pipeline(
++            "surface_textures_opaque",
++            "vs_poly_sprite",
++            "fs_surface_texture_opaque",
++            &layouts.globals,
++            &layouts.instances,
++            Some(&layouts.texture),
++            wgpu::PrimitiveTopology::TriangleStrip,
++            &[Some(color_target.clone())],
++            1,
++            &shader_module,
++        );
++
+         let surfaces = create_pipeline(
+             "surfaces",
+             "vs_surface",
+@@ -1224,6 +1255,8 @@ impl WgpuRendererCore {
+             mono_sprites,
+             subpixel_sprites,
+             poly_sprites,
++            surface_textures,
++            surface_textures_opaque,
+             surfaces,
+         }
+     }
+@@ -1981,9 +2014,9 @@ impl WgpuRendererCore {
+                             &mut pass,
+                         )?;
+                     }
+-                    // Surfaces are macOS-only for video playback and are not
+-                    // implemented by the WGPU renderer.
+-                    PrimitiveBatch::Surfaces(_surfaces) => {}
++                    PrimitiveBatch::Surfaces(range) => {
++                        self.draw_surfaces(scene, range, &instance_bindings.surfaces, &mut pass);
++                    }
+                 }
+             }
+         }
+@@ -2031,9 +2064,49 @@ impl WgpuRendererCore {
+                 instance_offset,
+                 &scene.polychrome_sprites,
+             )?,
++            surfaces: self.write_instance_binding(
++                "surfaces_bind_group",
++                instance_offset,
++                &surface_sprites(scene),
++            )?,
+         })
+     }
+ 
++    /// Each surface is one polychrome sprite instance, at its index in `scene.surfaces`,
++    /// sampling the embedder's texture instead of an atlas texture.
++    fn draw_surfaces(
++        &self,
++        scene: &Scene,
++        range: Range<usize>,
++        instances: &InstanceBinding,
++        pass: &mut wgpu::RenderPass<'_>,
++    ) {
++        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
++        {
++            let start = range.start;
++            let resources = self.resources();
++            for (k, surface) in scene.surfaces[range].iter().enumerate() {
++                let Some(view) = surface.texture.handle.downcast_ref::<wgpu::TextureView>() else {
++                    warn!("a surface texture is not a wgpu::TextureView");
++                    continue;
++                };
++                let texture = self.create_texture_bind_group("surface_texture_bind_group", view);
++                let instance = instances.first_instance + (start + k) as u32;
++                pass.set_pipeline(if surface.texture.opaque {
++                    &resources.pipelines.surface_textures_opaque
++                } else {
++                    &resources.pipelines.surface_textures
++                });
++                pass.set_bind_group(0, &resources.globals_bind_group, &[]);
++                pass.set_bind_group(1, &instances.bind_group, &[]);
++                pass.set_bind_group(2, &texture, &[]);
++                pass.draw(0..4, instance..instance + 1);
++            }
++        }
++        #[cfg(any(target_os = "macos", target_os = "ios"))]
++        let _ = (scene, range, instances, pass);
++    }
++
+     fn create_texture_bind_group(
+         &self,
+         label: &str,
+@@ -2517,7 +2590,7 @@ impl WgpuRenderer {
+             .window_handle()
+             .map_err(|e| anyhow::anyhow!("Failed to get window handle: {e}"))?;
+ 
+-        let surface = create_surface(instance, window_handle.as_raw())?;
++        let surface = create_surface(instance, None, window_handle.as_raw())?;
+ 
+         let width = (config.size.width.0 as u32).max(1);
+         let height = (config.size.height.0 as u32).max(1);
+@@ -2595,6 +2668,7 @@ impl WgpuRenderer {
+         let window_handle = window
+             .window_handle()
+             .map_err(|e| anyhow::anyhow!("Failed to get window handle: {e}"))?;
++        let display_handle = window.display_handle().ok().map(|d| d.as_raw());
+ 
+         let config = WgpuSurfaceConfig {
+             size: gpui::Size {
+@@ -2611,6 +2685,7 @@ impl WgpuRenderer {
+             // Drop old resources to release Arc<Device>/Arc<Queue> and GPU resources
+             self.state = RendererState::Released;
+             *gpu_context.borrow_mut() = None;
++            crate::wgpu_context::forget_adopted_device();
+ 
+             // Wait briefly for the GPU driver to stabilize, then try to
+             // recreate the context without software renderers. If this fails
+@@ -2620,7 +2695,7 @@ impl WgpuRenderer {
+ 
+             let (new_context, surface) = WgpuContext::new_with_surface(
+                 || Box::new(window.clone()),
+-                |instance| create_surface(instance, window_handle.as_raw()),
++                |instance| create_surface(instance, display_handle, window_handle.as_raw()),
+                 &config,
+                 self.compositor_gpu,
+                 true,
+@@ -2630,7 +2705,7 @@ impl WgpuRenderer {
+         } else {
+             let ctx_ref = gpu_context.borrow();
+             let instance = &ctx_ref.as_ref().unwrap().instance;
+-            create_surface(instance, window_handle.as_raw())?
++            create_surface(instance, display_handle, window_handle.as_raw())?
+         };
+ 
+         let gpu_context = Rc::clone(gpu_context);
+@@ -2950,13 +3025,15 @@ fn instance_range(range: Range<usize>) -> Range<u32> {
+ #[cfg(not(target_family = "wasm"))]
+ fn create_surface(
+     instance: &wgpu::Instance,
++    raw_display_handle: Option<raw_window_handle::RawDisplayHandle>,
+     raw_window_handle: raw_window_handle::RawWindowHandle,
+ ) -> anyhow::Result<wgpu::Surface<'static>> {
+     unsafe {
+         instance
+             .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
+-                // Fall back to the display handle already provided via InstanceDescriptor::display.
+-                raw_display_handle: None,
++                // None falls back to the display handle given in InstanceDescriptor::display,
++                // which an adopted device's instance may not have.
++                raw_display_handle,
+                 raw_window_handle,
+             })
+             .map_err(|e| anyhow::anyhow!("{e}"))
+@@ -3371,3 +3448,31 @@ mod tests {
+         );
+     }
+ }
++
++#[cfg(not(any(target_os = "macos", target_os = "ios")))]
++fn surface_sprites(scene: &Scene) -> Vec<gpui::PolychromeSprite> {
++    scene
++        .surfaces
++        .iter()
++        .map(|surface| gpui::PolychromeSprite {
++            order: surface.order,
++            pad: 0,
++            tile: gpui::AtlasTile {
++                texture_id: AtlasTextureId { index: 0, kind: gpui::AtlasTextureKind::Polychrome },
++                tile_id: gpui::TileId(0),
++                padding: 0,
++                bounds: Bounds { origin: Point::default(), size: surface.texture.size },
++            },
++            grayscale: false.into(),
++            opacity: 1.0,
++            bounds: surface.bounds,
++            content_mask: surface.content_mask.clone(),
++            corner_radii: surface.corner_radii,
++        })
++        .collect()
++}
++
++#[cfg(any(target_os = "macos", target_os = "ios"))]
++fn surface_sprites(_scene: &Scene) -> Vec<gpui::PolychromeSprite> {
++    Vec::new()
++}

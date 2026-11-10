@@ -5578,6 +5578,35 @@ impl Window {
         });
     }
 
+    /// Paint a texture the embedder rendered on the renderer's GPU device into the scene
+    /// for the next frame at the current z-index, clipped to `corner_radii`.
+    ///
+    /// This method should only be called as part of the paint phase of element drawing.
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    pub fn paint_surface_texture(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        corner_radii: Corners<Pixels>,
+        texture: crate::SurfaceTexture,
+    ) {
+        use crate::PaintSurface;
+
+        self.invalidator.debug_assert_paint();
+
+        let content_mask = self.snapped_content_mask();
+        let corner_radii = corner_radii
+            .clamp_radii_for_quad_size(bounds.size)
+            .scale(self.scale_factor());
+        let bounds = self.snap_bounds(bounds);
+        self.next_frame.scene.insert_primitive(PaintSurface {
+            order: 0,
+            bounds,
+            content_mask,
+            corner_radii,
+            texture,
+        });
+    }
+
     /// Removes an image from the sprite atlas.
     pub fn drop_image(&mut self, data: Arc<RenderImage>) -> Result<()> {
         for frame_index in 0..data.frame_count() {

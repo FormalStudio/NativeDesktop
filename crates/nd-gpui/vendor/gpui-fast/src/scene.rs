@@ -772,6 +772,34 @@ pub struct PaintSurface {
     pub content_mask: ContentMask<ScaledPixels>,
     #[cfg(any(target_os = "macos", target_os = "ios"))]
     pub image_buffer: objc2_core_foundation::CFRetained<objc2_core_video::CVPixelBuffer>,
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    pub corner_radii: Corners<ScaledPixels>,
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    pub texture: SurfaceTexture,
+}
+
+/// A texture an embedder rendered on the renderer's own GPU device, drawn as a surface.
+/// The wgpu renderer takes `handle` to be a `wgpu::TextureView` of a texture with
+/// `TEXTURE_BINDING` usage, `size` texels large, holding premultiplied colour.
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+#[derive(Clone)]
+pub struct SurfaceTexture {
+    /// The texture view, type-erased so this crate needs no GPU backend.
+    pub handle: std::sync::Arc<dyn std::any::Any + Send + Sync>,
+    /// The texture's size in texels.
+    pub size: Size<crate::DevicePixels>,
+    /// Draw every texel at full alpha, whatever the texture's alpha channel holds.
+    pub opaque: bool,
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
+impl Debug for SurfaceTexture {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SurfaceTexture")
+            .field("size", &self.size)
+            .field("opaque", &self.opaque)
+            .finish_non_exhaustive()
+    }
 }
 
 impl From<PaintSurface> for Primitive {

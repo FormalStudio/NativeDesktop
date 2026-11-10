@@ -1310,6 +1310,36 @@ fn fs_poly_sprite(input: PolySpriteVarying) -> @location(0) vec4<f32> {
     return blend_color(color, sprite.opacity * saturate(0.5 - distance));
 }
 
+// Embedder textures (`SurfaceTexture`) hold premultiplied colour, which blend_color
+// would multiply by alpha a second time.
+fn surface_texture_color(input: PolySpriteVarying, opaque: bool) -> vec4<f32> {
+    var sample = textureSample(t_sprite, s_sprite, input.tile_position);
+    if (any(input.clip_distances < vec4<f32>(0.0))) {
+        return vec4<f32>(0.0);
+    }
+    if (opaque) {
+        sample.a = 1.0;
+    }
+    let sprite = load_poly_sprite(input.sprite_id);
+    let distance = quad_sdf(input.position.xy, sprite.bounds, sprite.corner_radii);
+    let coverage = sprite.opacity * saturate(0.5 - distance);
+    if (globals.premultiplied_alpha != 0u) {
+        return sample * coverage;
+    }
+    let straight = select(vec3<f32>(0.0), sample.rgb / sample.a, sample.a > 0.0);
+    return vec4<f32>(straight, sample.a * coverage);
+}
+
+@fragment
+fn fs_surface_texture(input: PolySpriteVarying) -> @location(0) vec4<f32> {
+    return surface_texture_color(input, false);
+}
+
+@fragment
+fn fs_surface_texture_opaque(input: PolySpriteVarying) -> @location(0) vec4<f32> {
+    return surface_texture_color(input, true);
+}
+
 // --- surfaces --- //
 
 struct SurfaceParams {

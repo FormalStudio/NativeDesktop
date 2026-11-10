@@ -135,6 +135,38 @@ const BACKEND_ATTEMPTS: [(wgpu::Backends, bool); 2] = [
     (wgpu::Backends::VULKAN.union(wgpu::Backends::GL), false),
 ];
 
+/// A device the embedding application opened, which windows render with instead of opening
+/// their own, so textures the application renders on it can be painted as surfaces
+/// (`Window::paint_surface_texture`).
+#[derive(Clone)]
+pub struct AdoptedDevice {
+    pub instance: wgpu::Instance,
+    pub adapter: wgpu::Adapter,
+    pub device: wgpu::Device,
+    pub queue: wgpu::Queue,
+}
+
+static ADOPTED: Mutex<Option<AdoptedDevice>> = Mutex::new(None);
+static OWN_DEVICE: AtomicBool = AtomicBool::new(false);
+
+/// Render every window created after this call with `device`, when it can present to the
+/// window's surface. A device it cannot present with is passed over for the usual selection.
+pub fn adopt_device(device: AdoptedDevice) {
+    *ADOPTED.lock() = Some(device);
+}
+
+/// Whether windows render with a device of their own: none was adopted before the first
+/// window, the adopted one could not present, or it was lost.
+pub fn renders_with_own_device() -> bool {
+    OWN_DEVICE.load(Ordering::Relaxed)
+}
+
+/// Stop offering the adopted device to new windows. A lost device stays lost, so recovery
+/// that picked it again would lose it again.
+pub(crate) fn forget_adopted_device() {
+    ADOPTED.lock().take();
+}
+
 #[derive(Clone, Copy)]
 pub struct CompositorGpuHint {
     pub vendor_id: u32,
@@ -518,6 +550,13 @@ impl WgpuContext {
         compositor_gpu: Option<CompositorGpuHint>,
         reject_software: bool,
     ) -> anyhow::Result<(Self, wgpu::Surface<'static>)> {
+        if let Some(adopted) = ADOPTED.lock().clone() {
+            match Self::from_adopted(&adopted, &mut create_surface, config) {
+                Ok(context_and_surface) => return Ok(context_and_surface),
+                Err(error) => log::warn!("the adopted GPU device cannot present: {error:#}"),
+            }
+        }
+        OWN_DEVICE.store(true, Ordering::Relaxed);
         let mut last_error = anyhow::anyhow!("No GPU backend was attempted");
         for (backends, always_reject_software) in BACKEND_ATTEMPTS {
             let instance = Self::instance_with_backends(Some(display()), backends);
@@ -541,6 +580,42 @@ impl WgpuContext {
             }
         }
         Err(last_error)
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    fn from_adopted(
+        adopted: &AdoptedDevice,
+        create_surface: &mut impl FnMut(&wgpu::Instance) -> anyhow::Result<wgpu::Surface<'static>>,
+        config: &WgpuSurfaceConfig,
+    ) -> anyhow::Result<(Self, wgpu::Surface<'static>)> {
+        let surface = create_surface(&adopted.instance)?;
+        anyhow::ensure!(
+            adopted.adapter.is_surface_supported(&surface),
+            "{} cannot present to this surface",
+            adopted.adapter.get_info().name
+        );
+        // A new context's surface comes configured, as adapter selection leaves it.
+        let (surface_config, _, _) =
+            WgpuRenderer::surface_configuration(&surface, &adopted.adapter, &adopted.device, config)?;
+        let error_scope = adopted.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        surface.configure(&adopted.device, &surface_config);
+        if let Some(e) = gpui::block_on(error_scope.pop()) {
+            anyhow::bail!("surface configuration failed: {e}");
+        }
+        let dual_source_blending = adopted
+            .device
+            .features()
+            .contains(wgpu::Features::DUAL_SOURCE_BLENDING);
+        let color_texture_format = Self::select_color_texture_format(&adopted.adapter)?;
+        let context = Self::from_native_adapter_and_device(
+            adopted.instance.clone(),
+            adopted.adapter.clone(),
+            adopted.device.clone(),
+            adopted.queue.clone(),
+            dual_source_blending,
+            color_texture_format,
+        );
+        Ok((context, surface))
     }
 
     pub fn check_compatible_with_surface(&self, surface: &wgpu::Surface<'_>) -> anyhow::Result<()> {
