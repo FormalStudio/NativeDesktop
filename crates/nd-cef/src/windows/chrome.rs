@@ -262,7 +262,8 @@ impl Chrome {
             st.views = Some(hwnd);
             st.views_size = (0, 0);
         }
-        window.show();
+        // Views' own show activates, and the activation would land on the hidden parking window.
+        let _ = unsafe { ShowWindow(hwnd, SW_SHOWNA) };
         let frame = self.st.borrow().frame;
         self.size_views(frame.w, frame.h);
     }
