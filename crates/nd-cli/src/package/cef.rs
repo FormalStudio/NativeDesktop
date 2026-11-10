@@ -9,6 +9,10 @@
 //! Linux, where Chromium is the only web engine and the executable links `libcef.so`: the
 //! runtime ([`LINUX_RUNTIME`]) sits beside the executable, which finds it through its `$ORIGIN`
 //! run path; the app is its own helper.
+//!
+//! Windows, where the executable of a CEF app links `libcef.dll`: the runtime
+//! ([`WINDOWS_RUNTIME`]) sits beside the executable, which the loader searches first; the app is
+//! its own helper.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -169,25 +173,45 @@ pub const LINUX_RUNTIME: [&str; 10] = [
     "locales",
 ];
 
-/// Whether a Linux executable links `libcef.so`: an app with web views does.
-pub fn links_cef(exe: &Path) -> Result<bool> {
+/// What Chromium needs beside the executable on Windows, as the CEF distribution lays it out.
+pub const WINDOWS_RUNTIME: [&str; 14] = [
+    "libcef.dll",
+    "chrome_elf.dll",
+    "icudtl.dat",
+    "v8_context_snapshot.bin",
+    "resources.pak",
+    "chrome_100_percent.pak",
+    "chrome_200_percent.pak",
+    "d3dcompiler_47.dll",
+    "dxcompiler.dll",
+    "dxil.dll",
+    "vk_swiftshader.dll",
+    "vk_swiftshader_icd.json",
+    "vulkan-1.dll",
+    "locales",
+];
+
+/// Whether an executable imports `lib` (`libcef.so`, `libcef.dll`): an app with Chromium web
+/// views does.
+pub fn links_cef(exe: &Path, lib: &str) -> Result<bool> {
     let bytes = std::fs::read(exe).with_context(|| format!("reading {}", exe.display()))?;
-    Ok(bytes.windows(10).any(|w| w == b"libcef.so\0"))
+    let name = [lib.as_bytes(), b"\0"].concat();
+    Ok(bytes.windows(name.len()).any(|w| w == name))
 }
 
-/// The parts of the Linux runtime missing from `dir`.
-pub fn linux_runtime_missing(dir: &Path) -> Vec<&'static str> {
-    LINUX_RUNTIME.iter().copied().filter(|name| !dir.join(name).exists()).collect()
+/// The parts of `runtime` missing from `dir`.
+pub fn runtime_missing(dir: &Path, runtime: &[&'static str]) -> Vec<&'static str> {
+    runtime.iter().copied().filter(|name| !dir.join(name).exists()).collect()
 }
 
-/// Copies the Linux runtime from `from` (where the build put it, beside the executable) into
-/// `to`, the packaged executable's directory.
-pub fn stage_linux(from: &Path, to: &Path) -> Result<()> {
-    let missing = linux_runtime_missing(from);
+/// Copies `runtime` from `from` (where the build put it, beside the executable) into `to`, the
+/// packaged executable's directory.
+pub fn stage(runtime: &[&'static str], from: &Path, to: &Path) -> Result<()> {
+    let missing = runtime_missing(from, runtime);
     if !missing.is_empty() {
         bail!("the Chromium runtime beside {} is incomplete: {} missing", from.display(), missing.join(", "));
     }
-    for name in LINUX_RUNTIME {
+    for &name in runtime {
         let source = from.join(name);
         if source.is_dir() {
             std::fs::create_dir_all(to.join(name))?;
@@ -247,6 +271,27 @@ mod tests {
         assert_eq!(found.len(), 2, "{found:#?}");
         assert!(found.iter().any(|f| f.contains("cef_initialize")));
         assert!(found.iter().any(|f| f.contains("named like Chromium")));
+    }
+
+    #[test]
+    fn runtime_stages_beside_the_executable() {
+        let dir = tempfile::tempdir().unwrap();
+        let (from, to) = (dir.path().join("built"), dir.path().join("app"));
+        std::fs::create_dir_all(from.join("locales")).unwrap();
+        std::fs::create_dir_all(&to).unwrap();
+        for name in WINDOWS_RUNTIME.iter().filter(|n| **n != "locales") {
+            std::fs::write(from.join(name), name).unwrap();
+        }
+        std::fs::write(from.join("locales/en-US.pak"), b"en").unwrap();
+        std::fs::write(from.join("demo.exe"), b"MZ..libcef.dll\0..").unwrap();
+        assert!(links_cef(&from.join("demo.exe"), "libcef.dll").unwrap());
+        assert!(!links_cef(&from.join("demo.exe"), "libcef.so").unwrap());
+        stage(&WINDOWS_RUNTIME, &from, &to).unwrap();
+        assert!(runtime_missing(&to, &WINDOWS_RUNTIME).is_empty());
+        assert_eq!(std::fs::read(to.join("locales/en-US.pak")).unwrap(), b"en");
+
+        std::fs::remove_file(from.join("dxil.dll")).unwrap();
+        assert!(stage(&WINDOWS_RUNTIME, &from, &to).unwrap_err().to_string().contains("dxil.dll"));
     }
 
     #[test]

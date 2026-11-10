@@ -70,9 +70,9 @@ fn stage_appdir(project: &Project, exe: &Path, work: &Path) -> Result<PathBuf> {
     std::fs::create_dir_all(&bin)?;
     std::fs::copy(exe, bin.join(&project.bin)).with_context(|| format!("copying {}", exe.display()))?;
     // Web views render with Chromium: its runtime goes beside the executable.
-    if super::cef::links_cef(exe)? {
+    if super::cef::links_cef(exe, "libcef.so")? {
         let built = exe.parent().context("the executable has no directory")?;
-        super::cef::stage_linux(built, &bin)?;
+        super::cef::stage(&super::cef::LINUX_RUNTIME, built, &bin)?;
     }
 
     let source = project.config.app.icon.as_deref().context("app.icon is required for an AppImage (a 1024 px PNG)")?;

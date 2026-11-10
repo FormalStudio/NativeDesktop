@@ -216,6 +216,10 @@ pub struct Windows {
     #[schemars(regex(pattern = r"^#[0-9A-Fa-f]{6}$"))]
     pub accent: Option<String>,
     pub signing: Option<WindowsSigning>,
+    /// The Azure Artifact Signing identity `signing = "azure"` signs with.
+    pub azure: Option<AzureSigning>,
+    /// The certificate `signing = "certificate"` signs with.
+    pub certificate: Option<Certificate>,
     /// Files copied beside the executable, relative to this file, for example a helper `.exe`
     /// the app starts.
     pub files: Vec<String>,
@@ -241,8 +245,32 @@ pub enum Shortcut {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum WindowsSigning {
-    /// Azure Artifact Signing.
+    /// Azure Artifact Signing, as `[windows.azure]`.
     Azure,
+    /// A certificate in the Windows certificate store, as `[windows.certificate]`, through
+    /// signtool.
+    Certificate,
+}
+
+/// What Azure's `metadata.json` names: the account's endpoint, the account, the certificate
+/// profile.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct AzureSigning {
+    /// The account's regional endpoint, for example `https://weu.codesigning.azure.net`.
+    pub endpoint: String,
+    pub account: String,
+    pub profile: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Certificate {
+    /// SHA-1 thumbprint of the certificate, which signtool finds in the user's or the
+    /// machine's store.
+    pub thumbprint: String,
+    /// RFC 3161 timestamp server every signature is stamped by.
+    pub timestamp_url: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -344,6 +372,17 @@ impl Config {
             return Err(
                 "macos.notarize needs macos.signing_identity: Apple only notarizes Developer ID signed code".into()
             );
+        }
+        match self.windows.signing {
+            Some(WindowsSigning::Azure) if self.windows.azure.is_none() => {
+                return Err("windows.signing = \"azure\" needs [windows.azure] (endpoint, account, profile)".into());
+            }
+            Some(WindowsSigning::Certificate) if self.windows.certificate.is_none() => {
+                return Err(
+                    "windows.signing = \"certificate\" needs [windows.certificate] (thumbprint, timestamp_url)".into(),
+                );
+            }
+            _ => {}
         }
         Ok(())
     }

@@ -42,6 +42,8 @@ fn validation_rejects_bad_ids_and_half_configured_feeds() {
     assert!(parse("[app]\nid = \"notes\"\n").contains("reverse-DNS"));
     assert!(parse("").contains("app.id is required"));
     assert!(parse("[app]\nid = \"a.b\"\n[updates]\nfeed = \"https://x\"\n").contains("public_key"));
+    assert!(parse("[app]\nid = \"a.b\"\n[windows]\nsigning = \"azure\"\n").contains("[windows.azure]"));
+    assert!(parse("[app]\nid = \"a.b\"\n[windows]\nsigning = \"certificate\"\n").contains("[windows.certificate]"));
 }
 
 #[test]

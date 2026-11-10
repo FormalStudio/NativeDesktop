@@ -37,6 +37,7 @@ notary_profile = "formalsnake-notary"
 publisher = "FormalSnake"
 installer = { splash = "assets/splash.png", shortcuts = ["start", "desktop"] }
 signing = "azure"
+azure = { endpoint = "https://weu.codesigning.azure.net", account = "formalsnake", profile = "notes" }
 
 [linux]
 formats = ["appimage"]

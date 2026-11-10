@@ -1,9 +1,11 @@
 //! Windows: a branded Velopack `Setup.exe` (name, icon, splash, publisher, accent and shortcuts
-//! from `[windows]`), an MSI on request, Azure Artifact Signing when configured. `files` are
-//! copied beside the executable.
+//! from `[windows]`), an MSI on request, signed with the identity `[windows]` names. `files` are
+//! copied beside the executable, and so is Chromium's runtime when the executable links
+//! `libcef.dll`.
 //!
-//! Signing with Azure runs only on a Windows host (`vpk` signs through signtool there); a cross
-//! pack from macOS or Linux signs only through `ND_WINDOWS_SIGN_TEMPLATE`, a command with
+//! Signing runs only on a Windows host (`vpk` signs through signtool there), with Azure Artifact
+//! Signing (`[windows.azure]`) or a certificate from the store (`[windows.certificate]`). A
+//! cross pack from macOS or Linux signs only through `ND_WINDOWS_SIGN_TEMPLATE`, a command with
 //! `{{file}}` (for example jsign), and otherwise refuses rather than ship unsigned by accident.
 //! File associations and URL schemes are not registered by Setup.exe yet.
 
@@ -17,9 +19,6 @@ use crate::project::{Project, fresh_dir};
 use crate::vpk;
 
 pub fn package(project: &Project, opts: &Options) -> Result<Packed> {
-    if super::cef::enabled(project) {
-        bail!("[webview] engine = \"cef\": bundling Chromium for Windows is not implemented yet (macOS only)");
-    }
     let work = project.nd_dir().join("package/windows");
     fresh_dir(&work)?;
     let exe = match &opts.binary {
@@ -32,6 +31,7 @@ pub fn package(project: &Project, opts: &Options) -> Result<Packed> {
     std::fs::copy(&exe, dir.join(format!("{}.exe", project.bin)))
         .with_context(|| format!("copying {}", exe.display()))?;
     copy_files(project, &dir)?;
+    stage_cef(project, &exe, &dir)?;
     let ico = match &project.config.app.icon {
         Some(source) => {
             let path = work.join("app.ico");
@@ -40,7 +40,7 @@ pub fn package(project: &Project, opts: &Options) -> Result<Packed> {
         }
         None => None,
     };
-    let signing = Signing::from_env(project, cfg!(windows))?;
+    let signing = Signing::from_config(project, &work, cfg!(windows))?;
     let vpk = vpk::locate()?;
     std::fs::create_dir_all(&opts.releases)?;
     vpk::run(&vpk, &pack_args(project, opts, &dir, ico.as_deref(), &signing, cfg!(windows)))?;
@@ -58,28 +58,62 @@ fn copy_files(project: &Project, dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Chromium's runtime, from beside the built executable, when the executable links it.
+fn stage_cef(project: &Project, exe: &Path, dir: &Path) -> Result<()> {
+    if !super::cef::links_cef(exe, "libcef.dll")? {
+        if super::cef::enabled(project) {
+            bail!(
+                "[webview] engine = \"cef\", but {} does not link libcef.dll: enable nd's `cef` feature",
+                exe.display()
+            );
+        }
+        return Ok(());
+    }
+    let built = exe.parent().context("the executable has no directory")?;
+    super::cef::stage(&super::cef::WINDOWS_RUNTIME, built, dir)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Signing {
     None,
-    /// `metadata.json` for Azure Artifact Signing (`ND_AZURE_SIGN_METADATA`).
+    /// `metadata.json` for Azure Artifact Signing, written from `[windows.azure]`.
     Azure(PathBuf),
+    /// signtool's parameters for `[windows.certificate]`.
+    Params(String),
     /// A signing command with `{{file}}` (`ND_WINDOWS_SIGN_TEMPLATE`).
     Template(String),
 }
 
 impl Signing {
-    fn from_env(project: &Project, on_windows: bool) -> Result<Self> {
-        let template = std::env::var("ND_WINDOWS_SIGN_TEMPLATE").ok().filter(|t| !t.is_empty());
-        match project.config.windows.signing {
-            None => Ok(Self::None),
-            Some(WindowsSigning::Azure) if on_windows => {
-                let metadata = std::env::var_os("ND_AZURE_SIGN_METADATA")
-                    .context("windows.signing = \"azure\" needs ND_AZURE_SIGN_METADATA (path to metadata.json)")?;
-                Ok(Self::Azure(metadata.into()))
+    fn from_config(project: &Project, work: &Path, on_windows: bool) -> Result<Self> {
+        let win = &project.config.windows;
+        let Some(method) = win.signing else { return Ok(Self::None) };
+        if !on_windows {
+            let template = std::env::var("ND_WINDOWS_SIGN_TEMPLATE").ok().filter(|t| !t.is_empty());
+            return template
+                .map(Self::Template)
+                .context("windows.signing signs on a Windows host; cross-packing needs ND_WINDOWS_SIGN_TEMPLATE");
+        }
+        match method {
+            WindowsSigning::Azure => {
+                let azure = win.azure.as_ref().context("windows.signing = \"azure\" needs [windows.azure]")?;
+                let metadata = work.join("metadata.json");
+                let json = serde_json::json!({
+                    "Endpoint": azure.endpoint,
+                    "CodeSigningAccountName": azure.account,
+                    "CertificateProfileName": azure.profile,
+                });
+                std::fs::write(&metadata, serde_json::to_vec_pretty(&json)?)
+                    .with_context(|| format!("writing {}", metadata.display()))?;
+                Ok(Self::Azure(metadata))
             }
-            Some(WindowsSigning::Azure) => template.map(Self::Template).context(
-                "windows.signing = \"azure\" signs on a Windows host; cross-packing needs ND_WINDOWS_SIGN_TEMPLATE",
-            ),
+            WindowsSigning::Certificate => {
+                let cert = win
+                    .certificate
+                    .as_ref()
+                    .context("windows.signing = \"certificate\" needs [windows.certificate]")?;
+                Ok(Self::Params(format!("/sha1 {} /fd sha256 /tr {} /td sha256", cert.thumbprint, cert.timestamp_url)))
+            }
         }
     }
 }
@@ -146,6 +180,7 @@ pub fn pack_args(
     match signing {
         Signing::None => {}
         Signing::Azure(metadata) => args.extend(["--azureTrustedSignFile".into(), metadata.display().to_string()]),
+        Signing::Params(params) => args.extend(["--signParams".into(), params.clone()]),
         Signing::Template(template) => args.extend(["--signTemplate".into(), template.clone()]),
     }
     if let Some(notes) = &opts.notes {
@@ -168,6 +203,7 @@ publisher = "FormalSnake"
 accent = "#3366ff"
 installer = { splash = "assets/splash.png", shortcuts = ["start", "desktop"], msi = true }
 signing = "azure"
+azure = { endpoint = "https://weu.codesigning.azure.net", account = "formalsnake", profile = "notes" }
 "##;
 
     #[test]
@@ -211,11 +247,49 @@ signing = "azure"
     }
 
     #[test]
-    fn azure_signing_off_windows_needs_a_template() {
+    fn signing_off_windows_needs_a_template() {
         let p = project(BRANDED);
         // SAFETY: tests in this module do not read the variable concurrently.
         unsafe { std::env::remove_var("ND_WINDOWS_SIGN_TEMPLATE") };
-        assert!(Signing::from_env(&p, false).unwrap_err().to_string().contains("ND_WINDOWS_SIGN_TEMPLATE"));
-        assert_eq!(Signing::from_env(&project("[app]\nid = \"a.b\"\n"), false).unwrap(), Signing::None);
+        let err = Signing::from_config(&p, &p.root, false).unwrap_err().to_string();
+        assert!(err.contains("ND_WINDOWS_SIGN_TEMPLATE"), "{err}");
+        let unsigned = project("[app]\nid = \"a.b\"\n");
+        assert_eq!(Signing::from_config(&unsigned, &unsigned.root, false).unwrap(), Signing::None);
+    }
+
+    #[test]
+    fn signing_identity_comes_from_the_config() {
+        let p = project(BRANDED);
+        let Signing::Azure(metadata) = Signing::from_config(&p, &p.root, true).unwrap() else { panic!() };
+        let json: serde_json::Value = serde_json::from_slice(&std::fs::read(metadata).unwrap()).unwrap();
+        assert_eq!(json["Endpoint"], "https://weu.codesigning.azure.net");
+        assert_eq!(json["CodeSigningAccountName"], "formalsnake");
+        assert_eq!(json["CertificateProfileName"], "notes");
+
+        let cert = project(
+            "[app]\nid = \"a.b\"\n[windows]\nsigning = \"certificate\"\n\
+             certificate = { thumbprint = \"ab12\", timestamp_url = \"http://ts.example\" }\n",
+        );
+        let signing = Signing::from_config(&cert, &cert.root, true).unwrap();
+        assert_eq!(signing, Signing::Params("/sha1 ab12 /fd sha256 /tr http://ts.example /td sha256".into()));
+        let args = pack_args(&cert, &Options::for_test("stable"), Path::new("app"), None, &signing, true).join(" ");
+        assert!(args.contains("--signParams /sha1 ab12"), "{args}");
+    }
+
+    #[test]
+    fn a_cef_app_carries_the_runtime() {
+        let p = project("[app]\nid = \"a.b\"\n[webview]\nengine = \"cef\"\n");
+        let built = p.root.join("built");
+        std::fs::create_dir_all(built.join("locales")).unwrap();
+        for name in super::super::cef::WINDOWS_RUNTIME.iter().filter(|n| **n != "locales") {
+            std::fs::write(built.join(name), b"x").unwrap();
+        }
+        let app = p.root.join("app");
+        std::fs::create_dir_all(&app).unwrap();
+        std::fs::write(built.join("plain.exe"), b"MZ plain").unwrap();
+        assert!(stage_cef(&p, &built.join("plain.exe"), &app).unwrap_err().to_string().contains("libcef.dll"));
+        std::fs::write(built.join("demo.exe"), b"MZ libcef.dll\0").unwrap();
+        stage_cef(&p, &built.join("demo.exe"), &app).unwrap();
+        assert!(app.join("libcef.dll").exists() && app.join("locales").is_dir());
     }
 }

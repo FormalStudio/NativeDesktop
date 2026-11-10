@@ -1,6 +1,6 @@
 //! `nd doctor`: whether what the app in the current project needs at run time is in place. Today
-//! that is its web engine: Chromium's runtime beside the Linux executable (and the system
-//! libraries `libcef.so` links), or the CEF distribution a macOS package bundles.
+//! that is its web engine: Chromium's runtime beside the Linux or Windows executable (and the
+//! system libraries `libcef.so` links), or the CEF distribution a macOS package bundles.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -32,8 +32,8 @@ pub fn run(args: DoctorArgs) -> Result<ExitCode> {
 }
 
 fn web_engine(project: &Project) -> Vec<String> {
-    if cfg!(target_os = "linux") {
-        return linux_web_engine(project);
+    if cfg!(any(target_os = "linux", target_os = "windows")) {
+        return built_web_engine(project);
     }
     if cef::enabled(project)
         && let Err(e) = cef::distribution(project)
@@ -44,15 +44,20 @@ fn web_engine(project: &Project) -> Vec<String> {
 }
 
 /// Every build of the app that links Chromium, checked for its runtime and libraries.
-fn linux_web_engine(project: &Project) -> Vec<String> {
+fn built_web_engine(project: &Project) -> Vec<String> {
+    let (lib, runtime, exe_name) = if cfg!(windows) {
+        ("libcef.dll", &cef::WINDOWS_RUNTIME[..], format!("{}.exe", project.bin))
+    } else {
+        ("libcef.so", &cef::LINUX_RUNTIME[..], project.bin.clone())
+    };
     let mut problems = Vec::new();
     for profile in ["debug", "release"] {
-        let exe = project.target_dir.join(profile).join(&project.bin);
-        if !exe.exists() || !cef::links_cef(&exe).unwrap_or(false) {
+        let exe = project.target_dir.join(profile).join(&exe_name);
+        if !exe.exists() || !cef::links_cef(&exe, lib).unwrap_or(false) {
             continue;
         }
         let dir = exe.parent().unwrap_or(Path::new("."));
-        let missing = cef::linux_runtime_missing(dir);
+        let missing = cef::runtime_missing(dir, runtime);
         if !missing.is_empty() {
             problems.push(format!(
                 "web views: the Chromium runtime beside {} is incomplete ({} missing): rebuild, or copy the \
@@ -60,6 +65,9 @@ fn linux_web_engine(project: &Project) -> Vec<String> {
                 exe.display(),
                 missing.join(", ")
             ));
+            continue;
+        }
+        if cfg!(windows) {
             continue;
         }
         for lib in unresolved(&dir.join("libcef.so")) {

@@ -60,8 +60,8 @@ one, Velopack:
 The `.dmg` is signed, notarized, and stapled the same way. `notarize = true` needs both the
 profile and the identity, and the manifest fails validation without them.
 
-Chromium for `engine = "cef"` is bundled on macOS and Linux (see
-[the Linux webview section](webview.md#linux)). The Windows packer refuses a CEF app.
+Chromium for `engine = "cef"` is bundled on macOS, Linux and Windows (see
+[the Linux webview section](webview.md#linux) and [Windows](webview.md#windows)).
 
 <!-- docs:snippet examples/notes/nativedesktop.toml#platforms -->
 
@@ -77,12 +77,15 @@ beside its executable; see [webview](webview.md#linux) for the system libraries 
 ## Windows
 
 `Setup.exe` takes its name, icon, splash, publisher, accent, and shortcuts from `[windows]`, and
-`installer.msi = true` adds an MSI. `signing = "azure"` signs through Azure Artifact Signing,
-which runs only on a Windows host. A cross pack from macOS or Linux signs with
-`ND_WINDOWS_SIGN_TEMPLATE`, a command that contains `{{file}}`. Without it, the pack fails
-instead of shipping unsigned by accident. `Setup.exe` doesn't register file associations or URL
+`installer.msi = true` adds an MSI. `signing = "azure"` signs through Azure Artifact Signing with
+the account in `[windows.azure]` (`endpoint`, `account`, `profile`). `signing = "certificate"`
+signs through signtool with the certificate in `[windows.certificate]` (`thumbprint` from the
+certificate store, `timestamp_url`). Both run only on a Windows host. A cross pack from macOS or
+Linux signs with `ND_WINDOWS_SIGN_TEMPLATE`, a command that contains `{{file}}`. Without it, the
+pack fails instead of shipping unsigned by accident. `Setup.exe` doesn't register file associations or URL
 schemes yet. `files` lists paths, relative to `nativedesktop.toml`, that are copied beside the
-executable, such as a helper `.exe` the app starts.
+executable, such as a helper `.exe` the app starts. An executable that links `libcef.dll` gets
+the Chromium runtime beside it.
 
 ## Releases and updates
 
