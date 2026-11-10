@@ -281,7 +281,7 @@ impl Chrome {
         if data.len() != usize::from(w) * usize::from(h) * 4 {
             return None;
         }
-        for pixel in data.chunks_exact_mut(4) {
+        for pixel in data.as_chunks_mut::<4>().0 {
             pixel[3] = 255;
         }
         Some((data, u32::from(w), u32::from(h)))
