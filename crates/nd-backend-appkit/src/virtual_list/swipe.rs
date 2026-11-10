@@ -89,6 +89,9 @@ define_class!(
         // a drag; a list whose rows drag reports that selection only when no drag began.
         #[unsafe(method(mouseDown:))]
         fn mouse_down(&self, event: &NSEvent) {
+            if event.modifierFlags().contains(objc2_app_kit::NSEventModifierFlags::Control) && self.row_menu(event) {
+                return;
+            }
             let shared = self.shared();
             if shared.drag_kind.borrow().is_none() {
                 let _: () = unsafe { msg_send![super(self), mouseDown: event] };
@@ -103,6 +106,13 @@ define_class!(
             } else if let Some(selected) = press.selected {
                 shared.emit.emit(selected);
                 shared.wake.wake();
+            }
+        }
+
+        #[unsafe(method(rightMouseDown:))]
+        fn right_mouse_down(&self, event: &NSEvent) {
+            if !self.row_menu(event) {
+                let _: () = unsafe { msg_send![super(self), rightMouseDown: event] };
             }
         }
 
@@ -129,6 +139,24 @@ impl NdTableView {
 
     fn shared(&self) -> &Shared {
         self.ivars().shared.get().expect("set in new")
+    }
+
+    /// NSTableView hit-tests into a row only for the controls it lets take a press, so a click
+    /// on a row's own views lands on the table, and the menu asked for would be the one around
+    /// the list. The row's views are asked here first.
+    fn row_menu(&self, event: &NSEvent) -> bool {
+        let point = self.convertPoint_fromView(event.locationInWindow(), None);
+        let row = self.rowAtPoint(point);
+        if row < 0 {
+            return false;
+        }
+        let column = self.columnAtPoint(point).max(0);
+        let Some(cell) = self.viewAtColumn_row_makeIfNecessary(column, row, false) else { return false };
+        // SAFETY: main thread, a view in a live window; the superview is retained before use.
+        let Some(holder) = (unsafe { cell.superview() }) else { return false };
+        let at = holder.convertPoint_fromView(point, Some(self));
+        let hit = cell.hitTest(at).unwrap_or(cell);
+        crate::views::raise_menu_from(hit, event)
     }
 
     fn pass(&self, event: &NSEvent) {

@@ -598,15 +598,7 @@ impl NdLayerView {
     /// reaches that view through the responder chain, but a control-click is a left press,
     /// which the gestures of the innermost view (a card's text) would take as a tap.
     fn request_menu(&self, event: &NSEvent) -> bool {
-        let mut cursor: Option<Retained<NSView>> = Some(Retained::into_super(self.retain()));
-        while let Some(v) = cursor {
-            if v.downcast_ref::<NdLayerView>().is_some_and(|layer| layer.raise_menu(event)) {
-                return true;
-            }
-            // SAFETY: main thread, a view in a live window; the superview is retained before use.
-            cursor = unsafe { v.superview() };
-        }
-        false
+        raise_menu_from(Retained::into_super(self.retain()), event)
     }
 
     fn raise_menu(&self, event: &NSEvent) -> bool {
@@ -1099,6 +1091,19 @@ pub(crate) fn ns_rect(rect: nd_core::Rect) -> NSRect {
         NSPoint::new(rect.origin.x.into(), rect.origin.y.into()),
         NSSize::new(rect.size.width.into(), rect.size.height.into()),
     )
+}
+
+/// Asks the nearest view from `view` outwards that has a menu for it.
+pub(crate) fn raise_menu_from(view: Retained<NSView>, event: &NSEvent) -> bool {
+    let mut cursor = Some(view);
+    while let Some(v) = cursor {
+        if v.downcast_ref::<NdLayerView>().is_some_and(|layer| layer.raise_menu(event)) {
+            return true;
+        }
+        // SAFETY: main thread, a view in a live window; the superview is retained before use.
+        cursor = unsafe { v.superview() };
+    }
+    false
 }
 
 /// A menu opened on a row of a table or outline acts on the selection, so a row outside it is

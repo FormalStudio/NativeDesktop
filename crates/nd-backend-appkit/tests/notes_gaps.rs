@@ -2,9 +2,10 @@
 //! offset and scaled elements and tile grid tiles included; text cut to one line ends in an
 //! ellipsis and clamped text keeps its lines; corners of different radii round each corner; a
 //! right click on a source tree row asks for that row's menu and leaves the selection alone; a
-//! control-click or right click on a card's content asks for the card's menu, not its tap; a
-//! card casts its shadow, clipped or not, and dips while a press on it is held. A list that
-//! fits its rows in a sidebar's footer shows all of them with no scroller, in a short window too.
+//! control-click or right click on a card's content asks for the card's menu, not its tap, and
+//! one on a list row, its label or its padding, asks for the row's; a card casts its shadow,
+//! clipped or not, and dips while a press on it is held. A list that fits its rows in a
+//! sidebar's footer shows all of them with no scroller, in a short window too.
 //! Prints `ND_NOTES_GAPS_OK`.
 
 mod harness;
@@ -43,6 +44,7 @@ mod gaps {
         corners(&rig, &mut c);
         row_menus(&rig, &mut c);
         inner_menus(&rig, &mut c);
+        list_row_menus(&rig, &mut c);
         shadows_and_presses(&rig, &mut c);
         hero_first_frame(&rig, &mut c);
         fitted_rows(&rig, &mut c);
@@ -317,6 +319,120 @@ mod gaps {
         inner.rightMouseDown(&event(NSEventType::RightMouseDown, NSEventModifierFlags::empty()));
         settle(rig);
         c.check(asked.get() == 2, &format!("inner menu: so does a right click ({} asked)", asked.get()));
+        rig.close(opened);
+    }
+
+    struct MenuRows {
+        state: nd_virtual::ListState<u64>,
+        asked: Rc<RefCell<Vec<u64>>>,
+    }
+
+    impl Render for MenuRows {
+        fn render(&mut self, _w: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            let asked = self.asked.clone();
+            let column = self.asked.clone();
+            div()
+                .size_full()
+                .context_menu(move |menu, _, _| {
+                    column.borrow_mut().push(0);
+                    menu
+                })
+                .child(
+                    nd_virtual::list("menu rows", &self.state, move |key: u64, _, _| {
+                        let asked = asked.clone();
+                        div()
+                            .id(format!("menu-row-{key}"))
+                            .w_full()
+                            .h(px(28.))
+                            .px(px(8.))
+                            .rounded(px(6.))
+                            .hover(|s| s.bg(hsla(0., 0., 0.5, 0.2)))
+                            .on_hover(|_: &bool, _, _| {})
+                            .context_menu(move |menu, _, _| {
+                                asked.borrow_mut().push(key);
+                                menu
+                            })
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .child(nd_components::icon(nd_icons::Icon::Globe, 16.))
+                            .child(
+                                nd_components::label(format!("Row {key}"))
+                                    .id(format!("menu-label-{key}"))
+                                    .truncate()
+                                    .flex_1()
+                                    .min_w_0(),
+                            )
+                            .child(
+                                div()
+                                    .w(px(24.))
+                                    .flex_none()
+                                    .child(nd_components::icon_button(format!("x-{key}"), nd_icons::Icon::X)),
+                            )
+                            .into_any_element()
+                    })
+                    .inset()
+                    .selection(nd_virtual::Selection::single()),
+                )
+        }
+    }
+
+    /// A right click on a virtual list row's label, the selected row's or another's, or on a
+    /// row's padding, and a control-click on its padding, ask for that row's menu, not the
+    /// column's around the list, and the label does not keep the click for itself.
+    fn list_row_menus(rig: &Rig, c: &mut Checks) {
+        use nd_backend_appkit::objc2_app_kit::{NSApplication, NSEvent, NSEventModifierFlags, NSEventType};
+        use nd_backend_appkit::objc2_foundation::{MainThreadMarker, NSProcessInfo};
+        let asked = Rc::new(RefCell::new(Vec::new()));
+        let a = asked.clone();
+        let opened = rig.open("menu rows", move |cx| {
+            let mut state = nd_virtual::ListState::new(cx).estimated_row_height(px(28.));
+            state.set_items(vec![1, 2, 3], cx);
+            MenuRows { state, asked: a }
+        });
+        settle(rig);
+        // A row drawn again (its hover changed) keeps its menu.
+        rig.update(&opened, |rows, cx| {
+            rows.state.set_items_versioned(vec![(1, 0), (2, 1), (3, 0)], cx);
+            rows.state.set_selected(vec![2], cx);
+        });
+        settle(rig);
+        let send = |kind: NSEventType, flags: NSEventModifierFlags, row: &str, x: Option<f64>| {
+            let row = rig.view(opened.id(), row);
+            let b = row.bounds();
+            let at = row.convertPoint_toView(NSPoint::new(x.unwrap_or(b.size.width / 2.), b.size.height / 2.), None);
+            let event = |kind| {
+                NSEvent::mouseEventWithType_location_modifierFlags_timestamp_windowNumber_context_eventNumber_clickCount_pressure(
+                    kind,
+                    at,
+                    flags,
+                    NSProcessInfo::processInfo().systemUptime(),
+                    opened.window.windowNumber(),
+                    None,
+                    0,
+                    1,
+                    1.,
+                )
+                .expect("mouse event")
+            };
+            // Through the app's queue, as hardware input comes: NSTableView hit-tests against
+            // the current event, which a direct sendEvent does not set.
+            let app = NSApplication::sharedApplication(MainThreadMarker::new().expect("main thread"));
+            app.postEvent_atStart(&event(kind), false);
+            if kind == NSEventType::LeftMouseDown {
+                app.postEvent_atStart(&event(NSEventType::LeftMouseUp), false);
+            }
+            settle(rig);
+        };
+        let none = NSEventModifierFlags::empty();
+        send(NSEventType::RightMouseDown, none, "menu-row-2", None);
+        send(NSEventType::RightMouseDown, none, "menu-row-3", None);
+        send(NSEventType::RightMouseDown, none, "menu-row-3", Some(4.));
+        send(NSEventType::LeftMouseDown, NSEventModifierFlags::Control, "menu-row-1", Some(4.));
+        c.check(
+            *asked.borrow() == [2, 3, 3, 1],
+            &format!("list row menu: each click asks its own row's menu, 2, 3, 3, 1 ({:?})", asked.borrow()),
+        );
         rig.close(opened);
     }
 
