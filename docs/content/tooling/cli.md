@@ -216,8 +216,8 @@ Each leg writes the gallery's dark capture to `docs/shots/<os>.png`. The Linux l
 `nd docs capture gallery` on g815 through `scripts/linux-gate`. The macOS leg launches the gallery
 through `scripts/mac/shoot`, which captures with `ndshot` (`$ND_NDSHOT`), since an agent's
 terminal can't hold the Screen Recording grant that `screencapture` needs. The Windows leg builds
-in the Windows guest on g815 and captures through `scripts/windows/vm shoot`, which launches the
-app in the guest's desktop session through `ndshell agent`, dark and with a fresh data dir. Set
-`ND_WINDOWS_HOST=<ssh host>` to use a Windows machine instead of the guest. Messages and
-FormalMusic ship their own `scripts/shots` and call `scripts/mac/shoot` and `scripts/windows/vm`
-by path; Lynk's drives its landing page captures instead.
+on the Windows PC (g815 booted into Windows, ssh host `windows`) and captures through
+`scripts/windows/remote shoot`, which launches the app in the desktop session through
+`ndshell agent`, dark and with a fresh data dir. Set `ND_WINDOWS_HOST=<ssh host>` for another
+Windows machine. Messages and FormalMusic ship their own `scripts/shots` and call
+`scripts/mac/shoot` and `scripts/windows/remote` by path; Lynk's drives its landing page captures instead.

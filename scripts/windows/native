@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Drives the Windows hardware run from the macbook (scripts/windows/native-run.ps1 does the work
-# on the machine). The prebuilt binaries come from the g815 Windows VM.
+# on the machine).
 #
 #   scripts/windows/native wait          until `ssh windows` answers and a console session is Active
 #   scripts/windows/native push <bin>    copy <bin> (hello, pacing, ndshell, real_resize_gate .exe)

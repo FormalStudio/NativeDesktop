@@ -1,6 +1,5 @@
-# Runs cargo in a Windows guest checkout (scripts/windows/vm cargo). MSVC host toolchain at the
-# repo's pinned channel; two jobs, since three run the 8 GB guest out of memory with the pagefile
-# off; no debug info and no rustc wrapper, which keep the overlay disk small.
+# Runs cargo in a checkout on the Windows PC (scripts/windows/remote cargo). MSVC host toolchain
+# at the repo's pinned channel; no debug info and no rustc wrapper, since C: is nearly full there.
 # Usage: cargo.ps1 <dir> <cargo args..>. No param block: an advanced script would bind `-p` to
 # -PipelineVariable.
 $ErrorActionPreference = 'Stop'

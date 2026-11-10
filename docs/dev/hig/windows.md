@@ -12,7 +12,7 @@ Sources, read in this order when a value is missing here:
   (colours) and `<Control>/<Control>_themeresources.xaml` for the newer controls.
 - Design guidance: `https://learn.microsoft.com/windows/apps/design/` (typography, spacing,
   motion, color, geometry).
-- Measurement: captures of the WinUI 3 Gallery (store id `9P3JFPWWDZRC`) in the g815 VM. A
+- Measurement: captures of the WinUI 3 Gallery (store id `9P3JFPWWDZRC`) on the Windows PC. A
   measured pixel wins over a guideline when the two disagree.
 
 ## Type
@@ -155,13 +155,12 @@ nd: `Button::access_key`, `div().access_key` (nd-ui `element.rs`), `access_keys.
 
 ## Verifying
 
-1. `ssh g815 'sudo systemctl start windows-vm'` (only with 30 GB or more free on g815); the guest
-   is `ssh -J g815 -p 2222 kyan@127.0.0.1`, and GUI programs run as `ndvm` through a scheduled
-   task (an ssh session has no desktop).
-2. Build in the guest with debug info off (`CARGO_PROFILE_DEV_DEBUG=0`), the msvc toolchain and
-   `--config "build.rustc-wrapper=''"`; check free space on g815 and the guest before and after.
+1. Boot g815 into Windows (`ssh windows`). GUI programs run in the logged-in desktop session
+   through `scripts/windows/remote shoot` (an ssh session has no desktop).
+2. Build there with debug info off (`CARGO_PROFILE_DEV_DEBUG=0`), the msvc toolchain and
+   `--config "build.rustc-wrapper=''"`; check free space on C: before and after.
 3. Open the same control in the WinUI 3 Gallery and in nd's `gallery` example, both maximized at
-   100% scale, and capture the VNC screen on g815 (`vncdo -s 127.0.0.1::5901 capture x.png`).
+   100% scale, and capture each with `scripts/windows/remote shoot`.
 4. Crop both at native pixels, scale with point filtering side by side, and sample colours and
    edges with PIL. Walk rest, hover, pressed, focused and disabled, light and dark.
 5. Linux goldens (`forms-fluent-*`, `layout-*-fluent-*`) hold the drawn look in CI:

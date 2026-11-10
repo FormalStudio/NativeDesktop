@@ -1,4 +1,4 @@
-# Captures one app window in the logged-in desktop session (scripts/windows/vm shoot). The ndshell
+# Captures one app window in the logged-in desktop session (scripts/windows/remote shoot). The ndshell
 # agent launches the app, since a process started from ssh has no desktop, and captures the window
 # as DWM composes it. Same environment as `nd docs capture`: dark, a fresh data dir, automation on.
 param(

@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+# Drives the Windows PC from the macbook for builds, screenshot and GUI runs: g815 booted into
+# Windows, ssh host `windows`, or ND_WINDOWS_HOST=<ssh host>. Other repos call this by path.
+#
+#   remote wait                        until a console session is Active
+#   remote ps '<powershell>'           run PowerShell
+#   remote src <repo> <C:\dir>         copy the repo's HEAD into <C:\dir>
+#   remote cargo <C:\dir> <args..>     cargo in a synced checkout (MSVC, no debug info)
+#   remote push <local> <C:\path>      copy a file in
+#   remote pull <C:\path> <local>      copy a file out
+#   remote lock | remote unlock        one Windows capture at a time (C:\nd\shots.lock)
+#   remote shoot <C:\exe> <local.png> [--env K=V].. [--click <test id>].. [--settle <s>] [--size WxH]
+#                                      launch the exe in the desktop session through the ndshell
+#                                      agent, dark, with a fresh data dir, click test ids over
+#                                      the automation pipe, and capture its window
+set -euo pipefail
+# `query user` exits 1 even when it lists sessions, so its pipelines tolerate that below.
+
+here=$(cd "$(dirname "$0")" && pwd)
+quiet='post-quantum|store now|openssh.com/pq'
+filter() { { grep -Ev "$quiet" || true; } }
+
+host=${ND_WINDOWS_HOST:-windows}
+build=(ssh -o ServerAliveInterval=30 -o ConnectTimeout=10 -o BatchMode=yes "$host")
+gui=("${build[@]}")
+scp_build=(scp -q)
+build_at="$host"
+
+# Encoded, so the remote login shell (PowerShell too) expands none of the script's `$`. Errors
+# go to stdout as text: an encoded command writes its error stream as CLIXML. The exit status is
+# the last native command's, else 1 when anything wrote an error.
+ps_as() {
+  local -n who=$1
+  local encoded script
+  script="\$ErrorActionPreference = 'Continue'; \$ProgressPreference = 'SilentlyContinue'; \$failed = \$false
+try { & { $2 } 2>&1 | ForEach-Object { if (\$_ -is [Management.Automation.ErrorRecord]) { \$failed = \$true }; \"\$_\" } }
+catch { \"\$_\"; \$failed = \$true; \$LASTEXITCODE = \$null }
+exit \$(if (\$null -ne \$LASTEXITCODE) { \$LASTEXITCODE } elseif (\$failed) { 1 } else { 0 })"
+  encoded=$(printf '%s' "$script" | iconv -f UTF-8 -t UTF-16LE | base64 | tr -d '\n')
+  "${who[@]}" "powershell -NoProfile -ExecutionPolicy Bypass -EncodedCommand $encoded" 2>&1 | tr -d '\r' | filter
+}
+# scp wants forward slashes in a Windows remote path.
+remote() { printf '%s:%s' "$build_at" "${1//\\//}"; }
+case "${1:-}" in
+  wait)
+    until { "${gui[@]}" 'query user' 2>/dev/null || true; } | grep -Eiq 'console +[0-9]+ +Active'; do
+      sleep 15
+    done
+    echo "windows: console session active"
+    ;;
+  ps)
+    ps_as build "${2:?usage: remote ps <powershell>}"
+    ;;
+  src)
+    repo=$(cd "${2:?usage: remote src <repo> <C:\\dir>}" && pwd)
+    dir=${3:?usage: remote src <repo> <C:\\dir>}
+    mkdir -p "$repo/target"
+    tarball="$repo/target/windows-src.tar"
+    # The committed tree: a peer's half-done edit in the checkout must not break the guest build.
+    git -C "$repo" archive --format=tar -o "$tarball" HEAD
+    ps_as build "New-Item -ItemType Directory -Force $dir | Out-Null"
+    "${scp_build[@]}" "$tarball" "$(remote "$dir\\src.tar")" 2>&1 | filter
+    rm -f "$tarball"
+    ps_as build "tar -xf $dir\\src.tar -C $dir; Remove-Item $dir\\src.tar; 'synced $dir'"
+    ;;
+  cargo)
+    dir=${2:?usage: remote cargo <C:\\dir> <cargo args..>}
+    shift 2
+    ps_as build "New-Item -ItemType Directory -Force C:\\nd\\shots | Out-Null"
+    "${scp_build[@]}" "$here/cargo.ps1" "$(remote 'C:\nd\shots\cargo.ps1')" 2>&1 | filter
+    ps_as build "& C:\\nd\\shots\\cargo.ps1 $dir $*"
+    ;;
+  push)
+    "${scp_build[@]}" "${2:?usage: remote push <local> <C:\\path>}" "$(remote "${3:?}")" 2>&1 | filter
+    ;;
+  pull)
+    "${scp_build[@]}" "$(remote "${2:?usage: remote pull <C:\\path> <local>}")" "${3:?}" 2>&1 | filter
+    ;;
+  lock)
+    until [[ $(ps_as build "New-Item -ItemType Directory -Path C:\\nd -Force | Out-Null; if (New-Item -ItemType Directory C:\\nd\\shots.lock -ErrorAction SilentlyContinue) { 'held' }") == held ]]; do
+      echo "windows: another capture holds C:\\nd\\shots.lock" >&2
+      sleep 30
+    done
+    ;;
+  unlock)
+    ps_as build "Remove-Item C:\\nd\\shots.lock -ErrorAction SilentlyContinue"
+    ;;
+  shoot)
+    exe=${2:?usage: remote shoot <C:\\exe> <local.png> [--env K=V].. [--click <test id>].. [--settle <s>] [--size WxH]}
+    out=${3:?}
+    shift 3
+    args=() envs=() clicks=()
+    while (($#)); do
+      case "$1" in
+        --env) envs+=("'$2'") ;;
+        --click) clicks+=("'$2'") ;;
+        --settle) args+=(-Settle "$2") ;;
+        --size) args+=(-Size "'$2'") ;;
+        *) echo "remote shoot: unknown argument $1" >&2; exit 2 ;;
+      esac
+      shift 2
+    done
+    # PowerShell takes a repeated parameter as one comma-separated list.
+    ((${#envs[@]})) && args+=(-Env "$(IFS=,; echo "${envs[*]}")")
+    ((${#clicks[@]})) && args+=(-Click "$(IFS=,; echo "${clicks[*]}")")
+    if [[ $(ps_as build "Test-Path C:\\nd\\shots\\ndshell.exe") != True ]]; then
+      "$0" src "$here/../.." 'C:\nd\shots\nd'
+      "$0" cargo 'C:\nd\shots\nd' build -p ndshell
+      ps_as build "Copy-Item C:\\nd\\shots\\nd\\target\\debug\\ndshell.exe C:\\nd\\shots\\ndshell.exe"
+    fi
+    "${scp_build[@]}" "$here/shoot.ps1" "$(remote 'C:\nd\shots\shoot.ps1')" 2>&1 | filter
+    ps_as gui "& C:\\nd\\shots\\shoot.ps1 -Exe '$exe' -Out C:\\nd\\shots\\shot.png ${args[*]}"
+    mkdir -p "$(dirname "$out")"
+    "${scp_build[@]}" "$(remote 'C:\nd\shots\shot.png')" "$out" 2>&1 | filter
+    [[ -s "$out" ]] || { echo "remote shoot: no capture came back" >&2; exit 1; }
+    echo "wrote $out"
+    ;;
+  *)
+    sed -n '2,15p' "$0"
+    exit 2
+    ;;
+esac

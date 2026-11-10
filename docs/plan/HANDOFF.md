@@ -157,7 +157,7 @@ e1504g (up, quiet) takes no heavy compiles, so none of these move there.
 - **FormalMusic automation tree**: on g815 `getTree` lists 2 nodes before the library loads, and the
   installed build lacks nd-backend-gpui's `capture` feature, so deploy checks cannot screenshot.
 
-Every FormalMusic branch is checked on g815, macOS and the Windows 11 VM before merging (user,
+Every FormalMusic branch is checked on g815, macOS and the Windows PC before merging (user,
 2026-10-22). Never grim or click the user's real outputs: visual checks use a separate headless
 output or the app's own screenshot test.
 
@@ -187,7 +187,7 @@ Replies on these PRs are the user's to write.
   5 GB floor on root, and a 30-minute hold per run (`ND_LINUX_GATE_TIMEOUT_MIN`, prints
   `ND_GATE_TIMEOUT`). Waiters print the holder. Root is shared with FormalSpec work
   (`~/fspec-*`, `~/build/formalspec-iso*`, the growing `~/fspec-bootc-vm/disk.raw`): never touch
-  it; when root runs out because of it, stop and tell the user. Last check: root 31 GB free. The Windows VM starts only with 45 GB free on root.
+  it; when root runs out because of it, stop and tell the user. Last check: root 31 GB free.
 - Nights (user sleeps next to g815): both Linux hosts in FormalShell overnight mode and `power-saver` (`sudo -n powerprofilesctl set power-saver`; plain powerprofilesctl over ssh is refused), set 2026-10-20. Work continues as normal at nice 19, two cargo jobs.
 - Compile on g815 by default (user, 2026-10-20): the macbook runs other projects' iOS simulators and our builds slow them. The macbook builds only what must be AppKit or Swift, under `taskpolicy -c utility` with `CARGO_BUILD_JOBS=2`, one at a time (user, 2026-10-21: `-b` starved builds to 1 min CPU per 38 min wall).
 - macbook: low priority, macOS crates only, `-p`, one heavy build at a time.
@@ -199,24 +199,9 @@ Replies on these PRs are the user's to write.
   graphical session, Steamed theme in Plasma, panel-gamma only under Hyprland).
 - Windows PC (g815 booted into Windows, `ssh windows`): Rust MSVC toolchain; agent dirs `C:\nd\msg`,
   `C:\nd\video`, `C:\nd\emoji` with their scheduled tasks are still there.
-- Windows VM on g815 (the same bare-metal install as a KVM guest, so Windows work no longer
-  needs a reboot): `ssh g815 'sudo systemctl start windows-vm'`, then
-  `ssh -J g815 -p 2222 kyan@127.0.0.1`; VNC on g815's 127.0.0.1:5901. Its writes land in an
-  overlay recreated on every start, so nothing copied in survives a stop. The overlay lives on
-  `/mnt/steamlib/windows-vm` (nix config `ac1b1022`), is deleted on stop, needs 45 GB free there to
-  start and powers off below 30 GB. Guest TRIM does not shrink it (ntfs3). Check
-  `ssh g815 'df -h / ; du -sh /var/lib/windows-vm'` and the guest's `Get-PSDrive C` before and
-  after every build or copy; stop and report rather than clean when it runs low.
-  About 12 minutes after a start `windows-vm-prep` reboots the guest into a local admin `ndvm`
-  (pagefile off, autologon): wait for it (`systemctl status windows-vm-prep`) before building,
-  or the reboot kills the build. GUI tests run as a scheduled task registered over
-  `ssh -p 2222 ndvm@127.0.0.1` (a task of `kyan` does not start, `kyan` holds no session), and
-  ndvm's first login shows the privacy screens over everything until they are clicked through
-  (an elevated task: `mouse_event` into them is refused otherwise). The VM has no Edge, so the
-  PDF association is broken there. With the pagefile off, three rustc jobs run the 8 GB guest
-  out of memory (os error 1455); two fit. A debug `cargo test --workspace` grew the overlay by
-  about 30 GB and took g815 to 15 GB free: build with `CARGO_PROFILE_DEV_DEBUG=0`. A guest
-  `Optimize-Volume -ReTrim` does not shrink the overlay file.
+- There is no Windows VM any more (removed 2026-11-10, spec `851e3b3c`). Windows work runs on
+  the Windows PC and waits until g815 is booted into Windows; `scripts/windows/remote` drives it.
+  Build there with `CARGO_PROFILE_DEV_DEBUG=0`, since C: is nearly full.
 
 ## Rules that bit us (keep them)
 

@@ -33,9 +33,9 @@ usage pause. Your own context must stay small: you coordinate, subagents do the 
    e1504g (built on g815, `--target-host e1504g`, never on e1504g). The same shape applies to
    every other app input in `~/.config/nix/flake.nix`.
 7. "All machines" includes the real Windows install on g815's disk (user, 2026-10-20). Build the
-   app's `nd package windows` Setup.exe in the Windows VM and copy it to g815's
-   `~/nd-windows-artifacts/<app>/` before stopping the VM (its overlay is thrown away). With the VM
-   stopped, `/mnt/windows` is the real C: read-write (ntfs3 refuses a dirty volume, so Windows must
+   app's `nd package windows` Setup.exe on the Windows PC when g815 is booted into Windows, or
+   cross-check only and wait. From Linux, `/mnt/windows` is the real C: read-write (ntfs3 refuses
+   a dirty volume, so Windows must
    have shut down cleanly): copy the Setup.exe under the user's profile and register it as a
    `--silent` RunOnce entry in `Users/kyan/NTUSER.DAT` with hivex (back the hive up first), so
    Velopack installs it with shortcuts and updates at the next Windows login.
