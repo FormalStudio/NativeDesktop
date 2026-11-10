@@ -180,6 +180,7 @@ impl AppKitBackend {
             main: w.isMainWindow(),
             visible: w.isVisible(),
             frame: Some(Rect::new(f.origin.x as f32, top as f32, f.size.width as f32, f.size.height as f32)),
+            fullscreen: w.styleMask().contains(objc2_app_kit::NSWindowStyleMask::FullScreen),
         })
     }
 

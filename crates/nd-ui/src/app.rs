@@ -742,6 +742,12 @@ impl App {
         self.window_command(id, crate::backend::WindowCommand::Fullscreen(fullscreen));
     }
 
+    /// Whether the window is in the OS's fullscreen, by the app's request or the user's own.
+    /// False on a backend without OS windows.
+    pub fn window_fullscreen(&self, id: WindowId) -> bool {
+        self.backend.window_state(id).is_some_and(|s| s.fullscreen)
+    }
+
     /// Brings the window forward and makes it key; in a tab group its tab is selected.
     pub fn activate_window(&mut self, id: WindowId) {
         self.window_command(id, crate::backend::WindowCommand::Activate);

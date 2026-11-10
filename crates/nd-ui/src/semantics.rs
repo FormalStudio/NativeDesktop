@@ -46,6 +46,8 @@ pub struct WindowState {
     pub visible: bool,
     /// Global screen points, top-left origin.
     pub frame: Option<Rect>,
+    /// In the OS's fullscreen, however it got there.
+    pub fullscreen: bool,
 }
 
 /// An action on one node, carried out the way the platform's accessibility action would: through

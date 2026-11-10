@@ -437,7 +437,13 @@ impl Backend for TestBackend {
 
     fn window_state(&self, window: WindowId) -> Option<crate::semantics::WindowState> {
         let frame = *self.windows.get(&window)?;
-        Some(crate::semantics::WindowState { key: false, main: false, visible: true, frame: Some(frame) })
+        Some(crate::semantics::WindowState {
+            key: false,
+            main: false,
+            visible: true,
+            frame: Some(frame),
+            fullscreen: false,
+        })
     }
 
     fn drag_preview(&mut self, _window: WindowId, node: NodeId, preview: crate::DragPreview, _reduce: bool) {

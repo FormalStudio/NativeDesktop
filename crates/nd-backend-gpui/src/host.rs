@@ -349,6 +349,7 @@ pub(crate) fn window_state(window: &gpui::Window) -> WindowState {
         main: window.is_window_active(),
         visible: window.is_visible(),
         frame: Some(Rect::new(b.origin.x.as_f32(), b.origin.y.as_f32(), b.size.width.as_f32(), b.size.height.as_f32())),
+        fullscreen: window.is_fullscreen(),
     }
 }
 

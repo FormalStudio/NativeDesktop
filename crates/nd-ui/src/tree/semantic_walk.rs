@@ -130,7 +130,7 @@ impl App {
     fn window_state_or_default(&self, id: WindowId) -> WindowState {
         self.backend.window_state(id).unwrap_or_else(|| {
             let first = self.windows.keys().next() == Some(&id);
-            WindowState { key: first, main: first, visible: true, frame: None }
+            WindowState { key: first, main: first, visible: true, frame: None, fullscreen: false }
         })
     }
 
