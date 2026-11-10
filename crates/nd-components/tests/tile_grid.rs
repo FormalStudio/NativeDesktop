@@ -190,19 +190,43 @@ fn an_added_tile_fades_in_and_pushes_the_rest_along() {
     assert_eq!(shown(&cx, b), (122., 0.));
 }
 
+/// Lays the window out at `width` and renders what the grid makes of it, without advancing
+/// the clock: the frame after the one that resized the grid.
+fn resize(cx: &mut TestApp, handle: &WindowHandle<Pinned>, width: f32) {
+    cx.resize_window(handle.id(), Size { width, height: 400. });
+    cx.frame();
+    cx.drain_events();
+    cx.frame();
+}
+
 #[test]
-fn a_new_width_reflows_on_the_spring() {
+fn a_new_width_with_the_same_columns_moves_tiles_with_the_grid() {
+    // A sidebar sliding or a window resizing: Finder's tiles follow frame for frame rather than
+    // chase the width on a spring.
     let (mut cx, handle) = open_pinned(&["a", "b"]);
     let b = node(&cx, "b");
-    cx.resize_window(handle.id(), Size { width: 300., height: 400. });
-    for _ in 0..3 {
-        cx.drain_events();
-        cx.frame();
+    for width in [440., 380., 300.] {
+        resize(&mut cx, &handle, width);
+        let tile = (width - 24.) / 4.;
+        assert_eq!(shown(&cx, b), (tile + 8., 0.), "at {width}");
+        assert_eq!(cx.backend().frame(b).expect("laid out").size.width, tile, "at {width}");
     }
-    assert!((shown(&cx, b).0 - 122.).abs() < 0.5, "no jump: {:?}", shown(&cx, b));
+    let at = shown(&cx, b);
+    cx.advance_clock(0.016);
+    cx.frame();
+    assert_eq!(shown(&cx, b), at, "nothing left to glide");
+}
+
+#[test]
+fn new_columns_glide_places_and_take_the_size_at_once() {
+    let (mut cx, handle) = open_pinned(&["a", "b"]);
+    let b = node(&cx, "b");
+    resize(&mut cx, &handle, 130.);
+    assert!((shown(&cx, b).0 - 122.).abs() < 0.5, "glides from its old place: {:?}", shown(&cx, b));
+    assert_eq!(cx.backend().frame(b).expect("laid out").size.width, 61., "two 61 pt columns at once");
     assert!(cx.needs_frame(), "moving");
     settle(&mut cx);
-    assert_eq!(shown(&cx, b), (77., 0.), "four 69 pt columns");
+    assert_eq!(shown(&cx, b), (69., 0.));
 }
 
 #[test]
@@ -246,4 +270,68 @@ fn under_reduce_motion_tiles_dissolve_into_new_slots() {
     settle(&mut cx);
     assert_eq!(props(&cx, b).style.opacity.unwrap_or(1.), 1.);
     assert!(!cx.backend().is_live(a));
+}
+
+struct Sorted {
+    log: Log,
+}
+
+impl Render for Sorted {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        let (moved, dropped) = (self.log.clone(), self.log.clone());
+        let folder = div().size_full().accepts_drops(["tab"]).on_drop(move |e: &Dropped, _, _| {
+            dropped.borrow_mut().push(format!("into c {}", e.item.id));
+        });
+        let tiles = [tile("a", div().size_full()), tile("b", div().size_full()), tile("c", folder)];
+        div().size_full().child(
+            tile_grid("sorted")
+                .tiles(tiles)
+                .draggable_tiles("tab")
+                .fixed_order()
+                .on_move(move |e: &TileMoved, _, _| moved.borrow_mut().push(format!("move {} {}", e.id, e.index))),
+        )
+    }
+}
+
+fn open_sorted() -> (TestApp, Log) {
+    let log: Log = Rc::default();
+    let l = log.clone();
+    let mut cx = TestApp::new();
+    let w = cx.open_window(Size { width: 480., height: 400. }, move |_, cx| cx.new(|_| Sorted { log: l })).id();
+    cx.backend_mut().set_window_frame(w, Rect::new(0., 0., 480., 400.));
+    settle(&mut cx);
+    (cx, log)
+}
+
+#[test]
+fn a_fixed_order_tile_stays_dimmed_in_its_slot_and_drops_into_a_folder_tile() {
+    let (mut cx, log) = open_sorted();
+    let a = node(&cx, "a");
+    let start = centre(0);
+    drag(&mut cx, a, GesturePhase::Began, start, start);
+    drag(&mut cx, a, GesturePhase::Changed, start, centre(1));
+    assert_eq!(shown(&cx, a), (0., 0.), "it does not follow the pointer");
+    assert_eq!(props(&cx, a).style.opacity, Some(0.4), "it dims");
+    let lifted = cx
+        .backend()
+        .previews()
+        .iter()
+        .any(|(n, p)| *n == a && matches!(p, nd_ui::DragPreview::At { lifted: true, .. }));
+    assert!(lifted, "a lifted picture carries it");
+    drag(&mut cx, a, GesturePhase::Changed, start, centre(2));
+    drag(&mut cx, a, GesturePhase::Ended, start, centre(2));
+    assert_eq!(*log.borrow(), ["into c a"], "only the folder takes it, and nothing reorders");
+    assert_eq!(props(&cx, a).style.opacity.unwrap_or(1.), 1.);
+}
+
+#[test]
+fn a_fixed_order_tile_dropped_on_a_plain_tile_goes_nowhere() {
+    let (mut cx, log) = open_sorted();
+    let b = node(&cx, "b");
+    let start = centre(1);
+    drag(&mut cx, b, GesturePhase::Began, start, start);
+    drag(&mut cx, b, GesturePhase::Changed, start, centre(0));
+    drag(&mut cx, b, GesturePhase::Ended, start, centre(0));
+    assert!(log.borrow().is_empty(), "{:?}", log.borrow());
+    assert_eq!(shown(&cx, b), (122., 0.));
 }

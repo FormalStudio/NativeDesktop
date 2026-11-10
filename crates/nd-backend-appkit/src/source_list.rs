@@ -38,7 +38,7 @@ use objc2_app_kit::{
 };
 use objc2_foundation::{
     MainThreadMarker, NSArray, NSIndexSet, NSInteger, NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRect,
-    NSSize, NSString,
+    NSRunLoop, NSRunLoopCommonModes, NSSize, NSString, NSTimer,
 };
 
 use crate::events::Wake;
@@ -391,6 +391,11 @@ fn caption_line(mtm: MainThreadMarker) -> f64 {
 const GROUP_ROW: f64 = 19.; // nd-lint: allow, AppKit's own group row height, which it does not expose
 
 const ROW_CELL: &str = "nd.source.row";
+/// How close to the visible rows' edge a drag scrolls the list, and how far a call scrolls it
+/// at the very edge.
+const AUTOSCROLL_EDGE: f64 = 24.;
+const AUTOSCROLL_STEP: f64 = 12.;
+const AUTOSCROLL_TICK: f64 = 1. / 60.;
 const SECTION_CELL: &str = "nd.source.section";
 
 pub struct RowIvars {
@@ -803,6 +808,24 @@ pub(crate) struct SourceTreeNative {
     /// The objects of rows the last update removed: the outline holds its items unretained and
     /// may still touch them while their rows animate out.
     retired: Vec<Retained<NSString>>,
+    /// Scrolls the list while a drag rests at its edge.
+    autoscroll: Rc<RefCell<Option<Retained<NSTimer>>>>,
+}
+
+/// Scrolls `outline` when `p` (its coordinates) is within [`AUTOSCROLL_EDGE`] of the visible
+/// rows' top or bottom, faster the closer it is. False when `p` is clear of both edges.
+fn edge_scroll(outline: &NSOutlineView, p: NSPoint) -> bool {
+    let visible = outline.visibleRect();
+    let (top, bottom) = (visible.origin.y, visible.origin.y + visible.size.height);
+    let push = if p.y < top + AUTOSCROLL_EDGE {
+        -(top + AUTOSCROLL_EDGE - p.y).min(AUTOSCROLL_EDGE)
+    } else if p.y > bottom - AUTOSCROLL_EDGE {
+        (p.y - (bottom - AUTOSCROLL_EDGE)).min(AUTOSCROLL_EDGE)
+    } else {
+        return false;
+    };
+    outline.scrollPoint(NSPoint::new(visible.origin.x, top + push / AUTOSCROLL_EDGE * AUTOSCROLL_STEP));
+    true
 }
 
 impl SourceTreeNative {
@@ -834,7 +857,9 @@ impl SourceTreeNative {
         }
         let scroll = NSScrollView::new(mtm);
         scroll.setDocumentView(Some(&outline));
-        scroll.setHasVerticalScroller(true);
+        // Finder's sidebar: an overlay scroller where the system setting asks for one, and a
+        // legacy scroller (a mouse attached) only while the rows overflow.
+        scroll.setAutohidesScrollers(true);
         scroll.setDrawsBackground(false);
 
         let empty: Retained<NdSourceEmpty> =
@@ -895,13 +920,46 @@ impl SourceTreeNative {
             slot_line,
             props: props.clone(),
             retired: Vec::new(),
+            autoscroll: Rc::default(),
         };
+        this.fit(props.fit_rows);
         this.reload(props);
         this
     }
 
     pub fn view(&self) -> &NSView {
         &self.scroll
+    }
+
+    /// A list that fits its rows has no scroller, does not rubber-band and takes no insets
+    /// from the toolbar above (it sits at the pane's foot), so its height is its rows'.
+    fn fit(&self, fit: bool) {
+        self.scroll.setHasVerticalScroller(!fit);
+        self.scroll.setAutomaticallyAdjustsContentInsets(!fit);
+        if fit {
+            self.scroll.setContentInsets(objc2_foundation::NSEdgeInsets { top: 0., left: 0., bottom: 0., right: 0. });
+        }
+        self.scroll.setVerticalScrollElasticity(if fit {
+            objc2_app_kit::NSScrollElasticity::None
+        } else {
+            objc2_app_kit::NSScrollElasticity::Automatic
+        });
+    }
+
+    /// The height of the rows, for a list that fits them; nothing otherwise, so layout gives it
+    /// the room its style asks for.
+    pub fn measure(&self) -> nd_core::Size {
+        if !self.props.fit_rows {
+            return nd_core::Size::default();
+        }
+        let rows = self.outline.numberOfRows();
+        let content = if rows > 0 {
+            let last = self.outline.rectOfRow(rows - 1);
+            last.origin.y + last.size.height
+        } else {
+            0.
+        };
+        nd_core::Size { width: 0., height: content.ceil() as f32 }
     }
 
     pub fn outline(&self) -> &NSOutlineView {
@@ -918,6 +976,10 @@ impl SourceTreeNative {
     }
 
     pub fn update(&mut self, props: &SourceTreeProps) {
+        if props.fit_rows != self.props.fit_rows {
+            self.props.fit_rows = props.fit_rows;
+            self.fit(props.fit_rows);
+        }
         self.props.row_menus = props.row_menus;
         self.shared().row_menus.set(props.row_menus);
         if props.nodes != self.props.nodes
@@ -940,16 +1002,56 @@ impl SourceTreeNative {
         }
     }
 
+    /// Scrolls the list while a drag rests at its edge (see [`edge_scroll`]). The window is the
+    /// drag destination, so the outline view's own drag autoscroll never runs, and AppKit only
+    /// reports a drag when the pointer moves; a timer carries the scroll on, reporting the drag
+    /// after each step, until the pointer leaves the edge or the button goes up.
+    fn autoscroll(&self, p: NSPoint) {
+        if self.props.fit_rows || self.autoscroll.borrow().is_some() || !edge_scroll(&self.outline, p) {
+            return;
+        }
+        let outline = objc2::rc::Weak::from_retained(&self.outline);
+        let ticking = self.autoscroll.clone();
+        let block = block2::RcBlock::new(move |timer: std::ptr::NonNull<NSTimer>| {
+            let held = NSEvent::pressedMouseButtons() & 1 != 0;
+            let window = outline.load().and_then(|o| Some((o.window()?, o)));
+            let scrolled = held
+                && window.as_ref().is_some_and(|(w, o)| {
+                    edge_scroll(o, o.convertPoint_fromView(w.mouseLocationOutsideOfEventStream(), None))
+                });
+            if !scrolled {
+                unsafe { timer.as_ref() }.invalidate();
+                ticking.borrow_mut().take();
+            } else if let Some(w) = window.as_ref().and_then(|(w, _)| w.downcast_ref::<crate::NdWindow>()) {
+                // The rows under the pointer moved: report the drag again so the slot follows.
+                w.drag_rested();
+            }
+        });
+        // SAFETY: the timer runs on the main run loop it is added to, the thread the block came from.
+        let timer = unsafe { NSTimer::timerWithTimeInterval_repeats_block(AUTOSCROLL_TICK, true, &block) };
+        unsafe { NSRunLoop::mainRunLoop().addTimer_forMode(&timer, NSRunLoopCommonModes) };
+        *self.autoscroll.borrow_mut() = Some(timer);
+    }
+
+    fn stop_autoscroll(&self) {
+        if let Some(timer) = self.autoscroll.borrow_mut().take() {
+            timer.invalidate();
+        }
+    }
+
     /// Where a drag at `at` (window points, top-left origin) would land, with the slot line
     /// shown there; `None` hides the line.
     pub fn drop_slot(&self, at: Option<nd_core::Point>) -> Option<DropSlot> {
         let Some(at) = at else {
             self.slot_line.setHidden(true);
+            self.stop_autoscroll();
             return None;
         };
         let window = self.outline.window()?;
         let height = window.contentView().map_or(0., |v| v.frame().size.height);
-        let p = self.outline.convertPoint_fromView(NSPoint::new(f64::from(at.x), height - f64::from(at.y)), None);
+        let in_window = NSPoint::new(f64::from(at.x), height - f64::from(at.y));
+        self.autoscroll(self.outline.convertPoint_fromView(in_window, None));
+        let p = self.outline.convertPoint_fromView(in_window, None);
         let rows = self.outline.numberOfRows();
         let row = if p.y < 0. { 0 } else { self.outline.rowAtPoint(p) };
         let data = self.shared().data.borrow();

@@ -1752,6 +1752,7 @@ impl Backend for AppKitBackend {
             Native::Banner(b) => b.measure(),
             Native::Custom(c) => c.measure(width),
             Native::StatusPage(p) => p.measure(width),
+            Native::SourceTree(s) => s.measure(),
             Native::Separator(b, vertical) => {
                 let s = b.fittingSize();
                 if *vertical {
@@ -1836,12 +1837,12 @@ impl Backend for AppKitBackend {
         }
     }
 
-    fn drag_preview(&mut self, _window: WindowId, node: NodeId, screen: Option<nd_core::Point>) {
+    fn drag_preview(&mut self, _window: WindowId, node: NodeId, preview: nd_ui::DragPreview, reduce: bool) {
         let Ok(state) = self.0.try_borrow() else { return };
         let view = state.nodes.get(&node).and_then(Native::view).map(|v| v.retain());
         let mtm = state.mtm;
         drop(state);
-        crate::drag_preview::show(mtm, view.as_deref(), screen);
+        crate::drag_preview::show(mtm, view.as_deref(), preview, reduce);
     }
 
     fn perform(

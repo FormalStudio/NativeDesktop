@@ -653,10 +653,23 @@ impl Div {
     /// it, a grid reflowing), it glides from where it was with `animation` instead of jumping,
     /// on top of its own offset; a new move mid-flight turns it from where it is. Sizes given
     /// in points animate as with `.animate`, which takes this animation when not set. Not on
-    /// the first layout after mounting.
+    /// the first layout after mounting. A render that gives it an instant animation
+    /// (`Animation::linear(Duration::ZERO)`) has it follow that render's moves at once, a glide
+    /// in flight going on from there: for moves that track the container rather than
+    /// rearrange it.
     pub fn animate_layout(mut self, animation: Animation) -> Self {
         let spec = self.motion.unwrap_or(MotionSpec::new(animation));
         self.motion = Some(MotionSpec { layout: Some(animation), ..spec });
+        self
+    }
+
+    /// Sizes given in points take each render's value at once instead of animating with
+    /// `.animate`, while opacity, offset and scale still move: for an element that tracks its
+    /// container live, as a grid's tiles take the column width through a window or sidebar
+    /// resize. A size already in flight lands where it is asked to be.
+    pub fn snap_size(mut self) -> Self {
+        let spec = self.motion.unwrap_or(MotionSpec::new(Animation::fast()));
+        self.motion = Some(MotionSpec { snap_size: true, ..spec });
         self
     }
 
@@ -802,6 +815,17 @@ impl Div {
         self
     }
 
+    /// While the element drags, a picture of it lifts under the pointer (a little larger,
+    /// casting a shadow) and follows it every frame, over the rest of the window, its panes
+    /// and other windows, keeping the point it was grabbed by under the pointer. The element
+    /// stays where it is. A drop shrinks the picture into the target; Escape or a release
+    /// where nothing takes it settles it back onto the element. Under reduce motion it fades
+    /// in and out where it is, still following the pointer.
+    pub fn lift_on_drag(mut self) -> Self {
+        self.drag.lift = true;
+        self
+    }
+
     /// The drag this element started is over: dropped, cancelled or released outside the app.
     pub fn on_drag_end(self, handler: impl Fn(&crate::DragEnded, &mut Window, &mut App) + 'static) -> Self {
         self.on(handler)
@@ -819,6 +843,14 @@ impl Div {
     }
 
     pub fn on_drop(self, handler: impl Fn(&crate::Dropped, &mut Window, &mut App) + 'static) -> Self {
+        self.on(handler)
+    }
+
+    /// A drag it takes stayed over the element for [`SPRING_LOAD_DELAY`](crate::drag::SPRING_LOAD_DELAY):
+    /// open what it stands for (a folder), so the drag goes on inside, as Finder's
+    /// spring-loaded folders do. Once per stay; leaving and coming back starts over.
+    pub fn on_spring_load(mut self, handler: impl Fn(&crate::SpringLoaded, &mut Window, &mut App) + 'static) -> Self {
+        self.drag.springs = true;
         self.on(handler)
     }
 }
@@ -1029,6 +1061,13 @@ impl<P: AnyProps> NativeElement<P> {
 
     pub fn key_mut(&mut self) -> &mut Key {
         &mut self.key
+    }
+
+    /// A drag it takes stayed over one place in it (the same [`DropSlot::on`](crate::DropSlot))
+    /// for [`SPRING_LOAD_DELAY`](crate::drag::SPRING_LOAD_DELAY); see [`Div::on_spring_load`].
+    pub fn on_spring_load(mut self, handler: impl Fn(&crate::SpringLoaded, &mut Window, &mut App) + 'static) -> Self {
+        self.drag.springs = true;
+        self.on(handler)
     }
 
     /// The widget takes drags of these kinds; where in it they land is the backend's

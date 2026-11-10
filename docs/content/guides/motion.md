@@ -89,6 +89,12 @@ it is. Sizes given in points animate as with `.animate`, which takes the same an
 is not set. Nothing glides on the first layout after mounting, and with reduce motion on, a
 move that shows dissolves.
 
+A render that passes an instant animation (`Animation::linear(Duration::ZERO)`) has the element
+follow that render's moves at once, while a glide already in flight goes on from where it is:
+for moves that track a resizing container rather than rearrange it. `.snap_size()` keeps sizes
+given in points out of the animation, so they take each render's value at once while opacity,
+offset and scale still move.
+
 ```rust
 v_flex().children(notes.iter().map(|note| {
     div()
@@ -101,8 +107,11 @@ v_flex().children(notes.iter().map(|note| {
 
 `tile_grid` uses all three: tiles move to new slots on `.reflow(animation)` (the platform spring
 by default), new tiles fade and grow in, removed ones fade and shrink where they stood, and the
-grid's height follows. The first width it learns places the tiles at once. Tiles sit at their
-slots in layout and glide with `animate_layout`, so they hover where they are drawn too. Under
+grid's height follows. The first width it learns places the tiles at once. A new width with
+the same column count (a window or sidebar resizing) moves and sizes the tiles with the grid
+frame for frame, as Finder does; only new columns glide the tiles to their slots, and a tile's
+size never animates. Tiles sit at their slots in layout and glide with `animate_layout`, so
+they hover where they are drawn too. Under
 reduce motion tiles changing slots dissolve, new and removed ones only fade, and the grid's
 height jumps.
 

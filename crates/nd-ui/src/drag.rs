@@ -6,8 +6,13 @@
 //! backend's bounds, and reports [`DragOver`] and [`Dropped`] to the target and [`DragEnded`]
 //! to the source. A backend may own the pointer for the length of a drag (AppKit's dragging
 //! session draws the image across windows); it then reports where the pointer is per window.
+//!
+//! A source that lifts (`.lift_on_drag()`) has the backend carry a picture of it under the
+//! pointer for the whole drag ([`DragPreview`]). A target that springs (`.on_spring_load`)
+//! hears [`SpringLoaded`] once a drag has stayed over it, or over one place in it, for
+//! [`SPRING_LOAD_DELAY`]: the frames of a drag over such a target keep the clock running.
 
-use nd_core::{NodeId, Point, Rect, WindowId};
+use nd_core::{NodeId, Point, Rect, Size, WindowId};
 use nd_gesture::{GesturePhase, KeyModifiers};
 use nd_gpui::gpui::SharedString;
 
@@ -100,6 +105,34 @@ pub enum DragOutcome {
     Outside { screen: Point },
 }
 
+/// A drag stayed over a target that springs for [`SPRING_LOAD_DELAY`]: open what is under
+/// it (a folder) so the drag can go on inside. `slot` is where in a widget target it is, as
+/// [`DragOver`] has it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SpringLoaded {
+    pub item: DragItem,
+    pub slot: Option<DropSlot>,
+}
+
+/// How long a drag stays over a spring-loaded target before it opens, in seconds.
+pub const SPRING_LOAD_DELAY: f64 = 0.7;
+
+/// What the picture a drag carries does, for [`Backend::drag_preview`](crate::backend::Backend::drag_preview).
+/// Frames are in global screen points, top-left origin, at the source's own size.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum DragPreview {
+    /// Under the pointer with its frame at `frame`. `lifted`: the source asked to lift, so the
+    /// picture rises a little larger, casting a shadow, and shows over its own window too.
+    /// Otherwise it is a plain picture of a drag outside its window.
+    At { frame: Rect, lifted: bool },
+    /// The drag is over: the picture shrinks into `frame` and fades (`into`, a drop on a
+    /// target), or settles back onto it (Escape, or a release where nothing takes it), then
+    /// goes.
+    Land { frame: Rect, into: bool },
+    /// Gone at once.
+    Gone,
+}
+
 /// Reported to the source once its drag is over.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DragEnded {
@@ -134,6 +167,28 @@ pub struct DragSource {
 pub(crate) struct DragSpec {
     pub item: Option<DragItem>,
     pub accepts: Vec<SharedString>,
+    /// Its drag carries a lifted picture of it.
+    pub lift: bool,
+    /// It hears [`SpringLoaded`].
+    pub springs: bool,
+}
+
+/// Where a lifted source was grabbed, from its top-left, and its size.
+#[derive(Clone, Copy, Debug)]
+struct Lift {
+    grab: Point,
+    size: Size,
+}
+
+/// The target a drag is over and where in it, since when: for spring loading.
+#[derive(Clone, Debug)]
+struct Dwell {
+    node: NodeId,
+    on: Option<SharedString>,
+    /// The first frame after the drag came over it. The clock only runs on frames, so the time
+    /// when the drag arrived can be the last frame of an idle window, long gone.
+    since: Option<f64>,
+    sprung: bool,
 }
 
 pub(crate) struct Session {
@@ -149,6 +204,12 @@ pub(crate) struct Session {
     /// The source is shown as a picture following the pointer outside its window.
     previewing: bool,
     modifiers: KeyModifiers,
+    lift: Option<Lift>,
+    dwell: Option<Dwell>,
+    /// Where the pointer last was over a target, in that target window's coordinates: the
+    /// frames of a drag over a target that springs look again from there, since what is under
+    /// a still pointer changes when a folder opens.
+    last: Option<(WindowId, Point)>,
 }
 
 fn contains(r: &Rect, p: Point) -> bool {
@@ -171,7 +232,48 @@ impl App {
             screen: None,
             previewing: false,
             modifiers: KeyModifiers::default(),
+            lift: None,
+            dwell: None,
+            last: None,
         });
+    }
+
+    /// The running drag carries a lifted picture of its source, grabbed at `at` (the press, in
+    /// the source window's coordinates).
+    fn lift(&mut self, at: Point) {
+        let Some(session) = self.drag.as_ref() else { return };
+        let Some(bounds) = self.backend.probe(session.source).bounds else { return };
+        let grab = Point { x: at.x - bounds.origin.x, y: at.y - bounds.origin.y };
+        if let Some(session) = self.drag.as_mut() {
+            session.lift = Some(Lift { grab, size: bounds.size });
+        }
+    }
+
+    /// Whether a drag's frames have work: a spring-loaded target waiting out its delay.
+    pub(crate) fn drag_needs_frame(&self) -> bool {
+        self.drag.as_ref().is_some_and(|s| s.dwell.as_ref().is_some_and(|d| !d.sprung))
+    }
+
+    /// A frame of the running drag: looks again at what is under a still pointer, and opens a
+    /// spring-loaded target the drag has stayed over long enough.
+    pub(crate) fn drag_frame(&mut self) {
+        let Some(session) = self.drag.as_ref() else { return };
+        if let Some((window, at)) = session.last {
+            let hit = self.target_at(window, at).map(|(n, local)| (window, n, at, local));
+            if hit.map(|h| h.1) != self.drag.as_ref().and_then(|s| s.over).map(|o| o.1) {
+                self.hover(hit);
+            }
+        }
+        let now = self.now();
+        let Some(session) = self.drag.as_mut() else { return };
+        let Some(dwell) = session.dwell.as_mut().filter(|d| !d.sprung) else { return };
+        if now - *dwell.since.get_or_insert(now) < SPRING_LOAD_DELAY {
+            return;
+        }
+        dwell.sprung = true;
+        let node = dwell.node;
+        let sprung = SpringLoaded { item: session.item.clone(), slot: session.slot.clone() };
+        self.events().push(node, Box::new(sprung));
     }
 
     /// The keys held during the running drag, for a backend that owns its pointer.
@@ -214,8 +316,29 @@ impl App {
         session.screen = Some(screen);
         let target = if session.native { Some((window, at)) } else { self.window_at(screen, window) };
         let hit = target.and_then(|(w, p)| self.target_at(w, p).map(|(n, local)| (w, n, p, local)));
+        if let Some(session) = self.drag.as_mut() {
+            session.last = target;
+        }
         self.hover(hit);
         self.preview(target.map(|(w, _)| w), screen);
+    }
+
+    /// The window saw the pointer of the running drag move, or its button go up (`released`),
+    /// at `at` in its coordinates. A source's own gesture reports its drag; this carries the drag
+    /// on once the source has left the tree (a spring-loaded folder replaced the page it was
+    /// on), since no gesture outlives its element. While the source is there it does nothing.
+    pub fn drag_pointer(&mut self, window: WindowId, at: Point, released: bool) {
+        let Some(session) = self.drag.as_ref().filter(|s| !s.native) else { return };
+        let (source, source_window) = (session.source, session.source_window);
+        let gone = self.windows.get(&source_window).and_then(|w| w.tree.as_ref()).is_none_or(|t| t.gone(source));
+        if !gone {
+            return;
+        }
+        if released {
+            self.drag_released(window, at);
+        } else {
+            self.drag_moved(window, at);
+        }
     }
 
     /// The pointer of a drag the backend owns left every window.
@@ -228,9 +351,9 @@ impl App {
     pub fn drag_released(&mut self, window: WindowId, at: Point) -> bool {
         self.drag_moved(window, at);
         let Some(session) = self.drag.take() else { return false };
-        self.end_preview(&session);
         let screen = session.screen.unwrap_or(at);
         if let Some((w, node)) = session.over {
+            self.land(&session, Some((w, node)), screen);
             let _ = self.backend.drop_slot(node, None, &session.item);
             let position =
                 self.window_frame(w).map_or(at, |f| Point { x: screen.x - f.origin.x, y: screen.y - f.origin.y });
@@ -247,6 +370,7 @@ impl App {
             self.end(session, DragOutcome::Dropped { window: w });
             return true;
         }
+        self.land(&session, None, screen);
         let outcome = if self.window_at(screen, window).is_some() {
             DragOutcome::Cancelled
         } else {
@@ -273,8 +397,43 @@ impl App {
     pub fn cancel_drag(&mut self) {
         self.hover(None);
         let Some(session) = self.drag.take() else { return };
-        self.end_preview(&session);
+        let screen = session.screen.unwrap_or_default();
+        self.land(&session, None, screen);
         self.end(session, DragOutcome::Cancelled);
+    }
+
+    /// The drag is over: a lifted picture shrinks into the target it was dropped on (`onto`),
+    /// or settles back on its source; a plain one outside its window goes.
+    fn land(&mut self, session: &Session, onto: Option<(WindowId, NodeId)>, screen: Point) {
+        let Some(lift) = session.lift else {
+            self.end_preview(session);
+            return;
+        };
+        let on_screen = |app: &App, w: WindowId, r: Rect| {
+            app.window_frame(w).map(|f| Rect {
+                origin: Point { x: f.origin.x + r.origin.x, y: f.origin.y + r.origin.y },
+                size: r.size,
+            })
+        };
+        let (frame, into) = match onto {
+            // A widget that places drops (a list) takes it at its row under the pointer, so it
+            // shrinks where it is; an element takes it whole.
+            Some((w, node)) => {
+                let bounds = self.backend.probe(node).bounds.filter(|_| session.slot.is_none());
+                let at =
+                    Rect { origin: Point { x: screen.x - lift.grab.x, y: screen.y - lift.grab.y }, size: lift.size };
+                (bounds.and_then(|b| on_screen(self, w, b)).unwrap_or(at), true)
+            }
+            None => {
+                let home =
+                    self.backend.probe(session.source).bounds.and_then(|b| on_screen(self, session.source_window, b));
+                let at =
+                    Rect { origin: Point { x: screen.x - lift.grab.x, y: screen.y - lift.grab.y }, size: lift.size };
+                (home.unwrap_or(at), home.is_none())
+            }
+        };
+        let reduce = self.reduce_motion();
+        self.backend.drag_preview(session.source_window, session.source, DragPreview::Land { frame, into }, reduce);
     }
 
     fn end(&mut self, session: Session, outcome: DragOutcome) {
@@ -291,6 +450,9 @@ impl App {
         let old = session.over;
         session.over = hit.map(|(w, n, _, _)| (w, n));
         session.slot = None;
+        if hit.is_none() {
+            session.dwell = None;
+        }
         if let Some((_, node)) = old
             && old != hit.map(|(w, n, _, _)| (w, n))
         {
@@ -308,11 +470,21 @@ impl App {
                 }),
             );
         }
+        let springs = hit.is_some_and(|(w, n, _, _)| {
+            self.windows.get(&w).and_then(|s| s.tree.as_ref()).is_some_and(|t| t.springs(n))
+        });
         if let Some((w, node, position, local)) = hit {
             let phase = if old == Some((w, node)) { DragOverPhase::Moved } else { DragOverPhase::Entered };
             let slot = self.backend.drop_slot(node, Some(position), &item);
             if let Some(session) = self.drag.as_mut() {
                 session.slot = slot.clone();
+                let on = slot.as_ref().and_then(|s| s.on.clone());
+                let same = session.dwell.as_ref().is_some_and(|d| d.node == node && d.on == on);
+                if !springs {
+                    session.dwell = None;
+                } else if !same {
+                    session.dwell = Some(Dwell { node, on, since: None, sprung: false });
+                }
             }
             self.events()
                 .push(node, Box::new(DragOver { item, phase, position, local, source_window, slot, modifiers }));
@@ -322,21 +494,37 @@ impl App {
     /// Shows the source as a picture under the pointer while the pointer is outside its window,
     /// for a drag the backend does not draw itself.
     fn preview(&mut self, over: Option<WindowId>, screen: Point) {
+        let reduce = self.reduce_motion();
         let Some(session) = self.drag.as_mut() else { return };
         if session.native {
+            return;
+        }
+        let (w, n) = (session.source_window, session.source);
+        if let Some(lift) = session.lift {
+            session.previewing = true;
+            let frame =
+                Rect { origin: Point { x: screen.x - lift.grab.x, y: screen.y - lift.grab.y }, size: lift.size };
+            self.backend.drag_preview(w, n, DragPreview::At { frame, lifted: true }, reduce);
             return;
         }
         let outside = over != Some(session.source_window);
         if outside || session.previewing {
             session.previewing = outside;
-            let (w, n) = (session.source_window, session.source);
-            self.backend.drag_preview(w, n, outside.then_some(screen));
+            let preview = if outside {
+                let size = self.backend.probe(n).bounds.map_or(Size::default(), |b| b.size);
+                let origin = Point { x: screen.x - size.width / 2., y: screen.y - size.height / 2. };
+                DragPreview::At { frame: Rect { origin, size }, lifted: false }
+            } else {
+                DragPreview::Gone
+            };
+            self.backend.drag_preview(w, n, preview, reduce);
         }
     }
 
     fn end_preview(&mut self, session: &Session) {
         if session.previewing {
-            self.backend.drag_preview(session.source_window, session.source, None);
+            let reduce = self.reduce_motion();
+            self.backend.drag_preview(session.source_window, session.source, DragPreview::Gone, reduce);
         }
     }
 
@@ -363,10 +551,15 @@ impl App {
     /// The innermost node in `window` that takes the running drag's kind and is under `at`,
     /// with `at` from its top-left.
     fn target_at(&self, window: WindowId, at: Point) -> Option<(NodeId, Point)> {
-        let kind = &self.drag.as_ref()?.item.kind;
+        let session = self.drag.as_ref()?;
+        let kind = &session.item.kind;
         let tree = self.windows.get(&window)?.tree.as_ref()?;
+        // A list is a target of its own rows; an element is no target of its own drag.
+        let source =
+            (session.source_window == window && tree.drag_item(session.source).is_some()).then_some(session.source);
         tree.drop_targets(kind)
             .into_iter()
+            .filter(|n| source.is_none_or(|s| !tree.within(*n, s)))
             .filter_map(|n| {
                 let probe = self.backend.probe(n);
                 let b = probe.bounds.filter(|b| probe.visible != Some(false) && contains(b, at))?;
@@ -382,8 +575,15 @@ impl App {
     /// Runs the session for a drag event on a `draggable` node, or a widget's [`DragSource`].
     /// Returns whether the event belonged to drag and drop.
     pub(crate) fn drag_event(&mut self, node: NodeId, event: &dyn std::any::Any) -> bool {
-        let window =
-            self.windows.iter().find(|(_, s)| s.tree.as_ref().is_some_and(|t| t.contains(node))).map(|(w, _)| *w);
+        // The source's last events can arrive after it left the tree (its page went in the same
+        // batch); they still end its drag.
+        let source = self.drag.as_ref().filter(|s| s.source == node).map(|s| s.source_window);
+        let window = self
+            .windows
+            .iter()
+            .find(|(_, s)| s.tree.as_ref().is_some_and(|t| t.contains(node)))
+            .map(|(w, _)| *w)
+            .or(source);
         let Some(window) = window else { return false };
         if let Some(source) = event.downcast_ref::<DragSource>() {
             if source.phase != GesturePhase::Began {
@@ -427,7 +627,10 @@ impl App {
             return true;
         }
         let Some(drag) = event.downcast_ref::<nd_gesture::DragEvent>() else { return false };
-        let Some(item) = self.windows[&window].tree.as_ref().and_then(|t| t.drag_item(node)) else { return false };
+        let item = self.windows.get(&window).and_then(|w| w.tree.as_ref()).and_then(|t| t.drag_item(node));
+        let Some(item) = item.or_else(|| source.and(self.drag.as_ref().map(|s| s.item.clone()))) else {
+            return false;
+        };
         if drag.phase != GesturePhase::Began && self.drag.as_ref().is_some_and(|s| s.source == node) {
             self.set_drag_modifiers(drag.modifiers);
         }
@@ -435,6 +638,9 @@ impl App {
             GesturePhase::Began => {
                 self.begin_drag(window, node, item, false);
                 self.set_drag_modifiers(drag.modifiers);
+                if self.windows[&window].tree.as_ref().is_some_and(|t| t.drag_lifts(node)) {
+                    self.lift(drag.start);
+                }
                 self.drag_moved(window, drag.position);
             }
             GesturePhase::Changed => {

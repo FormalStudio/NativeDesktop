@@ -73,6 +73,23 @@ a drag over the middle of an item on that item, with the item outlined and `slot
 above and below the middle it lands between items as before. `tab_strip(..).accepts_drops(..)`
 names the tab under the pointer in `slot.on`, outlined on the GPUI backend.
 
+`.lift_on_drag()` on a draggable element lifts a picture of it as the drag starts, as Finder
+lifts an icon: a snapshot a little larger than the element, with a shadow, that follows the
+pointer across the window and over other windows. The element stays in place, so dim it while
+it is dragged. When the drag ends the picture shrinks into the target that took it, or settles
+back onto the element on Escape or a release nothing takes. Under reduce motion it only fades.
+A picture is the element as it was when the drag lifted, so it still lands after a drop removes
+the element. `tile_grid(..).fixed_order()` uses it: a sorted grid's tiles drag out to folder
+tiles and sidebar rows without reordering.
+
+`.on_spring_load(|e: &SpringLoaded, ..| ..)` on a target, or on a source list, opens it when a
+drag rests over it for `SPRING_LOAD_DELAY` (0.7 s): navigate into a folder tile, expand a
+sidebar folder. It fires once per stay, and again only after the drag leaves and comes back; on
+a source list each row is its own stay, named in `e.slot`. A target never hears a drag of
+itself or of an element inside it. When the folder replaces the page the drag came from, the
+drag carries on from the window's pointer and still drops. A source list scrolls while a drag
+rests near its top or bottom edge.
+
 Dragging files out of the app to a file manager isn't supported. GPUI's Wayland backend can
 start an outbound file drag, but only from its own element drags, which nd's drag sessions don't
 use; it needs a patch in the GPUI fork.

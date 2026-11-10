@@ -11,6 +11,7 @@ mod canvas;
 mod clock;
 pub mod custom;
 pub mod dialogs;
+mod drag_picture;
 mod drawn;
 mod fade;
 mod fluent_icons;

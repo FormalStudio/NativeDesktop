@@ -31,7 +31,10 @@ pub use animation::{
 pub use app::{AnyView, App, Context, Entity, EntityId, Render, Subscription, WeakEntity};
 pub use canvas::{Canvas, CanvasPath, CanvasProps, CanvasRect, CanvasResized, PaintOp, Painter, PathStep, canvas};
 pub use container::ContainerElement;
-pub use drag::{DragEnded, DragItem, DragOutcome, DragOver, DragOverPhase, DragPoint, DragSource, DropSlot, Dropped};
+pub use drag::{
+    DragEnded, DragItem, DragOutcome, DragOver, DragOverPhase, DragPoint, DragPreview, DragSource, DropSlot, Dropped,
+    SPRING_LOAD_DELAY, SpringLoaded,
+};
 pub use element::{
     AnyElement, Bezel, Button, ButtonProps, ButtonVariant, ClickEvent, DispatchProps, Div, DivProps, HeroFrom,
     HeroPart, HoverChanged, InteractiveElement, IntoElement, Key, NativeElement, ParentElement, PressChanged, Resized,
@@ -65,7 +68,7 @@ pub use window::{ForeignParent, Titlebar, TitlebarInsets, Window, WindowHandle, 
 
 /// What an app imports: the vocabulary plus GPUI's geometry and colour helpers.
 pub mod prelude {
-    pub use crate::drag::{DragEnded, DragItem, DragOutcome, DragOver, DragOverPhase, DropSlot, Dropped};
+    pub use crate::drag::{DragEnded, DragItem, DragOutcome, DragOver, DragOverPhase, DropSlot, Dropped, SpringLoaded};
     pub use crate::overlay::{
         DismissCause, Dismissed, Modality, OverlayKind, Placement, cover, panel, popover, tooltip,
     };

@@ -217,6 +217,8 @@ pub struct SourceTreeProps {
     pub drop_onto: bool,
     /// A right click on a row asks for that row's menu ([`SourceMenuRequested`]).
     pub row_menus: bool,
+    /// As tall as its rows, with nothing to scroll (`fit_rows`).
+    pub fit_rows: bool,
     pub style: StyleRefinement,
 }
 
@@ -308,6 +310,7 @@ pub fn source_tree(id: impl Into<SharedString>) -> SourceTree {
         accepts: Vec::new(),
         drop_onto: false,
         row_menus: false,
+        fit_rows: false,
         style: StyleRefinement::default(),
     };
     SourceTree(NativeElement::new::<SourceTreeKind>(Key::Id(id.into()), props).size_full())
@@ -431,6 +434,24 @@ impl SourceTree {
 
     pub fn on_drag_over(self, f: impl Fn(&DragOver, &mut Window, &mut App) + 'static) -> Self {
         SourceTree(self.0.on(f))
+    }
+
+    /// The list is as tall as its rows and never scrolls: no scroll view or scroller, for a
+    /// few fixed rows pinned under a sidebar's main list (Trash in a [`Pane::footer`]). Its
+    /// height follows the rows, so the app sets none.
+    ///
+    /// [`Pane::footer`]: crate::Pane::footer
+    pub fn fit_rows(mut self) -> Self {
+        self.0.props_mut().fit_rows = true;
+        self.0.style().size.height = None;
+        self
+    }
+
+    /// A drag stayed over one row (the same [`DropSlot::on`], so with
+    /// [`drops_onto_rows`](Self::drops_onto_rows)) for [`SPRING_LOAD_DELAY`](nd_ui::SPRING_LOAD_DELAY):
+    /// expand that folder, as Finder's sidebar springs a folder open under a drag.
+    pub fn on_spring_load(self, f: impl Fn(&SpringLoaded, &mut Window, &mut App) + 'static) -> Self {
+        SourceTree(self.0.on_spring_load(f))
     }
 
     /// A drag was dropped on the list; its `slot` says where among the rows.

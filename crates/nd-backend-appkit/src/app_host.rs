@@ -285,6 +285,16 @@ impl KeyRouter for AppRouter {
         self.drag(|app, window| app.drag_released(window, nd_core::Point { x: at.0, y: at.1 }))
     }
 
+    fn drag_pointer(&self, at: (f32, f32), released: bool) {
+        let dragging = self.host.upgrade().is_some_and(|h| h.app.try_borrow().is_ok_and(|a| a.is_dragging()));
+        if dragging {
+            self.drag(|app, window| {
+                app.drag_pointer(window, nd_core::Point { x: at.0, y: at.1 }, released);
+                false
+            });
+        }
+    }
+
     fn responder_changed(&self, window: &NdWindow) {
         let Some(host) = self.host.upgrade() else { return };
         let Some(node) = node_for_responder(&host.backend, window.firstResponder().as_deref()) else { return };

@@ -1163,6 +1163,22 @@ impl Inner {
             ghost_paints.extend(ghost_build.take_paints());
             window.request_animation_frame();
         }
+        let picture = self.backend.drag_pictures.element(id, window.bounds().origin, build.time, |nodes, root| {
+            let mut picture_build =
+                Build::new(&self.backend, nodes, &state.theme, insets, self.wake(), &self.hooks, id);
+            picture_build.ghost = true;
+            picture_build.picture = true;
+            picture_build.time = build.time;
+            let element = picture_build.node(root, window, cx);
+            drop(picture_build.take_paints());
+            element
+        });
+        if let Some((picture, more)) = picture {
+            ghosts.push(picture);
+            if more {
+                window.request_animation_frame();
+            }
+        }
         let element = if ghosts.is_empty() {
             element
         } else {
@@ -1331,6 +1347,7 @@ impl Inner {
                     inner.gesture_input(id, window, cx, |g, tree| {
                         g.pointer(id, nd_gesture::PointerPhase::Up, at, modifiers, tree)
                     });
+                    inner.backend.defer(move |app| app.drag_pointer(id, at, true));
                 }
             })
             .on_mouse_move(move |event, window, cx| {
@@ -1341,6 +1358,7 @@ impl Inner {
                     inner.gesture_input(id, window, cx, |g, tree| {
                         g.pointer(id, nd_gesture::PointerPhase::Move, at, modifiers, tree)
                     });
+                    inner.backend.defer(move |app| app.drag_pointer(id, at, false));
                 }
             })
             .on_scroll(move |event, window, cx| {

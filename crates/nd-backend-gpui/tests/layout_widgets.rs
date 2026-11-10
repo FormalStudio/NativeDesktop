@@ -64,6 +64,8 @@ enum Kind {
     Centered,
     /// A window's chrome: a titled toolbar over a sidebar with a source list and the content.
     Chrome,
+    /// A sidebar whose list overflows, with Trash pinned in its footer.
+    Footer,
     /// Notes' toolbar: the sidebar toggle, a button, a flexible space and a search field.
     Search,
     /// The same with the search field kept in the header.
@@ -242,6 +244,17 @@ impl Render for Scene {
                         toolbar().title("Notes").sidebar_toggle().flexible_space().item(button("search", "Search")),
                     )
                     .sidebar(sidebar().min_w(px(220.)).child(folders))
+                    .content(text("Body"))
+                    .into_any_element();
+            }
+            Kind::Footer => {
+                let rows = (0..40).map(|i| source_node(format!("note{i}"), format!("Note {i}")));
+                return scaffold()
+                    .sidebar(
+                        sidebar()
+                            .child(source_tree("tree").nodes(rows).flex_1().min_h_0())
+                            .footer(source_list("trash").nodes([source_node("trash", "Trash").badge("1")]).fit_rows()),
+                    )
                     .content(text("Body"))
                     .into_any_element();
             }
@@ -850,6 +863,20 @@ mod gate_m6 {
         assert!((20. ..32.).contains(&line), "one line at its own size: {line}");
     }
 
+    /// A list that fits its rows in the sidebar's footer is as tall as its row and the list's
+    /// padding, pinned at the sidebar's foot under a list that overflows.
+    pub fn gpui_footer_list_fits_its_rows() {
+        let o = open(Kind::Footer);
+        let sidebar = o.node("nd-sidebar").bounds.expect("sidebar");
+        let tree = o.node("tree").bounds.expect("tree");
+        let trash = o.node("trash").bounds.expect("trash");
+        let theme = o.theme();
+        let fits = 36. + 2. * theme.spacing.sm.as_f32();
+        assert_eq!(trash.size.height, fits, "one 36 px row and the list's padding");
+        assert_eq!(trash.origin.y + trash.size.height, sidebar.origin.y + sidebar.size.height, "at the foot");
+        assert_eq!(tree.origin.y + tree.size.height, trash.origin.y, "the list above ends where it starts");
+    }
+
     /// A resizable sidebar's and inspector's inner edges drag, inside their widths' range; the
     /// app's width wins once it changes, and a width the app ignores still holds.
     pub fn gpui_side_panes_resize_by_their_edges() {
@@ -1061,6 +1088,7 @@ fn main() {
         ),
         ("gate_m6::gpui_split_echo_and_refusal", gate_m6::gpui_split_echo_and_refusal),
         ("gate_m6::gpui_side_panes_resize_by_their_edges", gate_m6::gpui_side_panes_resize_by_their_edges),
+        ("gate_m6::gpui_footer_list_fits_its_rows", gate_m6::gpui_footer_list_fits_its_rows),
         ("gate_m6::gpui_rich_text_inherits_size_and_shrinks", gate_m6::gpui_rich_text_inherits_size_and_shrinks),
         (
             "gate_m6::gpui_persistent_toolbar_search_stays_in_the_header",

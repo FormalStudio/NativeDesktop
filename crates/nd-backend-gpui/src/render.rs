@@ -237,7 +237,7 @@ const PRESS_SLOP: f32 = 4.;
 /// shows a cursor or tooltip. A hitbox is clipped to the content mask in effect where it is
 /// inserted, which is at prepaint, so the subtree prepaints under an empty mask and paints under
 /// the real one.
-struct Inert(AnyElement);
+pub(crate) struct Inert(pub(crate) AnyElement);
 
 impl IntoElement for Inert {
     type Element = Self;
@@ -415,6 +415,9 @@ pub(crate) struct Build<'a> {
     /// Drawing a closed overlay's last subtree as it animates out: its nodes are released, so
     /// controls keep no state for them and start nothing (a video would play on unheard).
     pub(crate) ghost: bool,
+    /// Drawing a drag's picture of nodes that are still on screen: nothing is tracked, so their
+    /// bounds stay where layout put them.
+    pub(crate) picture: bool,
 }
 
 impl<'a> Build<'a> {
@@ -455,6 +458,7 @@ impl<'a> Build<'a> {
             split: RefCell::default(),
             fill_field: Cell::default(),
             ghost: false,
+            picture: false,
         }
     }
 
@@ -611,6 +615,9 @@ impl<'a> Build<'a> {
     pub fn node(&self, id: NodeId, window: &mut gpui::Window, cx: &mut App) -> AnyElement {
         let node = &self.nodes[&id];
         let element = self.scoped(node, || self.element(id, node, window, cx));
+        if self.picture {
+            return element;
+        }
         let glides = !self.ghost && node.props.downcast_ref::<DivProps>().is_some_and(|d| d.glides);
         let tracked = Tracked {
             node: id,
