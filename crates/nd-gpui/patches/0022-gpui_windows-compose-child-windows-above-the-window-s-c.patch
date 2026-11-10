@@ -1,0 +1,27 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: FormalSnake <kyaniserni@gmail.com>
+Date: Tue, 10 Nov 2026 12:00:00 +0000
+Subject: [PATCH] gpui_windows: compose child windows above the window's
+ content
+
+The DirectComposition target was topmost, which puts the window's content over every child
+window. A child window that shows its own content (a Chrome-style CEF page) has to sit above
+it.
+---
+ crates/gpui_windows/src/directx_renderer.rs | 4 +++-
+ 1 file changed, 3 insertions(+), 1 deletion(-)
+
+diff --git a/crates/gpui_windows/src/directx_renderer.rs b/crates/gpui_windows/src/directx_renderer.rs
+--- a/crates/gpui_windows/src/directx_renderer.rs
++++ b/crates/gpui_windows/src/directx_renderer.rs
+@@ -1014,7 +1014,9 @@
+ impl DirectComposition {
+     pub fn new(dxgi_device: &IDXGIDevice, hwnd: HWND) -> Result<Self> {
+         let comp_device = get_comp_device(dxgi_device)?;
+-        let comp_target = unsafe { comp_device.CreateTargetForHwnd(hwnd, true) }?;
++        // Not topmost: child windows (a Chrome-style CEF page) compose above the window's content
++        // instead of under it.
++        let comp_target = unsafe { comp_device.CreateTargetForHwnd(hwnd, false) }?;
+         let comp_visual = unsafe { comp_device.CreateVisual() }?;
+ 
+         Ok(Self {

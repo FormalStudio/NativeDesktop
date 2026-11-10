@@ -21,3 +21,4 @@
 0019-gpui_linux-give-a-wayland-window-that-is-not-resizab.patch
 0020-gpui_linux-tag-wayland-toplevels-with-xdg-toplevel-t.patch
 0021-gpui-scale-an-element-subtree-with-Window-with_eleme.patch
+0022-gpui_windows-compose-child-windows-above-the-window-s-c.patch
