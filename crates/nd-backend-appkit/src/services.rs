@@ -370,7 +370,9 @@ pub fn menu_bar(mtm: MainThreadMarker, mut menus: Vec<Menu>, bindings: &[KeyBind
             }
         }
     }
-    if !menus.iter().any(|m| m.kind == MenuKind::Edit) {
+    // An app's own menu titled Edit is its Edit menu, as one titled File is its File menu.
+    let is_edit = |m: &Menu| m.kind == MenuKind::Edit || (m.kind == MenuKind::Normal && m.title.as_ref() == "Edit");
+    if !menus.iter().any(is_edit) {
         let at = menus.iter().position(|m| m.kind == MenuKind::App).map_or(0, |i| i + 1);
         let after_file = menus.get(at).is_some_and(|m| m.title.as_ref() == "File");
         menus.insert(at + usize::from(after_file), Menu::edit([]));
