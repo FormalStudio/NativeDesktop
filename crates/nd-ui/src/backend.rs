@@ -176,6 +176,9 @@ pub enum WindowCommand {
     /// Shows or hides the window's sidebar, as the toolbar's sidebar toggle does: outside the
     /// app's state, which hears of it as the pane's collapse.
     ToggleSidebar,
+    /// Takes the window into the OS's fullscreen (`true`) or out of it; nothing when it is
+    /// already there.
+    Fullscreen(bool),
 }
 
 /// Where an op runs inside a transaction. Ordered: a transaction never sends an op of an

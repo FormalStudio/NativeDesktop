@@ -152,6 +152,7 @@ pub struct TitlebarInsets {
 
 pub(crate) type ShouldClose = Rc<dyn Fn(&mut Window, &mut App) -> bool>;
 pub(crate) type NewTab = Rc<dyn Fn(&mut Window, &mut App)>;
+pub(crate) type Activated = Rc<dyn Fn(&mut Window, &mut App)>;
 
 /// Per-window state handed to `render` and to handlers.
 pub struct Window {
@@ -168,6 +169,7 @@ pub struct Window {
     pub(crate) focus_if_lost: bool,
     pub(crate) should_close: Option<ShouldClose>,
     pub(crate) new_tab: Option<NewTab>,
+    pub(crate) activated: Option<Activated>,
 }
 
 impl Window {
@@ -187,6 +189,7 @@ impl Window {
             focus_if_lost: false,
             should_close: None,
             new_tab: None,
+            activated: None,
         }
     }
 
@@ -203,6 +206,12 @@ impl Window {
     /// handler.
     pub fn on_new_tab(&mut self, handler: impl Fn(&mut Window, &mut App) + 'static) {
         self.new_tab = Some(Rc::new(handler));
+    }
+
+    /// The window became the key window, the one the menu bar and the keyboard act on. An app
+    /// whose menus show per-window state rebuilds them here. Replaces an earlier handler.
+    pub fn on_activate(&mut self, handler: impl Fn(&mut Window, &mut App) + 'static) {
+        self.activated = Some(Rc::new(handler));
     }
 
     /// Whether the window answers a new tab request, so a drawn tab bar shows its `+`.

@@ -892,6 +892,16 @@ impl Inner {
     /// Follows one window's active state. Moving focus between two app windows deactivates one
     /// before it activates the other, so the app-level answer is taken once the effects settle.
     fn window_activation(self: &Rc<Self>, id: WindowId, active: bool, cx: &mut gpui::App) {
+        if active {
+            let weak = Rc::downgrade(self);
+            cx.defer(move |cx| {
+                let Some(inner) = weak.upgrade() else { return };
+                if let Ok(mut app) = inner.app.try_borrow_mut() {
+                    app.window_activated(id);
+                }
+                inner.pump(cx);
+            });
+        }
         let was = !self.active.borrow().is_empty();
         if active {
             self.active.borrow_mut().insert(id);

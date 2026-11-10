@@ -665,6 +665,15 @@ impl Inner {
                         let _ = handle.update(cx, |_, window, _| window.activate_window());
                     }
                 }
+                WindowCommand::Fullscreen(on) => {
+                    if let Some(handle) = self.windows.borrow().get(&id).and_then(|w| w.handle) {
+                        let _ = handle.update(cx, |_, window, _| {
+                            if window.is_fullscreen() != on {
+                                window.toggle_fullscreen();
+                            }
+                        });
+                    }
+                }
                 WindowCommand::ToggleTabOverview => {
                     let Some(s) = surface else { continue };
                     if let Some(s) = self.groups.borrow_mut().surfaces.get_mut(&s) {

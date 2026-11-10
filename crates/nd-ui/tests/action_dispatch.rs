@@ -62,3 +62,32 @@ fn an_unhandled_sidebar_toggle_reaches_the_backend_as_a_window_command() {
     assert!(handled, "nd handles it when the app does not");
     assert_eq!(cx.backend().window_commands(), [(window.id(), backend::WindowCommand::ToggleSidebar)]);
 }
+
+#[test]
+fn a_fullscreen_request_reaches_the_backend_as_a_window_command() {
+    let mut cx = TestApp::new();
+    let window = cx.open_window(Size { width: 300., height: 200. }, |_, cx| cx.new(|_| Plain));
+    cx.set_window_fullscreen(window.id(), true);
+    cx.set_window_fullscreen(window.id(), false);
+    assert_eq!(
+        cx.backend().window_commands(),
+        [(window.id(), backend::WindowCommand::Fullscreen(true)), (window.id(), backend::WindowCommand::Fullscreen(false))]
+    );
+}
+
+#[test]
+fn a_window_that_becomes_key_runs_its_activate_handler() {
+    let mut cx = TestApp::new();
+    let ran = Rc::new(Cell::new(0));
+    let seen = ran.clone();
+    let first = cx.open_window(Size { width: 300., height: 200. }, move |window, cx| {
+        let seen = seen.clone();
+        window.on_activate(move |_, _| seen.set(seen.get() + 1));
+        cx.new(|_| Plain)
+    });
+    let second = cx.open_window(Size { width: 300., height: 200. }, |_, cx| cx.new(|_| Plain));
+    cx.window_activated(first.id());
+    cx.window_activated(second.id());
+    assert_eq!(ran.get(), 1);
+    assert_eq!(cx.active_window(), Some(second.id()));
+}

@@ -230,6 +230,7 @@ pub struct App {
     pub(crate) frames: u64,
     /// Titles set while a handler or a frame held the window, applied once it is back.
     retitled: HashMap<WindowId, SharedString>,
+    active_window: Option<WindowId>,
     /// The user asked for less motion: element animations jump instead of moving.
     pub(crate) reduce_motion: bool,
     /// The platform's timings, which themed animations resolve through.
@@ -267,6 +268,7 @@ impl App {
             moved: HashSet::new(),
             frames: 0,
             retitled: HashMap::new(),
+            active_window: None,
             reduce_motion: false,
             motion: crate::animation::MotionTokens::default(),
             drag: None,
@@ -673,6 +675,25 @@ impl App {
         close
     }
 
+    /// The window became the key window. Hosts call it from a later run loop turn, never inside
+    /// the OS callback; it runs the window's [`Window::on_activate`] handler.
+    pub fn window_activated(&mut self, id: WindowId) {
+        if !self.windows.contains_key(&id) {
+            return;
+        }
+        self.active_window = Some(id);
+        let handler = self.windows.get(&id).and_then(|w| w.window.as_ref()).and_then(|w| w.activated.clone());
+        if let Some(handler) = handler {
+            self.with_window(id, (), |window, cx| handler(window, cx));
+        }
+        self.flush_effects();
+    }
+
+    /// The key window as the host last reported it, while it is open.
+    pub fn active_window(&self) -> Option<WindowId> {
+        self.active_window.filter(|id| self.windows.contains_key(id))
+    }
+
     /// The user asked for a new tab next to `id` (the tab bar's `+`). Runs the window's
     /// [`Window::on_new_tab`] handler; false when it has none.
     pub fn request_new_tab(&mut self, id: WindowId) -> bool {
@@ -713,6 +734,12 @@ impl App {
     /// Ends the app as the OS's Quit does: the way out of an app that outlives its windows.
     pub fn quit(&mut self) {
         self.backend.quit();
+    }
+
+    /// Takes the window into fullscreen or out of it, as a page's element fullscreen or a
+    /// browser's F11 does.
+    pub fn set_window_fullscreen(&mut self, id: WindowId, fullscreen: bool) {
+        self.window_command(id, crate::backend::WindowCommand::Fullscreen(fullscreen));
     }
 
     /// Brings the window forward and makes it key; in a tab group its tab is selected.

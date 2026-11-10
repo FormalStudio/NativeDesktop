@@ -131,6 +131,10 @@ define_class!(
                 h.diag("window key");
                 h.diag_frame();
             });
+            if let Some(host) = self.ivars().host.upgrade() {
+                let id = host.id;
+                crate::defer_with_app(move |app| app.window_activated(id));
+            }
         }
 
         #[unsafe(method(windowDidResignKey:))]
