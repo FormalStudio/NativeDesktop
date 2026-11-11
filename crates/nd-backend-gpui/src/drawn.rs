@@ -18,7 +18,7 @@ use nd_gpui::gpui::{
     self, AnyElement, ElementId, FontWeight, InteractiveElement, IntoElement, MouseButton, MouseDownEvent,
     ParentElement, Refineable, StatefulInteractiveElement, StyleRefinement, Styled, WindowControlArea, div, px,
 };
-use nd_theme::preset::Material;
+use nd_theme::preset::{GlassVariant, Material};
 use nd_ui::backend::WidgetKind;
 use nd_ui::with_titlebar_insets;
 
@@ -391,9 +391,22 @@ impl Build<'_> {
             div().into_any_element()
         } else if is::<Glass>(kind) {
             let p = props::<GlassProps>(node)?;
-            let fill = p.tint.unwrap_or(look.control);
-            let glass = styled(&p.style).border_1().border_color(look.border).bg(fill).text_color(ink);
-            self.painted(id, Some(fill), None, "glass", || glass.children(children(window, cx)).into_any_element())
+            let b = glass_backdrop(p.variant, p.tint, nd_theme::color::is_dark(look.background), look.control);
+            let glass = nd_gpui::backdrop::apply(styled(&p.style), b).text_color(ink).when(
+                p.variant == GlassVariant::Regular,
+                |g| {
+                    g.shadow(vec![gpui::BoxShadow {
+                        color: gpui::black().opacity(0.1),
+                        offset: gpui::point(px(0.), px(3.)),
+                        blur_radius: px(12.),
+                        spread_radius: px(0.),
+                        inset: false,
+                    }])
+                },
+            );
+            self.painted(id, Some(b.fallback), None, "glass", || {
+                glass.children(children(window, cx)).into_any_element()
+            })
         } else if is::<GlassGroup>(kind) {
             div().flex().children(children(window, cx)).into_any_element()
         } else if is::<SeparatorKind>(kind) {
@@ -1390,3 +1403,31 @@ pub(crate) enum Center {
 const SEARCH_MAX: f32 = 580.;
 /// A toolbar search field's least width when the app gave it none.
 const SEARCH_MIN: f32 = 200.;
+
+/// What `glass()` draws: macOS 27's `NSGlassEffectView` fitted over a known backdrop (atoll's
+/// chrome-glass fixture). Clear glass is the same in both appearances. `fallback` fills it
+/// under gpui-fast, which cannot blur.
+fn glass_backdrop(
+    variant: GlassVariant,
+    tint: Option<gpui::Hsla>,
+    dark: bool,
+    fallback: gpui::Hsla,
+) -> nd_gpui::backdrop::Backdrop {
+    let srgb = |r: u8, g: u8, b: u8, a: f32| -> gpui::Hsla {
+        gpui::Rgba { r: r as f32 / 255., g: g as f32 / 255., b: b as f32 / 255., a }.into()
+    };
+    let (blur, saturation, fitted) = match (variant, dark) {
+        (GlassVariant::Regular, true) => (10., 1.5, srgb(75, 73, 68, 0.58)),
+        (GlassVariant::Regular, false) => (12., 1.43, srgb(255, 254, 252, 0.55)),
+        (GlassVariant::Clear, _) => (4., 1.07, srgb(255, 255, 255, 0.13)),
+    };
+    let tint = tint.unwrap_or(fitted);
+    nd_gpui::backdrop::Backdrop {
+        blur: px(blur),
+        saturation,
+        tint,
+        highlight: (0.25, px(0.5)),
+        desktop: false,
+        fallback: if tint == fitted { fallback } else { tint.opacity(1.) },
+    }
+}

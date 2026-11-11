@@ -15,7 +15,7 @@ use nd_components::services::{self, Chrome};
 use nd_components::split::Axis;
 use nd_components::*;
 use nd_gpui::gpui::HeadlessAppContext;
-use nd_theme::{OsTheme, Preset, Scheme, Theme, ThemeRegistry};
+use nd_theme::{GlassVariant, OsTheme, Preset, Scheme, Theme, ThemeRegistry};
 use nd_ui::backend::{Backend, WindowCommand};
 use nd_ui::prelude::*;
 use nd_ui::semantics::{MouseButton, PaintKind, PointerPhase, SyntheticInput};
@@ -75,6 +75,8 @@ enum Kind {
     /// A path bar too long for the header between a sidebar and an inspector, as a flexible
     /// item before two buttons.
     FlexibleItem,
+    /// `glass()` pills, regular and clear, over black, white, red and green stripes they blur.
+    Glass,
     /// A settings window: a toolbar of tabs over a padded body holding a form longer than the
     /// window, its rows holding text fields, steppers, combo boxes and pickers.
     Settings,
@@ -142,6 +144,27 @@ impl Render for Scene {
                     .child(button("new", "New Note")),
             ),
             Kind::Plain => root.child(text("Inbox")),
+            Kind::Glass => {
+                let stripes = [0x000000, 0xffffff, 0xff0000, 0xffffff, 0x000000, 0x00cc00, 0xffffff, 0x000000];
+                let pill =
+                    |variant| glass().variant(variant).rounded_full().px_4().py_2().w(px(220.)).child(text("On glass"));
+                root.child(
+                    div()
+                        .relative()
+                        .size_full()
+                        .flex()
+                        .children(stripes.map(|c| div().flex_1().h_full().bg(rgb(c))))
+                        .child(
+                            v_flex()
+                                .absolute()
+                                .top(px(120.))
+                                .left(px(240.))
+                                .gap(px(40.))
+                                .child(pill(GlassVariant::Regular))
+                                .child(pill(GlassVariant::Clear)),
+                        ),
+                )
+            }
             Kind::RichRows => {
                 let name = || {
                     rich_text([
@@ -1160,9 +1183,18 @@ mod gate_m6 {
         }
         let mut failed = Vec::new();
         for scheme in [Scheme::Light, Scheme::Dark] {
-            for view in
-                ["split", "status", "alert", "about", "chrome", "chrome-backdrop", "search", "search-open", "settings"]
-            {
+            for view in [
+                "split",
+                "status",
+                "glass",
+                "alert",
+                "about",
+                "chrome",
+                "chrome-backdrop",
+                "search",
+                "search-open",
+                "settings",
+            ] {
                 if let Err(e) = golden(view, scheme) {
                     failed.push(e);
                 }
@@ -1201,6 +1233,7 @@ fn golden(view: &str, scheme: Scheme) -> Result<(), String> {
     let kind = match view {
         "split" => Kind::Split,
         "status" => Kind::Status,
+        "glass" => Kind::Glass,
         v if v.starts_with("chrome") => Kind::Chrome,
         v if v.starts_with("search") => Kind::Search,
         v if v.starts_with("settings") => Kind::Settings,

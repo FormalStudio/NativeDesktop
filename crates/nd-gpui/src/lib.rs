@@ -44,3 +44,39 @@ pub mod layout {
         })
     }
 }
+
+/// Backdrop filters: a blur of what an element covers, saturated, tinted and lit at its rim.
+/// gpui-fast has none, so there an element paints its fallback instead.
+pub mod backdrop {
+    use crate::gpui::{Hsla, Pixels, Styled};
+
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    pub struct Backdrop {
+        pub blur: Pixels,
+        pub saturation: f32,
+        /// Laid over the blur.
+        pub tint: Hsla,
+        /// The rim's brightest alpha, and how wide it is.
+        pub highlight: (f32, Pixels),
+        /// Blurs the desktop behind the window instead of the window's own content.
+        pub desktop: bool,
+        /// Painted where nothing can be blurred: a desktop backdrop without a compositor
+        /// that blurs, or an opaque window.
+        pub fallback: Hsla,
+    }
+
+    #[cfg(not(feature = "fast"))]
+    pub fn apply<E: Styled>(element: E, b: Backdrop) -> E {
+        let filter = crate::gpui::BackdropFilter::blur(b.blur)
+            .saturation(b.saturation)
+            .tint(b.tint)
+            .highlight(b.highlight.0, b.highlight.1)
+            .fallback(b.fallback);
+        element.backdrop(if b.desktop { filter.desktop() } else { filter })
+    }
+
+    #[cfg(feature = "fast")]
+    pub fn apply<E: Styled>(element: E, b: Backdrop) -> E {
+        element.bg(b.fallback)
+    }
+}
