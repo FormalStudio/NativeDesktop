@@ -24,3 +24,4 @@
 0022-gpui_windows-compose-child-windows-above-the-window-s-c.patch
 0023-gpui_wgpu-paint-embedder-textures-as-surfaces-on-an-.patch
 0024-gpui-drop-an-app-s-windows-before-its-platform.patch
+0025-gpui_linux-ignore-keys-and-modifiers-until-a-wayland.patch
