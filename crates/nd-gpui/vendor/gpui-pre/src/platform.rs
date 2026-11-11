@@ -1310,6 +1310,11 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn background_appearance(&self) -> WindowBackgroundAppearance;
     fn set_title(&mut self, title: &str);
     fn set_background_appearance(&self, background_appearance: WindowBackgroundAppearance);
+    /// Whether the compositor blurs the desktop behind this window's translucent pixels where a
+    /// scene's [`crate::BackdropSource::Desktop`] backdrops are. The window must not be opaque.
+    fn supports_background_blur(&self) -> bool {
+        false
+    }
     fn minimize(&self);
     fn zoom(&self);
     fn toggle_fullscreen(&self);

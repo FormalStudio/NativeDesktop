@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FormalSnake <kyaniserni@gmail.com>
 Date: Wed, 11 Nov 2026 05:22:25 +0000
-Subject: [PATCH 24/24] gpui: drop an app's windows before its platform
+Subject: [PATCH 24/26] gpui: drop an app's windows before its platform
 
 ---
  crates/gpui/src/app.rs | 8 ++++++++

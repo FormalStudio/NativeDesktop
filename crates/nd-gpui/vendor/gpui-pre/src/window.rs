@@ -8,7 +8,8 @@ use crate::subscription::SingleSubscriberSet;
 use crate::taffy::TaffyLayoutEngine;
 use crate::{
     Action, AnyDrag, AnyElement, AnyImageCache, AnyTooltip, AnyView, App, AppContext, Arena, Asset,
-    AsyncWindowContext, AtlasTile, AvailableSpace, Background, BorderStyle, Bounds, BoxShadow,
+    AsyncWindowContext, AtlasTile, AvailableSpace, Backdrop, BackdropFilter, BackdropSource,
+    Background, BorderStyle, Bounds, BoxShadow,
     Capslock, Context, Corners, CursorHideMode, CursorStyle, Decorations, DevicePixels,
     DispatchActionListener, DispatchNodeId, DispatchTree, DisplayId, Edges, Effect, Entity,
     EntityId, EventEmitter, FileDropEvent, FontId, Global, GlobalElementId, GlyphId, GpuSpecs,
@@ -4965,6 +4966,50 @@ impl Window {
                 pad: 0,
             });
         }
+    }
+
+    /// Paint a backdrop into the scene: what lies behind `bounds` blurred, tinted and lit along
+    /// its rim, in the shape of `corner_radii`. Paint it before the element's background.
+    /// A desktop backdrop the window cannot have paints its fallback colour instead.
+    pub fn paint_backdrop(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        corner_radii: Corners<Pixels>,
+        filter: &BackdropFilter,
+    ) {
+        self.invalidator.debug_assert_paint();
+
+        if filter.source == BackdropSource::Desktop
+            && !(self.platform_window.supports_background_blur()
+                && self.platform_window.background_appearance() != WindowBackgroundAppearance::Opaque)
+        {
+            if !filter.fallback.is_transparent() {
+                self.paint_quad(quad(
+                    bounds,
+                    corner_radii,
+                    filter.fallback,
+                    Edges::default(),
+                    Hsla::transparent_black(),
+                    BorderStyle::default(),
+                ));
+            }
+            return;
+        }
+
+        let scale_factor = self.length_scale();
+        let opacity = self.element_opacity();
+        self.next_frame.scene.insert_primitive(Backdrop {
+            order: 0,
+            source: filter.source,
+            bounds: self.snap_bounds(bounds),
+            content_mask: self.snapped_content_mask(),
+            corner_radii: corner_radii.scale(scale_factor),
+            blur_radius: filter.blur_radius.scale(scale_factor),
+            saturation: filter.saturation,
+            tint: filter.tint.opacity(opacity),
+            highlight: filter.highlight * opacity,
+            highlight_width: filter.highlight_width.scale(scale_factor),
+        });
     }
 
     /// Paint the inset shadows from `shadows` into the scene at the current z-index. Should

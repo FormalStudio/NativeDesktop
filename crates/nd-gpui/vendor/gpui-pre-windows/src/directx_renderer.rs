@@ -23,6 +23,9 @@ use crate::directx_renderer::shader_resources::{RawShaderBytes, ShaderModule, Sh
 use crate::*;
 use gpui::*;
 
+#[path = "directx_backdrop.rs"]
+mod backdrop;
+
 pub(crate) const DISABLE_DIRECT_COMPOSITION: &str = "GPUI_DISABLE_DIRECT_COMPOSITION";
 const RENDER_TARGET_FORMAT: DXGI_FORMAT = DXGI_FORMAT_B8G8R8A8_UNORM;
 // This configuration is used for MSAA rendering on paths only, and it's guaranteed to be supported by DirectX 11.
@@ -45,6 +48,8 @@ pub(crate) struct DirectXRenderer {
     pipelines: DirectXRenderPipelines,
     direct_composition: Option<DirectComposition>,
     font_info: &'static FontInfo,
+    /// Built on the first frame with a backdrop, and again after a device loss.
+    backdrops: Option<backdrop::Backdrops>,
 
     width: u32,
     height: u32,
@@ -191,6 +196,7 @@ impl DirectXRenderer {
             pipelines,
             direct_composition,
             font_info: Self::get_font_info(),
+            backdrops: None,
             width: 1,
             height: 1,
             skip_draws: false,
@@ -272,6 +278,7 @@ impl DirectXRenderer {
             }
 
             self.resources.take();
+            self.backdrops.take();
             if let Some(devices) = &self.devices {
                 devices.device_context.OMSetRenderTargets(None, None);
                 devices.device_context.ClearState();
@@ -385,6 +392,7 @@ impl DirectXRenderer {
                     self.draw_polychrome_sprites(texture_id, range.start, range.len())
                 }
                 PrimitiveBatch::Surfaces(range) => self.draw_surfaces(&scene.surfaces[range]),
+                PrimitiveBatch::Backdrops(range) => self.draw_backdrops(&scene.backdrops[range]),
             }
             .with_context(|| {
                 format!(
@@ -810,6 +818,22 @@ impl DirectXRenderer {
             slice::from_ref(&self.globals.sampler),
             start as u32,
             len as u32,
+        )
+    }
+
+    fn draw_backdrops(&mut self, backdrops: &[Backdrop]) -> Result<()> {
+        let devices = self.devices.as_ref().context("devices missing")?;
+        let resources = self.resources.as_ref().context("resources missing")?;
+        let frame = resources.render_target.as_ref().context("missing render target")?;
+        if self.backdrops.is_none() {
+            self.backdrops = Some(backdrop::Backdrops::new(&devices.device)?);
+        }
+        self.backdrops.as_mut().expect("created above").draw_batch(
+            &devices.device,
+            &devices.device_context,
+            frame,
+            &resources.render_target_view,
+            backdrops,
         )
     }
 

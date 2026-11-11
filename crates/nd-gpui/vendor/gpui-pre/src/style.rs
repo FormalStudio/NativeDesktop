@@ -5,7 +5,7 @@ use std::{
 };
 
 use crate::{
-    AbsoluteLength, App, Background, BackgroundTag, BorderStyle, Bounds, ContentMask, Corners,
+    AbsoluteLength, App, BackdropSource, Background, BackgroundTag, BorderStyle, Bounds, ContentMask, Corners,
     CornersRefinement, CursorStyle, DefiniteLength, DevicePixels, Edges, EdgesRefinement, Font,
     FontFallbacks, FontFeatures, FontStyle, FontWeight, GridLocation, Hsla, Length, Pixels, Point,
     PointRefinement, Rgba, SharedString, Size, SizeRefinement, Styled, TextRun, Window, black, phi,
@@ -291,6 +291,9 @@ pub struct Style {
     /// Box shadow of the element
     pub box_shadow: Vec<BoxShadow>,
 
+    /// Blur of what lies behind the element, under its background
+    pub backdrop: Option<BackdropFilter>,
+
     /// The text style of this element
     #[refineable]
     pub text: TextStyleRefinement,
@@ -342,6 +345,82 @@ pub enum Visibility {
     Visible,
     /// The element should not be drawn, but should still take up space in the layout.
     Hidden,
+}
+
+/// Blurs what lies behind an element under its background, like CSS `backdrop-filter`, then
+/// lays a tint and a rim light over it in the element's rounded shape.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct BackdropFilter {
+    /// What is blurred: the window's own content, or the desktop behind the window.
+    pub source: BackdropSource,
+    /// Standard deviation of the Gaussian blur.
+    pub blur_radius: Pixels,
+    /// 1 leaves the blurred colours as they are, 0 greys them, above 1 makes them more vivid.
+    pub saturation: f32,
+    /// Laid over the blurred pixels with its alpha.
+    pub tint: Hsla,
+    /// Strength of the light along the rim, 0 for none.
+    pub highlight: f32,
+    /// Width of the rim light.
+    pub highlight_width: Pixels,
+    /// Painted instead where the source cannot be blurred: a desktop backdrop in an opaque
+    /// window or on a compositor without a blur protocol.
+    pub fallback: Hsla,
+}
+
+impl Default for BackdropFilter {
+    fn default() -> Self {
+        Self {
+            source: BackdropSource::Window,
+            blur_radius: Pixels::ZERO,
+            saturation: 1.,
+            tint: Hsla::transparent_black(),
+            highlight: 0.,
+            highlight_width: px(1.),
+            fallback: Hsla::transparent_black(),
+        }
+    }
+}
+
+impl BackdropFilter {
+    /// A blur of the window's content behind the element.
+    pub fn blur(radius: impl Into<Pixels>) -> Self {
+        Self {
+            blur_radius: radius.into(),
+            ..Default::default()
+        }
+    }
+
+    /// Blurs the desktop behind the window instead of the window's content.
+    pub fn desktop(mut self) -> Self {
+        self.source = BackdropSource::Desktop;
+        self
+    }
+
+    /// Sets the saturation of the blurred colours.
+    pub fn saturation(mut self, saturation: f32) -> Self {
+        self.saturation = saturation;
+        self
+    }
+
+    /// Sets the tint laid over the blur.
+    pub fn tint(mut self, tint: impl Into<Hsla>) -> Self {
+        self.tint = tint.into();
+        self
+    }
+
+    /// Lights the rim with the given strength and width.
+    pub fn highlight(mut self, strength: f32, width: impl Into<Pixels>) -> Self {
+        self.highlight = strength;
+        self.highlight_width = width.into();
+        self
+    }
+
+    /// Sets the colour painted where the source cannot be blurred.
+    pub fn fallback(mut self, fallback: impl Into<Hsla>) -> Self {
+        self.fallback = fallback.into();
+        self
+    }
 }
 
 /// The possible values of the box-shadow property
@@ -710,6 +789,10 @@ impl Style {
 
         window.paint_drop_shadows(bounds, corner_radii, &self.box_shadow);
 
+        if let Some(backdrop) = &self.backdrop {
+            window.paint_backdrop(bounds, corner_radii, backdrop);
+        }
+
         let background_color = self.background.as_ref().and_then(Fill::color);
         if background_color.is_some_and(|color| !color.is_transparent()) {
             let mut border_color = match background_color {
@@ -806,6 +889,7 @@ impl Default for Style {
             border_style: BorderStyle::default(),
             corner_radii: Corners::default(),
             box_shadow: Default::default(),
+            backdrop: None,
             text: TextStyleRefinement::default(),
             mouse_cursor: None,
             opacity: None,

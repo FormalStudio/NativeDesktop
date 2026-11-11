@@ -199,6 +199,7 @@ struct WgpuResources {
     path_intermediate_view: Option<wgpu::TextureView>,
     path_msaa_texture: Option<wgpu::Texture>,
     path_msaa_view: Option<wgpu::TextureView>,
+    backdrops: crate::backdrop::Backdrops,
 }
 
 struct CachedTextureBindGroup {
@@ -437,13 +438,13 @@ impl EdgeExtend {
         device: &wgpu::Device,
         format: wgpu::TextureFormat,
         size: Size<DevicePixels>,
-    ) -> wgpu::TextureView {
+    ) -> (wgpu::Texture, wgpu::TextureView) {
         let (width, height) = (size.width.0 as u32, size.height.0 as u32);
         if let Some((texture, view, _)) = &self.target
             && texture.width() == width
             && texture.height() == height
         {
-            return view.clone();
+            return (texture.clone(), view.clone());
         }
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("edge_extend_frame"),
@@ -456,7 +457,9 @@ impl EdgeExtend {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -474,8 +477,8 @@ impl EdgeExtend {
                 },
             ],
         });
-        self.target = Some((texture, view.clone(), bind_group));
-        view
+        self.target = Some((texture.clone(), view.clone(), bind_group));
+        (texture, view)
     }
 
     /// `core`'s [`WgpuRendererCore::render_frame`] for a frame larger than the `drawable` the
@@ -491,8 +494,8 @@ impl EdgeExtend {
         clear_color: wgpu::Color,
     ) -> Result<wgpu::SubmissionIndex> {
         let device = Arc::clone(&core.resources.device);
-        let offscreen = self.target(&device, core.target_format, size);
-        core.render_frame(scene, &offscreen, size, premultiplied_alpha, clear_color)?;
+        let (texture, offscreen) = self.target(&device, core.target_format, size);
+        core.render_frame(scene, &texture, &offscreen, size, premultiplied_alpha, clear_color)?;
 
         let Some((_, _, bind_group)) = &self.target else {
             unreachable!("created above");
@@ -722,8 +725,11 @@ impl WgpuRenderer {
             );
         }
 
+        // Backdrops copy what the frame has drawn so far out of it.
+        let usage = wgpu::TextureUsages::RENDER_ATTACHMENT
+            | (surface_caps.usages & wgpu::TextureUsages::COPY_SRC);
         let surface_config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            usage,
             format: surface_format,
             color_space: wgpu::SurfaceColorSpace::Auto,
             width: clamped_width.max(1),
@@ -1579,6 +1585,7 @@ impl WgpuRenderer {
         } else {
             core.render_frame(
                 scene,
+                &frame.texture,
                 &frame_view,
                 size,
                 premultiplied_alpha,
@@ -1609,6 +1616,7 @@ impl WgpuRenderer {
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         core.render_frame(
             scene,
+            &texture,
             &view,
             size,
             premultiplied_alpha,
@@ -1743,6 +1751,8 @@ impl WgpuRendererCore {
         });
         let max_texture_size = device.limits().max_texture_dimension_2d;
 
+        let backdrops = crate::backdrop::Backdrops::new(&device, target_format);
+
         Self {
             resources: WgpuResources {
                 device,
@@ -1759,6 +1769,7 @@ impl WgpuRendererCore {
                 path_intermediate_view: None,
                 path_msaa_texture: None,
                 path_msaa_view: None,
+                backdrops,
             },
             atlas,
             path_globals_offset,
@@ -1823,6 +1834,7 @@ impl WgpuRendererCore {
     fn render_frame(
         &mut self,
         scene: &Scene,
+        target: &wgpu::Texture,
         target_view: &wgpu::TextureView,
         size: Size<DevicePixels>,
         premultiplied_alpha: bool,
@@ -1874,7 +1886,7 @@ impl WgpuRendererCore {
             bytemuck::bytes_of(&gamma_params),
         );
 
-        self.record_frame(scene, target_view, clear_color)
+        self.record_frame(scene, target, target_view, clear_color)
             .inspect_err(|_| {
                 // Queue writes are staged before encoding; flush them even if the frame fails.
                 self.resources.queue.submit(std::iter::empty());
@@ -1884,6 +1896,7 @@ impl WgpuRendererCore {
     fn record_frame(
         &mut self,
         scene: &Scene,
+        frame: &wgpu::Texture,
         frame_view: &wgpu::TextureView,
         clear_color: wgpu::Color,
     ) -> Result<wgpu::SubmissionIndex> {
@@ -1903,6 +1916,10 @@ impl WgpuRendererCore {
                 )
             })?;
         self.prepare_texture_bind_groups(scene);
+        if !scene.backdrops.is_empty() {
+            let device = Arc::clone(&self.resources.device);
+            self.resources.backdrops.begin_frame(&device, &scene.backdrops);
+        }
 
         let mut encoder =
             self.resources()
@@ -2017,6 +2034,32 @@ impl WgpuRendererCore {
                     }
                     PrimitiveBatch::Surfaces(range) => {
                         self.draw_surfaces(scene, range, &instance_bindings.surfaces, &mut pass);
+                    }
+                    PrimitiveBatch::Backdrops(range) => {
+                        drop(pass);
+                        let resources = &mut self.resources;
+                        let prepared = resources.backdrops.prepare(
+                            &resources.device,
+                            &resources.queue,
+                            &mut encoder,
+                            frame,
+                            &scene.backdrops[range],
+                        );
+                        pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("main_pass_continued"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: frame_view,
+                                resolve_target: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Load,
+                                    store: wgpu::StoreOp::Store,
+                                },
+                                depth_slice: None,
+                            })],
+                            depth_stencil_attachment: None,
+                            ..Default::default()
+                        });
+                        self.resources.backdrops.composite(&prepared, &mut pass);
                     }
                 }
             }
@@ -2826,14 +2869,13 @@ impl WgpuHeadlessRenderer {
     fn render(&mut self, scene: &Scene, size: Size<DevicePixels>) -> anyhow::Result<()> {
         self.check_gpu_errors()?;
         self.ensure_render_target(size)?;
-        let view = self
+        let target = self
             .render_target
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("Headless render target was not created"))?
-            .view
-            .clone();
+            .ok_or_else(|| anyhow::anyhow!("Headless render target was not created"))?;
+        let (texture, view) = (target.texture.clone(), target.view.clone());
         self.core
-            .render_frame(scene, &view, size, false, wgpu::Color::BLACK)?;
+            .render_frame(scene, &texture, &view, size, false, wgpu::Color::BLACK)?;
         Ok(())
     }
 
@@ -3141,7 +3183,7 @@ mod tests {
         linear_gradient,
     };
     #[cfg(target_os = "linux")]
-    use gpui::{DevicePixels, PlatformHeadlessRenderer, Scene};
+    use gpui::{DevicePixels, PlatformHeadlessRenderer, ScaledPixels, Scene};
 
     #[cfg(target_os = "linux")]
     fn device_size(width: i32, height: i32) -> Size<DevicePixels> {
@@ -3310,6 +3352,71 @@ mod tests {
             SUBPIXEL_SHADERS,
             naga::valid::Capabilities::DUAL_SOURCE_BLENDING,
         );
+    }
+
+    #[test]
+    fn backdrop_shader_is_valid_wgsl() {
+        validate_wgsl(crate::backdrop::SHADER, naga::valid::Capabilities::empty());
+    }
+
+    #[cfg(target_os = "linux")]
+    fn backdrop(x: f32, y: f32, width: f32, height: f32, blur: f32, tint: Hsla) -> gpui::Backdrop {
+        let bounds = Bounds {
+            origin: Point { x: x.into(), y: y.into() },
+            size: Size { width: width.into(), height: height.into() },
+        };
+        gpui::Backdrop {
+            order: 0,
+            source: gpui::BackdropSource::Window,
+            bounds,
+            content_mask: ContentMask { bounds },
+            corner_radii: Corners::default(),
+            blur_radius: ScaledPixels(blur),
+            saturation: 1.,
+            tint,
+            highlight: 0.,
+            highlight_width: ScaledPixels(1.),
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn headless_renderer_blurs_what_a_backdrop_covers() -> anyhow::Result<()> {
+        let mut renderer = WgpuHeadlessRenderer::new()?;
+        let mut scene = Scene::default();
+        scene.insert_primitive(solid_quad(0.0, 0.0, 32.0, 32.0, gpui::red()));
+        scene.insert_primitive(solid_quad(32.0, 0.0, 32.0, 32.0, gpui::blue()));
+        scene.insert_primitive(backdrop(16.0, 0.0, 32.0, 32.0, 3.0, Hsla::transparent_black()));
+        scene.finish();
+
+        let image = renderer.render_scene_to_image(&scene, device_size(64, 32))?;
+        // Outside the backdrop the edge stays sharp; on the edge inside it red and blue mix.
+        assert_pixel(&image, 15, 16, RED);
+        assert_pixel(&image, 48, 16, BLUE);
+        let [r, g, b, _] = image.get_pixel(32, 16).0;
+        assert!(r.abs_diff(b) < 40 && r > 90 && g < 4, "edge was {r} {g} {b}");
+        // Far enough from the edge the blur leaves the colour as it was.
+        assert_pixel(&image, 18, 16, RED);
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn headless_renderer_tints_a_backdrop_and_draws_later_content_sharp() -> anyhow::Result<()> {
+        let mut renderer = WgpuHeadlessRenderer::new()?;
+        let mut scene = Scene::default();
+        scene.insert_primitive(solid_quad(0.0, 0.0, 64.0, 32.0, gpui::red()));
+        let white = Hsla { a: 0.5, ..gpui::white() };
+        scene.insert_primitive(backdrop(0.0, 0.0, 64.0, 32.0, 6.0, white));
+        scene.insert_primitive(solid_quad(32.0, 0.0, 32.0, 32.0, gpui::blue()));
+        scene.finish();
+
+        let image = renderer.render_scene_to_image(&scene, device_size(64, 32))?;
+        assert_pixel(&image, 8, 16, [255, 128, 128, 255]);
+        // Painted after the backdrop, so on top of it and not part of its blur.
+        assert_pixel(&image, 31, 16, [255, 128, 128, 255]);
+        assert_pixel(&image, 32, 16, BLUE);
+        Ok(())
     }
 
     fn validate_wgsl(source: &str, capabilities: naga::valid::Capabilities) {

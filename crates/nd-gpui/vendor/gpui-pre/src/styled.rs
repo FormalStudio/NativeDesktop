@@ -1,5 +1,5 @@
 use crate::{
-    self as gpui, AbsoluteLength, AlignContent, AlignItems, AlignSelf, BorderStyle, CursorStyle,
+    self as gpui, AbsoluteLength, AlignContent, AlignItems, AlignSelf, BackdropFilter, BorderStyle, CursorStyle,
     DefiniteLength, Display, Fill, FlexDirection, FlexWrap, Font, FontFeatures, FontStyle,
     FontWeight, GridPlacement, GridTemplate, GridTemplateMinSize, Hsla, JustifyContent, Length,
     SharedString, StrikethroughStyle, StyleRefinement, TextAlign, TextOverflow,
@@ -739,6 +739,12 @@ pub trait Styled: Sized {
     /// Sets the line height of this element and its children.
     fn line_height(mut self, line_height: impl Into<DefiniteLength>) -> Self {
         self.text_style().line_height = Some(line_height.into());
+        self
+    }
+
+    /// Blurs what lies behind this element under its background.
+    fn backdrop(mut self, filter: BackdropFilter) -> Self {
+        self.style().backdrop = Some(filter);
         self
     }
 

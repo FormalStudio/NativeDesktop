@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FormalSnake <kyaniserni@gmail.com>
 Date: Tue, 10 Nov 2026 12:00:00 +0000
-Subject: [PATCH] gpui_windows: compose child windows above the window's
+Subject: [PATCH 22/26] gpui_windows: compose child windows above the window's
  content
 
 The DirectComposition target was topmost, which puts the window's content over every child
@@ -12,9 +12,10 @@ it.
  1 file changed, 3 insertions(+), 1 deletion(-)
 
 diff --git a/crates/gpui_windows/src/directx_renderer.rs b/crates/gpui_windows/src/directx_renderer.rs
+index da71966..0ee6a55 100644
 --- a/crates/gpui_windows/src/directx_renderer.rs
 +++ b/crates/gpui_windows/src/directx_renderer.rs
-@@ -1014,7 +1014,9 @@
+@@ -1014,7 +1014,9 @@ impl DirectXRenderPipelines {
  impl DirectComposition {
      pub fn new(dxgi_device: &IDXGIDevice, hwnd: HWND) -> Result<Self> {
          let comp_device = get_comp_device(dxgi_device)?;

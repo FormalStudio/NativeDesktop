@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FormalSnake <kyaniserni@gmail.com>
 Date: Wed, 4 Nov 2026 13:55:49 +0000
-Subject: [PATCH 17/20] gpui_linux: read a wayland or x11 window back in
+Subject: [PATCH 17/26] gpui_linux: read a wayland or x11 window back in
  render_to_image
 
 The Metal and DirectX renderers implement render_to_image; on Linux the default returned an

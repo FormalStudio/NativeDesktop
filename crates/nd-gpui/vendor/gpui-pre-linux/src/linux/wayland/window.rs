@@ -36,7 +36,7 @@ use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1;
 use crate::linux::wayland::{display::WaylandDisplay, serial::SerialKind};
 use crate::linux::{Globals, Output, PendingActivation, WaylandClientStatePtr, get_window};
 use gpui::{
-    AnyWindowHandle, Bounds, Capslock, Corners, Decorations, DevicePixels, ExternalDragPayload,
+    AnyWindowHandle, BackdropSource, Bounds, Capslock, Corners, Decorations, DevicePixels, ExternalDragPayload,
     ForeignParent, FrameRequestSource, GpuSpecs, Modifiers, Pixels, PlatformAtlas, PlatformDisplay,
     PlatformFrameSignal, PlatformInput, PlatformInputHandler, PlatformWindow, Point, PromptButton,
     PromptLevel, RequestFrameOptions, ResizeEdge, Scene, Size, Tiling, WindowAppearance,
@@ -44,7 +44,7 @@ use gpui::{
     WindowKind, WindowParams, WindowVisibility,
     layer_shell::{Anchor, LayerShellNotSupportedError},
     popup::PopupOptions,
-    px, size,
+    point, px, size,
 };
 use gpui_wgpu::{CompositorGpuHint, WgpuRenderer, WgpuSurfaceConfig, wgpu};
 
@@ -120,6 +120,8 @@ pub struct WaylandWindowState {
     appearance: WindowAppearance,
     kde_blur: Option<org_kde_kwin_blur::OrgKdeKwinBlur>,
     background_effects: Option<ext_background_effect_surface_v1::ExtBackgroundEffectSurfaceV1>,
+    /// Where the last frame's desktop backdrops are, in surface coordinates.
+    backdrop_blur: Vec<(Bounds<i32>, Corners<Pixels>)>,
     viewport: Option<wp_viewport::WpViewport>,
     outputs: HashMap<ObjectId, Output>,
     display: Option<(ObjectId, Output)>,
@@ -685,6 +687,7 @@ impl WaylandWindowState {
             app_id: options.app_id,
             kde_blur: None,
             background_effects: None,
+            backdrop_blur: Vec::new(),
             viewport,
             globals,
             outputs: HashMap::default(),
@@ -2022,6 +2025,11 @@ impl PlatformWindow for WaylandWindow {
         self.0.request_redraw();
     }
 
+    fn supports_background_blur(&self) -> bool {
+        let globals = &self.borrow().globals;
+        globals.background_effects_manager.is_some() || globals.kde_blur_manager.is_some()
+    }
+
     fn background_appearance(&self) -> WindowBackgroundAppearance {
         self.borrow().background_appearance
     }
@@ -2122,6 +2130,12 @@ impl PlatformWindow for WaylandWindow {
     fn draw(&self, scene: &Scene) {
         let mut state = self.borrow_mut();
         let state = &mut *state;
+        // Applies to the commit the renderer's present makes, with the frame that draws them.
+        let backdrop_blur = desktop_backdrop_regions(scene, state.scale);
+        if backdrop_blur != state.backdrop_blur {
+            state.backdrop_blur = backdrop_blur;
+            update_background_effect(state);
+        }
         let Some(renderer) = &mut state.renderer else {
             return;
         };
@@ -2611,42 +2625,66 @@ fn update_window(mut state: RefMut<WaylandWindowState>) {
         state.surface.set_opaque_region(None);
     }
 
+    region.destroy();
+    update_background_effect(&mut state);
+}
+
+/// Asks the compositor to blur behind the whole window when its background is `Blurred`, and
+/// otherwise behind the scene's desktop backdrops when the window is translucent.
+fn update_background_effect(state: &mut WaylandWindowState) {
+    let whole = state.background_appearance == WindowBackgroundAppearance::Blurred;
+    let wanted = whole
+        || (state.background_appearance != WindowBackgroundAppearance::Opaque
+            && !state.backdrop_blur.is_empty());
+    let region = state
+        .globals
+        .compositor
+        .create_region(&state.globals.qh, ());
+    if whole {
+        let area = inset_by_tiling(
+            state.bounds.map_origin(|_| px(0.0)),
+            state.inset(),
+            state.tiling,
+        )
+        .map(|value| value.to_i32())
+        .map_size(|value| value.max(0));
+        add_rounded_rect(area, state.client_corner_radii, |x, y, width, height| {
+            region.add(x, y, width, height);
+        });
+    } else {
+        for (area, radii) in &state.backdrop_blur {
+            add_rounded_rect(*area, *radii, |x, y, width, height| {
+                region.add(x, y, width, height);
+            });
+        }
+    }
+
     // Prefer the ext-background-effect protocol, as it is DE agnostic and
     // replaces the deprecated kde-blur protocol, which is no longer supported
     // since KDE Plasma 6.7.
     // https://invent.kde.org/plasma/kwin/-/commit/7f9e0aa1cd2c2ab4fea1097800893b6f780089eb
     if let Some(ref background_effects_manager) = state.globals.background_effects_manager {
-        if state.background_appearance == WindowBackgroundAppearance::Blurred {
-            if state.background_effects.is_none() {
+        if wanted {
+            let background_effects = state.background_effects.get_or_insert_with(|| {
                 log::debug!("Using ext-background-effect protocol");
-                let background_effects = background_effects_manager.get_background_effect(
+                background_effects_manager.get_background_effect(
                     &state.surface,
                     &state.globals.qh,
                     (),
-                );
-                state.background_effects = Some(background_effects);
-            }
-
-            add_rounded_rect(area, state.client_corner_radii, |x, y, width, height| {
-                region.add(x, y, width, height);
+                )
             });
-
-            state
-                .background_effects
-                .as_ref()
-                .unwrap()
-                .set_blur_region(Some(&region));
+            background_effects.set_blur_region(Some(&region));
         } else if let Some(background_effects) = state.background_effects.take() {
             background_effects.destroy();
         }
     } else if let Some(ref blur_manager) = state.globals.kde_blur_manager {
-        if state.background_appearance == WindowBackgroundAppearance::Blurred {
-            if state.kde_blur.is_none() {
+        if wanted {
+            let blur = state.kde_blur.get_or_insert_with(|| {
                 log::debug!("Using kde-blur protocol");
-                let blur = blur_manager.create(&state.surface, &state.globals.qh, ());
-                state.kde_blur = Some(blur);
-            }
-            state.kde_blur.as_ref().unwrap().commit();
+                blur_manager.create(&state.surface, &state.globals.qh, ())
+            });
+            blur.set_region(Some(&region));
+            blur.commit();
         } else {
             blur_manager.unset(&state.surface);
             if let Some(b) = state.kde_blur.take() {
@@ -2656,6 +2694,35 @@ fn update_window(mut state: RefMut<WaylandWindowState>) {
     }
 
     region.destroy();
+}
+
+/// The scene's desktop backdrops as rounded rectangles in surface coordinates.
+fn desktop_backdrop_regions(scene: &Scene, scale: f32) -> Vec<(Bounds<i32>, Corners<Pixels>)> {
+    scene
+        .backdrops
+        .iter()
+        .filter(|backdrop| backdrop.source == BackdropSource::Desktop)
+        .filter_map(|backdrop| {
+            let clipped = backdrop.bounds.intersect(&backdrop.content_mask.bounds);
+            let x0 = (clipped.origin.x.0 / scale).round() as i32;
+            let y0 = (clipped.origin.y.0 / scale).round() as i32;
+            let x1 = ((clipped.origin.x.0 + clipped.size.width.0) / scale).round() as i32;
+            let y1 = ((clipped.origin.y.0 + clipped.size.height.0) / scale).round() as i32;
+            (x1 > x0 && y1 > y0).then(|| {
+                let radius = |r: gpui::ScaledPixels| px(r.0 / scale);
+                let radii = backdrop.corner_radii;
+                (
+                    Bounds::new(point(x0, y0), size(x1 - x0, y1 - y0)),
+                    Corners {
+                        top_left: radius(radii.top_left),
+                        top_right: radius(radii.top_right),
+                        bottom_right: radius(radii.bottom_right),
+                        bottom_left: radius(radii.bottom_left),
+                    },
+                )
+            })
+        })
+        .collect()
 }
 
 pub(crate) trait WindowDecorationsExt {
