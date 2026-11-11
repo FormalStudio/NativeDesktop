@@ -993,6 +993,14 @@ pub struct App {
     _ref_counts: Arc<RwLock<EntityRefCounts>>,
 }
 
+impl Drop for App {
+    fn drop(&mut self) {
+        // Fields drop in declaration order, `platform` before `windows`, and the
+        // platform takes its Wayland connection with it: drop the windows first.
+        self.windows.clear();
+    }
+}
+
 impl App {
     #[allow(clippy::new_ret_no_self)]
     pub(crate) fn new_app(

@@ -1,0 +1,28 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: FormalSnake <kyaniserni@gmail.com>
+Date: Wed, 11 Nov 2026 05:22:25 +0000
+Subject: [PATCH 24/24] gpui: drop an app's windows before its platform
+
+---
+ crates/gpui/src/app.rs | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/crates/gpui/src/app.rs b/crates/gpui/src/app.rs
+index e247dd4..72107c3 100644
+--- a/crates/gpui/src/app.rs
++++ b/crates/gpui/src/app.rs
+@@ -991,6 +991,14 @@ pub struct App {
+     _ref_counts: Arc<RwLock<EntityRefCounts>>,
+ }
+ 
++impl Drop for App {
++    fn drop(&mut self) {
++        // Fields drop in declaration order, `platform` before `windows`, and the
++        // platform takes its Wayland connection with it: drop the windows first.
++        self.windows.clear();
++    }
++}
++
+ impl App {
+     #[allow(clippy::new_ret_no_self)]
+     pub(crate) fn new_app(

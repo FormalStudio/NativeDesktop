@@ -23,3 +23,4 @@
 0021-gpui-scale-an-element-subtree-with-Window-with_eleme.patch
 0022-gpui_windows-compose-child-windows-above-the-window-s-c.patch
 0023-gpui_wgpu-paint-embedder-textures-as-surfaces-on-an-.patch
+0024-gpui-drop-an-app-s-windows-before-its-platform.patch
