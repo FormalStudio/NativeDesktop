@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FormalSnake <kyaniserni@gmail.com>
 Date: Wed, 14 Oct 2026 12:00:00 +0100
-Subject: [PATCH 08/29] gpui_wgpu: keep the swapchain through an interactive
+Subject: [PATCH 08/30] gpui_wgpu: keep the swapchain through an interactive
  resize
 
 ---

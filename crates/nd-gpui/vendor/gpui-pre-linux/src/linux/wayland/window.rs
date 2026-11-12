@@ -71,6 +71,7 @@ pub(crate) struct Callbacks {
     close: Option<Box<dyn FnOnce()>>,
     appearance_changed: Option<Box<dyn FnMut()>>,
     button_layout_changed: Option<Box<dyn FnMut()>>,
+    configure: Option<Box<dyn FnMut(gpui::Configure)>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -97,6 +98,119 @@ impl rwh::HasDisplayHandle for RawWindow {
         let display = NonNull::new(self.display).unwrap();
         let handle = rwh::WaylandDisplayHandle::new(display);
         Ok(unsafe { rwh::DisplayHandle::borrow_raw(handle.into()) })
+    }
+}
+
+/// Configures in arrival order. Each one's `gpui::Configure` is made when it arrives, against
+/// what the window had committed then, so its place among the window's own resizes is fixed
+/// there. Throttling interactive resizes to one per frame holds back only applying it; a newer
+/// configure replaces a held one, whether it is held too or applies at once.
+#[derive(Default)]
+struct Configures {
+    held: Option<(u32, InProgressConfigure)>,
+    throttled: bool,
+}
+
+impl Configures {
+    /// The configure's record, and the configure to apply now unless it is held.
+    fn arrive(
+        &mut self,
+        serial: u32,
+        configure: InProgressConfigure,
+        (geometry, surface): (Size<Pixels>, Size<Pixels>),
+        decorations: WindowDecorations,
+    ) -> (gpui::Configure, Option<(u32, InProgressConfigure)>) {
+        let record = gpui::Configure {
+            serial,
+            size: configure.size,
+            geometry,
+            surface,
+            decorations: match decorations {
+                WindowDecorations::Server => Decorations::Server,
+                WindowDecorations::Client => Decorations::Client { tiling: configure.tiling },
+            },
+            maximized: configure.maximized,
+            fullscreen: configure.fullscreen,
+        };
+        if configure.resizing && self.throttled {
+            self.held = Some((serial, configure));
+            return (record, None);
+        }
+        // Applied now, it is newer than anything held, which must not replay after it.
+        self.held = None;
+        self.throttled = configure.resizing;
+        (record, Some((serial, configure)))
+    }
+
+    /// At a frame: the held configure to apply now.
+    fn frame(&mut self) -> Option<(u32, InProgressConfigure)> {
+        let held = self.held.take();
+        self.throttled = held.as_ref().is_some_and(|(_, c)| c.resizing);
+        held
+    }
+}
+
+#[cfg(test)]
+mod configures_tests {
+    use super::*;
+
+    fn resizing(width: f32) -> InProgressConfigure {
+        InProgressConfigure {
+            size: Some(size(px(width), px(300.0))),
+            fullscreen: false,
+            maximized: false,
+            resizing: true,
+            visibility: WindowVisibility::Visible,
+            tiling: Tiling::default(),
+        }
+    }
+
+    #[test]
+    fn every_configure_in_a_throttled_frame_is_recorded_in_order() {
+        let mut configures = Configures::default();
+        let committed = (size(px(400.0), px(300.0)), size(px(440.0), px(340.0)));
+        let mut records = Vec::new();
+        let mut applied = Vec::new();
+        for (serial, width) in [(1, 500.0), (2, 600.0), (3, 700.0)] {
+            let (record, now) = configures.arrive(serial, resizing(width), committed, WindowDecorations::Client);
+            records.push((record.serial, record.size.map(|s| s.width)));
+            applied.extend(now.map(|(serial, _)| serial));
+        }
+        assert_eq!(
+            records,
+            [(1, Some(px(500.0))), (2, Some(px(600.0))), (3, Some(px(700.0)))]
+        );
+        // The first applies at once; the newest of the rest waits for the frame.
+        assert_eq!(applied, [1]);
+        assert_eq!(configures.frame().map(|(serial, _)| serial), Some(3));
+        assert_eq!(configures.frame().map(|(serial, _)| serial), None);
+    }
+
+    #[test]
+    fn a_configure_applied_at_once_drops_the_held_ones() {
+        let mut configures = Configures::default();
+        let committed = (size(px(400.0), px(300.0)), size(px(440.0), px(340.0)));
+        let mut applied = Vec::new();
+        let mut done = resizing(700.0);
+        done.resizing = false;
+        for (serial, configure) in [(1, resizing(500.0)), (2, resizing(600.0)), (3, done)] {
+            let (_, now) = configures.arrive(serial, configure, committed, WindowDecorations::Client);
+            applied.extend(now.map(|(serial, _)| serial));
+        }
+        applied.extend(configures.frame().map(|(serial, _)| serial));
+        assert_eq!(applied, [1, 3]);
+    }
+
+    #[test]
+    fn a_held_configure_keeps_what_was_committed_when_it_arrived() {
+        let mut configures = Configures::default();
+        let before = (size(px(400.0), px(300.0)), size(px(440.0), px(340.0)));
+        configures.arrive(1, resizing(500.0), before, WindowDecorations::Client);
+        let (record, now) = configures.arrive(2, resizing(600.0), before, WindowDecorations::Client);
+        assert!(now.is_none());
+        // The window resizes itself before the frame applies configure 2; its record still
+        // names the geometry committed when it arrived.
+        assert_eq!((record.geometry, record.surface), before);
     }
 }
 
@@ -149,12 +263,11 @@ pub struct WaylandWindowState {
     presentation: PresentationState,
     pending_frame_callback: Option<wl_callback::WlCallback>,
     in_progress_configure: Option<InProgressConfigure>,
-    resize_throttle: bool,
-    /// An interactive-resize configure that arrived before the frame for the previous one. It is
-    /// acked when the next frame applies it, so the ack always goes out with a buffer of the
-    /// acked size: acking it right away let the compositor draw the new window geometry around
-    /// the old buffer for a frame.
-    deferred_configure: Option<(u32, InProgressConfigure)>,
+    /// Configures as they arrive. An interactive-resize configure that arrives before the frame
+    /// for the previous one is held and acked when the next frame applies it, so the ack always
+    /// goes out with a buffer of the acked size: acking it right away let the compositor draw the
+    /// new window geometry around the old buffer for a frame.
+    configures: Configures,
     /// The compositor's last configure had the `resizing` state: the renderer keeps an oversized
     /// surface and the viewport crops it, instead of a new swapchain per resize step.
     live_resize: bool,
@@ -165,6 +278,8 @@ pub struct WaylandWindowState {
     in_progress_window_controls: Option<WindowControls>,
     window_controls: WindowControls,
     client_inset: Option<Pixels>,
+    /// The window geometry and the surface size last committed, for `Configure`.
+    committed: (Size<Pixels>, Size<Pixels>),
     client_corner_radii: Corners<Pixels>,
     accesskit_adapter: Option<accesskit_unix::Adapter>,
 }
@@ -705,8 +820,7 @@ impl WaylandWindowState {
             tiling: Tiling::default(),
             window_bounds: options.bounds,
             in_progress_configure: None,
-            resize_throttle: false,
-            deferred_configure: None,
+            configures: Configures::default(),
             live_resize: false,
             viewport_source: None,
             last_presentation: None,
@@ -721,6 +835,7 @@ impl WaylandWindowState {
             in_progress_window_controls: None,
             window_controls: WindowControls::default(),
             client_inset: None,
+            committed: (Size::default(), Size::default()),
             client_corner_radii: Corners::default(),
             accesskit_adapter: None,
         })
@@ -1026,11 +1141,9 @@ impl WaylandWindowStatePtr {
     pub fn frame(&self, signal_at: Option<Instant>, signal_source: FrameRequestSource) {
         self.frame_loop.set(FrameLoop::Ticking);
         let mut state = self.state.borrow_mut();
-        state.resize_throttle = false;
-        if let Some((serial, configure)) = state.deferred_configure.take() {
-            state.in_progress_configure = Some(configure);
+        if let Some((serial, configure)) = state.configures.frame() {
             drop(state);
-            self.handle_xdg_surface_event(xdg_surface::Event::Configure { serial });
+            self.apply_configure(serial, configure);
             state = self.state.borrow_mut();
         }
         // GPUI may throttle this tick without calling draw, so leave the request
@@ -1193,84 +1306,98 @@ impl WaylandWindowStatePtr {
                     }
                 }
             }
-            {
+            let (record, now) = {
                 let mut state = self.state.borrow_mut();
-
-                if let Some(mut configure) = state.in_progress_configure.take() {
-                    let got_unmaximized = state.maximized && !configure.maximized;
-                    state.fullscreen = configure.fullscreen;
-                    state.maximized = configure.maximized;
-                    state.tiling = configure.tiling;
-                    let visibility_changed = state.visibility != configure.visibility;
-                    state.visibility = configure.visibility;
-                    // Limit interactive resizes to once per vblank
-                    let throttled = configure.resizing && state.resize_throttle;
-                    if !throttled {
-                        if configure.resizing {
-                            state.resize_throttle = true;
-                        }
-                        if !configure.fullscreen && !configure.maximized {
-                            configure.size = if got_unmaximized {
-                                Some(state.window_bounds.size)
-                            } else {
-                                compute_outer_size(state.inset(), configure.size, state.tiling)
-                            };
-                            if let Some(size) = configure.size {
-                                state.window_bounds = Bounds {
-                                    origin: Point::default(),
-                                    size,
-                                };
-                            }
-                        }
-                    }
-                    drop(state);
-                    if visibility_changed {
-                        self.report_visibility(configure.visibility);
-                    }
-                    if throttled {
-                        self.state.borrow_mut().deferred_configure = Some((serial, configure));
-                        return;
-                    }
-                    self.state.borrow_mut().live_resize = configure.resizing;
-                    if let Some(size) = configure.size {
-                        self.resize(size);
-                    }
-                    if !configure.resizing {
-                        let mut state = self.state.borrow_mut();
-                        if let Some(renderer) = &mut state.renderer
-                            && renderer.surface_size() != renderer.drawable_size()
-                        {
-                            let size = renderer.drawable_size();
-                            renderer.update_drawable_size(size);
-                        }
-                    }
+                let configure = state.in_progress_configure.take().unwrap_or(InProgressConfigure {
+                    size: None,
+                    fullscreen: state.fullscreen,
+                    maximized: state.maximized,
+                    resizing: false,
+                    visibility: state.visibility,
+                    tiling: state.tiling,
+                });
+                let (committed, decorations) = (state.committed, state.decorations);
+                state.configures.arrive(serial, configure, committed, decorations)
+            };
+            let callback = self.callbacks.borrow_mut().configure.take();
+            if let Some(mut fun) = callback {
+                fun(record);
+                let mut callbacks = self.callbacks.borrow_mut();
+                if callbacks.configure.is_none() {
+                    callbacks.configure = Some(fun);
                 }
             }
-            let state = self.state.borrow_mut();
-            state.surface_state.ack_configure(serial);
-
-            let window_geometry = inset_by_tiling(
-                state.bounds.map_origin(|_| px(0.0)),
-                state.inset(),
-                state.tiling,
-            )
-            .map(|v| f32::from(v) as i32)
-            .map_size(|v| if v <= 0 { 1 } else { v });
-
-            state.surface_state.set_geometry(
-                window_geometry.origin.x,
-                window_geometry.origin.y,
-                window_geometry.size.width,
-                window_geometry.size.height,
-            );
-
-            let initial_configure = self.frame_loop.get() == FrameLoop::Unconfigured;
-            update_window(state);
-            if initial_configure {
-                self.frame(None, FrameRequestSource::NativeCallback);
-            } else {
-                self.request_redraw();
+            if let Some((serial, configure)) = now {
+                self.apply_configure(serial, configure);
             }
+        }
+    }
+
+    fn apply_configure(&self, serial: u32, mut configure: InProgressConfigure) {
+        {
+            let mut state = self.state.borrow_mut();
+            let got_unmaximized = state.maximized && !configure.maximized;
+            state.fullscreen = configure.fullscreen;
+            state.maximized = configure.maximized;
+            state.tiling = configure.tiling;
+            let visibility_changed = state.visibility != configure.visibility;
+            state.visibility = configure.visibility;
+            if !configure.fullscreen && !configure.maximized {
+                configure.size = if got_unmaximized {
+                    Some(state.window_bounds.size)
+                } else {
+                    compute_outer_size(state.inset(), configure.size, state.tiling)
+                };
+                if let Some(size) = configure.size {
+                    state.window_bounds = Bounds {
+                        origin: Point::default(),
+                        size,
+                    };
+                }
+            }
+            drop(state);
+            if visibility_changed {
+                self.report_visibility(configure.visibility);
+            }
+            self.state.borrow_mut().live_resize = configure.resizing;
+            if let Some(size) = configure.size {
+                self.resize(size);
+            }
+            if !configure.resizing {
+                let mut state = self.state.borrow_mut();
+                if let Some(renderer) = &mut state.renderer
+                    && renderer.surface_size() != renderer.drawable_size()
+                {
+                    let size = renderer.drawable_size();
+                    renderer.update_drawable_size(size);
+                }
+            }
+        }
+        let mut state = self.state.borrow_mut();
+        state.surface_state.ack_configure(serial);
+
+        let window_geometry = inset_by_tiling(
+            state.bounds.map_origin(|_| px(0.0)),
+            state.inset(),
+            state.tiling,
+        )
+        .map(|v| f32::from(v) as i32)
+        .map_size(|v| if v <= 0 { 1 } else { v });
+
+        state.surface_state.set_geometry(
+            window_geometry.origin.x,
+            window_geometry.origin.y,
+            window_geometry.size.width,
+            window_geometry.size.height,
+        );
+        state.committed = (window_geometry.size.map(|v| px(v as f32)), state.bounds.size);
+
+        let initial_configure = self.frame_loop.get() == FrameLoop::Unconfigured;
+        update_window(state);
+        if initial_configure {
+            self.frame(None, FrameRequestSource::NativeCallback);
+        } else {
+            self.request_redraw();
         }
     }
 
@@ -1907,6 +2034,10 @@ impl PlatformWindow for WaylandWindow {
             window_geometry.size.width,
             window_geometry.size.height,
         );
+        let committed = (window_geometry.size.map(|v| px(v as f32)), size);
+        drop(state);
+        self.borrow_mut().committed = committed;
+        let state = self.borrow();
 
         state
             .globals
@@ -2111,6 +2242,10 @@ impl PlatformWindow for WaylandWindow {
 
     fn on_resize(&self, callback: Box<dyn FnMut(Size<Pixels>, f32)>) {
         self.0.callbacks.borrow_mut().resize = Some(callback);
+    }
+
+    fn on_configure(&self, callback: Box<dyn FnMut(gpui::Configure)>) {
+        self.0.callbacks.borrow_mut().configure = Some(callback);
     }
 
     fn on_moved(&self, callback: Box<dyn FnMut()>) {

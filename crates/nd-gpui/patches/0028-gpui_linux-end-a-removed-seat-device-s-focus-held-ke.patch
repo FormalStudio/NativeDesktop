@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FormalSnake <kyaniserni@gmail.com>
 Date: Thu, 12 Nov 2026 12:12:17 +0000
-Subject: [PATCH 28/29] gpui_linux: end a removed seat device's focus, held
+Subject: [PATCH 28/30] gpui_linux: end a removed seat device's focus, held
  keys and scroll
 
 ---

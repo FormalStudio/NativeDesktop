@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FormalSnake <kyaniserni@gmail.com>
 Date: Wed, 4 Nov 2026 15:22:06 +0000
-Subject: [PATCH 20/29] gpui_linux: tag wayland toplevels with xdg-toplevel-tag
+Subject: [PATCH 20/30] gpui_linux: tag wayland toplevels with xdg-toplevel-tag
 
 ---
  crates/gpui_linux/src/gpui_linux.rs           |  2 ++

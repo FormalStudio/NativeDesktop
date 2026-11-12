@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FormalSnake <kyaniserni@gmail.com>
 Date: Wed, 14 Oct 2026 18:19:53 +0100
-Subject: [PATCH 06/29] gpui_windows: tick each window with the vblank of the
+Subject: [PATCH 06/30] gpui_windows: tick each window with the vblank of the
  fastest monitor it is on
 
 ---

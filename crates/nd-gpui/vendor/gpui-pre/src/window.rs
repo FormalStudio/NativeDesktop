@@ -3329,6 +3329,12 @@ impl Window {
         self.platform_window.set_client_inset(inset);
     }
 
+    /// Called once per compositor configure, in order, as it arrives (Wayland and X11). A later
+    /// registration replaces an earlier one.
+    pub fn on_configure(&self, callback: impl FnMut(crate::Configure) + 'static) {
+        self.platform_window.on_configure(Box::new(callback));
+    }
+
     /// Sets the client-drawn corner radii so platform effects can match the window's shape.
     pub fn set_client_corner_radii(&mut self, radii: Corners<Pixels>) {
         self.platform_window.set_client_corner_radii(radii);
