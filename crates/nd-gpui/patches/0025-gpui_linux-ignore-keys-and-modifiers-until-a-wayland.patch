@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FormalSnake <kyaniserni@gmail.com>
 Date: Wed, 11 Nov 2026 07:06:38 +0000
-Subject: [PATCH 25/27] gpui_linux: ignore keys and modifiers until a wayland
+Subject: [PATCH 25/28] gpui_linux: ignore keys and modifiers until a wayland
  keymap arrives
 
 ---

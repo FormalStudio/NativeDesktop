@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FormalSnake <kyaniserni@gmail.com>
 Date: Wed, 21 Oct 2026 10:00:43 +0100
-Subject: [PATCH 12/27] gpui_wgpu: set emoji-presentation text in the colour
+Subject: [PATCH 12/28] gpui_wgpu: set emoji-presentation text in the colour
  emoji face
 
 ---

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FormalSnake <kyaniserni@gmail.com>
 Date: Wed, 4 Nov 2026 13:54:43 +0000
-Subject: [PATCH 16/27] gpui_wgpu: draw a variable font at the requested weight
+Subject: [PATCH 16/28] gpui_wgpu: draw a variable font at the requested weight
 
 cosmic-text picks the closest face for a weight, which for a variable font is its one face
 at the default wght; nothing set the axis, so semibold and bold drew as regular. A request
