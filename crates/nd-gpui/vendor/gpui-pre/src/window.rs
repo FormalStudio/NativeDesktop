@@ -2315,6 +2315,20 @@ impl Window {
                     .log_err();
             }
         }));
+        platform_window.on_pointer_removed(Box::new({
+            let mut cx = cx.to_async();
+            move || {
+                handle
+                    .update(&mut cx, |_, window, _| window.captured_hitbox = None)
+                    .with_context(|| {
+                        format!(
+                            "handling pointer removal for window {:?}",
+                            handle.window_id()
+                        )
+                    })
+                    .log_err();
+            }
+        }));
         platform_window.on_input({
             let mut cx = cx.to_async();
             Box::new(move |event| {

@@ -63,6 +63,7 @@ pub(crate) struct Callbacks {
     active_status_change: Option<Box<dyn FnMut(bool)>>,
     visibility_change: Option<Box<dyn FnMut(WindowVisibility)>>,
     hover_status_change: Option<Box<dyn FnMut(bool)>>,
+    pointer_removed: Option<Box<dyn FnMut()>>,
     resize: Option<Box<dyn FnMut(Size<Pixels>, f32)>>,
     moved: Option<Box<dyn FnMut()>>,
     display_changed: Option<Box<dyn FnMut()>>,
@@ -1719,6 +1720,14 @@ impl WaylandWindowStatePtr {
         }
     }
 
+    pub fn pointer_removed(&self) {
+        let callback = self.callbacks.borrow_mut().pointer_removed.take();
+        if let Some(mut fun) = callback {
+            fun();
+            self.callbacks.borrow_mut().pointer_removed = Some(fun);
+        }
+    }
+
     pub fn set_hovered(&self, focus: bool) {
         let callback = self.callbacks.borrow_mut().hover_status_change.take();
         if let Some(mut fun) = callback {
@@ -2094,6 +2103,10 @@ impl PlatformWindow for WaylandWindow {
 
     fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool)>) {
         self.0.callbacks.borrow_mut().hover_status_change = Some(callback);
+    }
+
+    fn on_pointer_removed(&self, callback: Box<dyn FnMut()>) {
+        self.0.callbacks.borrow_mut().pointer_removed = Some(callback);
     }
 
     fn on_resize(&self, callback: Box<dyn FnMut(Size<Pixels>, f32)>) {

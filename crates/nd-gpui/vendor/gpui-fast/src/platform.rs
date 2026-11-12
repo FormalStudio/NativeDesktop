@@ -1326,6 +1326,10 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     /// of any window update.
     fn on_visibility_change(&self, callback: Box<dyn FnMut(WindowVisibility)>);
     fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool)>);
+    /// Registers the callback invoked when the pointer device itself goes away (a
+    /// seat losing its pointer) while the window has it: no release follows, so a
+    /// capture taken by a press ends here, before the platform cancels the press.
+    fn on_pointer_removed(&self, _callback: Box<dyn FnMut()>) {}
     fn on_resize(&self, callback: Box<dyn FnMut(Size<Pixels>, f32)>);
     fn on_moved(&self, callback: Box<dyn FnMut()>);
     /// Registers the callback invoked when the window moves to another

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FormalSnake <kyaniserni@gmail.com>
 Date: Thu, 12 Nov 2026 11:07:24 +0000
-Subject: [PATCH 27/28] gpui_linux: keep seat devices across a capabilities
+Subject: [PATCH 27/29] gpui_linux: keep seat devices across a capabilities
  change
 
 ---
