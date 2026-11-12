@@ -2062,6 +2062,7 @@ impl WgpuRendererCore {
                             &mut encoder,
                             frame,
                             &scene.backdrops[range],
+                            &scene.backdrop_masks,
                         );
                         pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                             label: Some("main_pass_continued"),

@@ -51,6 +51,8 @@ pub struct Scene {
     pub polychrome_sprites: Vec<PolychromeSprite>,
     pub surfaces: Vec<PaintSurface>,
     pub backdrops: Vec<Backdrop>,
+    /// The masks backdrops index with [`Backdrop::mask`].
+    pub backdrop_masks: Vec<BackdropMask<ScaledPixels>>,
 }
 
 #[expect(missing_docs)]
@@ -68,6 +70,7 @@ impl Scene {
         self.polychrome_sprites.clear();
         self.surfaces.clear();
         self.backdrops.clear();
+        self.backdrop_masks.clear();
     }
 
     pub fn len(&self) -> usize {
@@ -157,6 +160,19 @@ impl Scene {
     pub fn replay(&mut self, range: Range<usize>, prev_scene: &Scene) {
         for operation in &prev_scene.paint_operations[range] {
             match operation {
+                // A mask index is local to the scene that painted it, so the mask comes along
+                // and the backdrop takes its index here.
+                PaintOperation::Primitive(Primitive::Backdrop(backdrop)) if backdrop.mask != 0 => {
+                    let mut backdrop = *backdrop;
+                    backdrop.mask = prev_scene
+                        .backdrop_masks
+                        .get(backdrop.mask as usize - 1)
+                        .map_or(0, |mask| {
+                            self.backdrop_masks.push(mask.clone());
+                            self.backdrop_masks.len() as u32
+                        });
+                    self.insert_primitive(Primitive::Backdrop(backdrop));
+                }
                 PaintOperation::Primitive(primitive) => self.insert_primitive(primitive.clone()),
                 PaintOperation::StartLayer(bounds) => self.push_layer(*bounds),
                 PaintOperation::EndLayer => self.pop_layer(),
@@ -680,6 +696,20 @@ pub struct Backdrop {
     pub opacity: f32,
     /// Laid under the tint instead of the blur where the renderer cannot read the window.
     pub fallback: Hsla,
+    /// One more than the index of its mask in [`Scene::backdrop_masks`], 0 for none.
+    pub mask: u32,
+}
+
+/// Coverage a backdrop is multiplied by, for a clip a content mask cannot hold (a circle, a
+/// path): one byte per texel, row by row, stretched over `bounds`, and nothing outside them.
+/// The wgpu renderer applies it; Metal and Direct3D draw the backdrop without it.
+#[derive(Clone, Debug)]
+#[expect(missing_docs)]
+pub struct BackdropMask<P: Clone + Debug + Default + PartialEq> {
+    pub bounds: Bounds<P>,
+    pub width: u32,
+    pub height: u32,
+    pub coverage: std::sync::Arc<[u8]>,
 }
 
 impl Backdrop {
@@ -1145,7 +1175,40 @@ mod tests {
             sample_limit: None,
             opacity: 1.,
             fallback: Hsla::default(),
+            mask: 0,
         }
+    }
+
+    fn masked(scene: &mut Scene, x: f32, coverage: u8) {
+        scene.backdrop_masks.push(BackdropMask {
+            bounds: bounds(x, 10.),
+            width: 1,
+            height: 1,
+            coverage: [coverage].into(),
+        });
+        let mut b = backdrop(x, 10., 4.);
+        b.mask = scene.backdrop_masks.len() as u32;
+        scene.insert_primitive(b);
+    }
+
+    fn own_masks(scene: &Scene) -> Vec<(ScaledPixels, u8)> {
+        let mut out: Vec<_> = scene
+            .backdrops
+            .iter()
+            .map(|b| (b.bounds.origin.x, scene.backdrop_masks[b.mask as usize - 1].coverage[0]))
+            .collect();
+        out.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        out
+    }
+
+    #[test]
+    fn a_replayed_backdrop_keeps_its_own_mask() {
+        let mut prev = Scene::default();
+        masked(&mut prev, 100., 7);
+        let mut next = Scene::default();
+        masked(&mut next, 0., 200);
+        next.replay(0..prev.len(), &prev);
+        assert_eq!(own_masks(&next), vec![(ScaledPixels(0.), 200), (ScaledPixels(100.), 7)]);
     }
 
     #[test]

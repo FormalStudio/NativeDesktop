@@ -8,7 +8,7 @@ use crate::subscription::SingleSubscriberSet;
 use crate::taffy::TaffyLayoutEngine;
 use crate::{
     Action, AnyDrag, AnyElement, AnyImageCache, AnyTooltip, AnyView, App, AppContext, Arena, Asset,
-    AsyncWindowContext, AtlasTile, AvailableSpace, Backdrop, BackdropFilter, BackdropSource,
+    AsyncWindowContext, AtlasTile, AvailableSpace, Backdrop, BackdropFilter, BackdropMask, BackdropSource,
     Background, BorderStyle, Bounds, BoxShadow,
     Capslock, Context, Corners, CursorHideMode, CursorStyle, Decorations, DevicePixels,
     DispatchActionListener, DispatchNodeId, DispatchTree, DisplayId, Edges, Effect, Entity,
@@ -5022,6 +5022,18 @@ impl Window {
         corner_radii: Corners<Pixels>,
         filter: &BackdropFilter,
     ) {
+        self.paint_backdrop_masked(bounds, corner_radii, filter, None);
+    }
+
+    /// [`Self::paint_backdrop`] multiplied by `mask` as well as clipped by the content mask.
+    /// The fallback colour a desktop backdrop paints instead ignores it.
+    pub fn paint_backdrop_masked(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        corner_radii: Corners<Pixels>,
+        filter: &BackdropFilter,
+        mask: Option<BackdropMask<Pixels>>,
+    ) {
         self.invalidator.debug_assert_paint();
 
         if filter.source == BackdropSource::Desktop
@@ -5046,6 +5058,17 @@ impl Window {
         if opacity <= 0. {
             return;
         }
+        let mask = mask.map_or(0, |mask| {
+            let bounds = self.element_transform.apply_bounds(mask.bounds).scale(self.scale_factor());
+            let masks = &mut self.next_frame.scene.backdrop_masks;
+            masks.push(BackdropMask {
+                bounds,
+                width: mask.width,
+                height: mask.height,
+                coverage: mask.coverage,
+            });
+            masks.len() as u32
+        });
         self.next_frame.scene.insert_primitive(Backdrop {
             order: 0,
             source: filter.source,
@@ -5060,6 +5083,7 @@ impl Window {
             sample_limit: filter.within.map(|within| self.snap_bounds(within)),
             opacity,
             fallback: filter.fallback,
+            mask,
         });
     }
 
