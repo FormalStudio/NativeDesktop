@@ -698,6 +698,10 @@ pub struct Backdrop {
     pub fallback: Hsla,
     /// One more than the index of its mask in [`Scene::backdrop_masks`], 0 for none.
     pub mask: u32,
+    /// From [`BackdropFilter::mirror`]; Metal and Direct3D repeat the edge.
+    pub mirror: bool,
+    /// From [`BackdropFilter::clamp`]; Metal and Direct3D clamp the saturated blur to 0.
+    pub clamp: Option<[f32; 2]>,
 }
 
 /// Coverage a backdrop is multiplied by, for a clip a content mask cannot hold (a circle, a
@@ -1176,6 +1180,8 @@ mod tests {
             opacity: 1.,
             fallback: Hsla::default(),
             mask: 0,
+            mirror: false,
+            clamp: None,
         }
     }
 

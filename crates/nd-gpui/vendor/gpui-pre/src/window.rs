@@ -5084,6 +5084,8 @@ impl Window {
             opacity,
             fallback: filter.fallback,
             mask,
+            mirror: filter.mirror,
+            clamp: filter.clamp,
         });
     }
 

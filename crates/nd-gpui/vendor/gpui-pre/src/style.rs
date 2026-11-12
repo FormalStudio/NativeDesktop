@@ -372,6 +372,11 @@ pub struct BackdropFilter {
     /// around them, so an element at the content's edge does not blur that in.
     #[serde(skip)]
     pub within: Option<Bounds<Pixels>>,
+    /// Reflects `within` at its edge instead of repeating the edge.
+    pub mirror: bool,
+    /// Leaves the saturated blur unclamped and clamps each channel of the tinted result to
+    /// this range (sRGB) instead, as macOS's materials do.
+    pub clamp: Option<[f32; 2]>,
 }
 
 impl Default for BackdropFilter {
@@ -385,6 +390,8 @@ impl Default for BackdropFilter {
             highlight_width: px(1.),
             fallback: Hsla::transparent_black(),
             within: None,
+            mirror: false,
+            clamp: None,
         }
     }
 }
@@ -432,6 +439,18 @@ impl BackdropFilter {
     /// Limits what the blur reads to `bounds`, in the coordinates of the element's bounds.
     pub fn within(mut self, bounds: Bounds<Pixels>) -> Self {
         self.within = Some(bounds);
+        self
+    }
+
+    /// Reflects the area set by [`Self::within`] at its edge instead of repeating the edge.
+    pub fn mirrored(mut self) -> Self {
+        self.mirror = true;
+        self
+    }
+
+    /// Clamps the tinted result to `low..=high` instead of the saturated blur to 0.
+    pub fn clamped(mut self, low: f32, high: f32) -> Self {
+        self.clamp = Some([low, high]);
         self
     }
 }

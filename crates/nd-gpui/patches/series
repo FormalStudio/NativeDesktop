@@ -31,3 +31,4 @@
 0029-gpui_linux-ignore-a-released-seat-device-s-events-an.patch
 0030-gpui-report-each-configure-in-order-as-it-arrives.patch
 0031-gpui-multiply-a-backdrop-by-a-coverage-mask-for-clip.patch
+0032-gpui-mirror-a-backdrop-s-sample-region-at-its-edge-a.patch
