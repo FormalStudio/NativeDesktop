@@ -3400,6 +3400,9 @@ mod tests {
             sample_limit: None,
             opacity: 1.,
             fallback: Hsla::transparent_black(),
+            mask: 0,
+            mirror: false,
+            clamp: None,
         }
     }
 

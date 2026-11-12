@@ -1989,6 +1989,9 @@ mod tests {
             sample_limit: None,
             opacity: 1.,
             fallback: gpui::Hsla::transparent_black(),
+            mask: 0,
+            mirror: false,
+            clamp: None,
         }
     }
 

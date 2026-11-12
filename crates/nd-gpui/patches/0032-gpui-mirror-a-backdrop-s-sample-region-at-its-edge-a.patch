@@ -5,11 +5,13 @@ Subject: [PATCH 32/32] gpui: mirror a backdrop's sample region at its edge and
  clamp its tinted result
 
 ---
- crates/gpui/src/scene.rs         |   6 +
- crates/gpui/src/style.rs         |  19 +++
- crates/gpui/src/window.rs        |   2 +
- crates/gpui_wgpu/src/backdrop.rs | 202 ++++++++++++++++++++++++++++++-
- 4 files changed, 226 insertions(+), 3 deletions(-)
+ crates/gpui/src/scene.rs                |   6 +
+ crates/gpui/src/style.rs                |  19 +++
+ crates/gpui/src/window.rs               |   2 +
+ crates/gpui_apple/src/metal_renderer.rs |   2 +
+ crates/gpui_wgpu/src/backdrop.rs        | 202 +++++++++++++++++++++++-
+ crates/gpui_wgpu/src/wgpu_renderer.rs   |   2 +
+ 6 files changed, 230 insertions(+), 3 deletions(-)
 
 diff --git a/crates/gpui/src/scene.rs b/crates/gpui/src/scene.rs
 index c592407b8f..ff69c9dadd 100644
@@ -90,6 +92,19 @@ index 7dc4a52b6d..81c78739b4 100644
 +            mirror: filter.mirror,
 +            clamp: filter.clamp,
          });
+     }
+ 
+diff --git a/crates/gpui_apple/src/metal_renderer.rs b/crates/gpui_apple/src/metal_renderer.rs
+index 90872f5ba2..ff38fe469e 100644
+--- a/crates/gpui_apple/src/metal_renderer.rs
++++ b/crates/gpui_apple/src/metal_renderer.rs
+@@ -1990,6 +1990,8 @@ mod tests {
+             opacity: 1.,
+             fallback: gpui::Hsla::transparent_black(),
+             mask: 0,
++            mirror: false,
++            clamp: None,
+         }
      }
  
 diff --git a/crates/gpui_wgpu/src/backdrop.rs b/crates/gpui_wgpu/src/backdrop.rs
@@ -350,6 +365,19 @@ index cf5b602082..8eec7fe374 100644
 +        }
 +    }
 +}
+diff --git a/crates/gpui_wgpu/src/wgpu_renderer.rs b/crates/gpui_wgpu/src/wgpu_renderer.rs
+index e5629f6c80..be4d288c49 100644
+--- a/crates/gpui_wgpu/src/wgpu_renderer.rs
++++ b/crates/gpui_wgpu/src/wgpu_renderer.rs
+@@ -3400,6 +3400,8 @@ mod tests {
+             opacity: 1.,
+             fallback: Hsla::transparent_black(),
+             mask: 0,
++            mirror: false,
++            clamp: None,
+         }
+     }
+ 
 -- 
 2.56.0
 

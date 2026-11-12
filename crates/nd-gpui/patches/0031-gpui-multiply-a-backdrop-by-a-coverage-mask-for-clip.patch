@@ -5,11 +5,12 @@ Subject: [PATCH 31/32] gpui: multiply a backdrop by a coverage mask for clips
  that are not rectangles
 
 ---
- crates/gpui/src/scene.rs              |  63 +++++++++++++++
- crates/gpui/src/window.rs             |  26 +++++-
- crates/gpui_wgpu/src/backdrop.rs      | 112 ++++++++++++++++++++++++--
- crates/gpui_wgpu/src/wgpu_renderer.rs |   1 +
- 4 files changed, 193 insertions(+), 9 deletions(-)
+ crates/gpui/src/scene.rs                |  63 +++++++++++++
+ crates/gpui/src/window.rs               |  26 +++++-
+ crates/gpui_apple/src/metal_renderer.rs |   1 +
+ crates/gpui_wgpu/src/backdrop.rs        | 112 ++++++++++++++++++++++--
+ crates/gpui_wgpu/src/wgpu_renderer.rs   |   2 +
+ 5 files changed, 195 insertions(+), 9 deletions(-)
 
 diff --git a/crates/gpui/src/scene.rs b/crates/gpui/src/scene.rs
 index 86eb0467b8..c592407b8f 100644
@@ -172,6 +173,18 @@ index 5a8b3bf691..7dc4a52b6d 100644
              fallback: filter.fallback,
 +            mask,
          });
+     }
+ 
+diff --git a/crates/gpui_apple/src/metal_renderer.rs b/crates/gpui_apple/src/metal_renderer.rs
+index eb19f1b900..90872f5ba2 100644
+--- a/crates/gpui_apple/src/metal_renderer.rs
++++ b/crates/gpui_apple/src/metal_renderer.rs
+@@ -1989,6 +1989,7 @@ mod tests {
+             sample_limit: None,
+             opacity: 1.,
+             fallback: gpui::Hsla::transparent_black(),
++            mask: 0,
+         }
      }
  
 diff --git a/crates/gpui_wgpu/src/backdrop.rs b/crates/gpui_wgpu/src/backdrop.rs
@@ -396,7 +409,7 @@ index c848cc4869..cf5b602082 100644
 +    })
  }
 diff --git a/crates/gpui_wgpu/src/wgpu_renderer.rs b/crates/gpui_wgpu/src/wgpu_renderer.rs
-index d418495452..8711a5e3fd 100644
+index d418495452..e5629f6c80 100644
 --- a/crates/gpui_wgpu/src/wgpu_renderer.rs
 +++ b/crates/gpui_wgpu/src/wgpu_renderer.rs
 @@ -2061,6 +2061,7 @@ impl WgpuRendererCore {
@@ -407,6 +420,14 @@ index d418495452..8711a5e3fd 100644
                          );
                          pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                              label: Some("main_pass_continued"),
+@@ -3398,6 +3399,7 @@ mod tests {
+             sample_limit: None,
+             opacity: 1.,
+             fallback: Hsla::transparent_black(),
++            mask: 0,
+         }
+     }
+ 
 -- 
 2.56.0
 
