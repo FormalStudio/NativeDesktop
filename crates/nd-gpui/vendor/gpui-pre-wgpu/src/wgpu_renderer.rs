@@ -3403,6 +3403,7 @@ mod tests {
             mask: 0,
             mirror: false,
             clamp: None,
+            tone: None,
         }
     }
 
