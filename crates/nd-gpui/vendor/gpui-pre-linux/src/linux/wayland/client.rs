@@ -2000,6 +2000,22 @@ impl Dispatch<xdg_activation_token_v1::XdgActivationTokenV1, PendingActivation>
     }
 }
 
+/// What a seat's capabilities event does to the device the client binds for one capability.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SeatDevice {
+    Bind,
+    Release,
+    Keep,
+}
+
+fn seat_device(bound: bool, advertised: bool) -> SeatDevice {
+    match (bound, advertised) {
+        (false, true) => SeatDevice::Bind,
+        (true, false) => SeatDevice::Release,
+        _ => SeatDevice::Keep,
+    }
+}
+
 impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
     fn event(
         state: &mut Self,
@@ -2015,51 +2031,67 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
         {
             let client = state.get_client();
             let mut state = client.borrow_mut();
-            if capabilities.contains(wl_seat::Capability::Keyboard) {
-                let keyboard = seat.get_keyboard(qh, ());
-
-                if let Some(text_input) = state.text_input.take() {
-                    text_input.destroy();
-                    state.ime_pre_edit = None;
-                    state.composing = false;
+            // A seat resends its capabilities whenever a device comes or goes (a virtual
+            // keyboard, a mouse waking up). Rebinding a device that is still there makes a
+            // new wl_pointer whose enter some compositors send at -1,-1 while the cursor
+            // rests on the surface, so clicks miss until the pointer moves. Bind what was
+            // added, release what was removed, and keep the rest.
+            let keyboard = seat_device(
+                state.wl_keyboard.is_some(),
+                capabilities.contains(wl_seat::Capability::Keyboard),
+            );
+            match keyboard {
+                SeatDevice::Bind => {
+                    state.text_input = state
+                        .globals
+                        .text_input_manager
+                        .as_ref()
+                        .map(|text_input_manager| text_input_manager.get_text_input(seat, qh, ()));
+                    state.wl_keyboard = Some(seat.get_keyboard(qh, ()));
                 }
-
-                state.text_input = state
-                    .globals
-                    .text_input_manager
-                    .as_ref()
-                    .map(|text_input_manager| text_input_manager.get_text_input(seat, qh, ()));
-
-                if let Some(wl_keyboard) = &state.wl_keyboard {
-                    wl_keyboard.release();
+                SeatDevice::Release => {
+                    if let Some(wl_keyboard) = state.wl_keyboard.take() {
+                        wl_keyboard.release();
+                    }
+                    if let Some(text_input) = state.text_input.take() {
+                        text_input.destroy();
+                        state.ime_pre_edit = None;
+                        state.composing = false;
+                    }
                 }
-
-                state.wl_keyboard = Some(keyboard);
+                SeatDevice::Keep => {}
             }
-            if capabilities.contains(wl_seat::Capability::Pointer) {
-                let pointer = seat.get_pointer(qh, ());
-
-                if let Some(cursor_shape_device) = state.cursor_shape_device.take() {
-                    cursor_shape_device.destroy();
+            let pointer = seat_device(
+                state.wl_pointer.is_some(),
+                capabilities.contains(wl_seat::Capability::Pointer),
+            );
+            match pointer {
+                SeatDevice::Bind => {
+                    let pointer = seat.get_pointer(qh, ());
+                    state.cursor_shape_device = state
+                        .globals
+                        .cursor_shape_manager
+                        .as_ref()
+                        .map(|cursor_shape_manager| cursor_shape_manager.get_pointer(&pointer, qh, ()));
+                    state.pinch_gesture = state.globals.gesture_manager.as_ref().map(
+                        |gesture_manager: &zwp_pointer_gestures_v1::ZwpPointerGesturesV1| {
+                            gesture_manager.get_pinch_gesture(&pointer, qh, ())
+                        },
+                    );
+                    state.wl_pointer = Some(pointer);
                 }
-
-                state.cursor_shape_device = state
-                    .globals
-                    .cursor_shape_manager
-                    .as_ref()
-                    .map(|cursor_shape_manager| cursor_shape_manager.get_pointer(&pointer, qh, ()));
-
-                state.pinch_gesture = state.globals.gesture_manager.as_ref().map(
-                    |gesture_manager: &zwp_pointer_gestures_v1::ZwpPointerGesturesV1| {
-                        gesture_manager.get_pinch_gesture(&pointer, qh, ())
-                    },
-                );
-
-                if let Some(wl_pointer) = &state.wl_pointer {
-                    wl_pointer.release();
+                SeatDevice::Release => {
+                    if let Some(cursor_shape_device) = state.cursor_shape_device.take() {
+                        cursor_shape_device.destroy();
+                    }
+                    if let Some(pinch_gesture) = state.pinch_gesture.take() {
+                        pinch_gesture.destroy();
+                    }
+                    if let Some(wl_pointer) = state.wl_pointer.take() {
+                        wl_pointer.release();
+                    }
                 }
-
-                state.wl_pointer = Some(pointer);
+                SeatDevice::Keep => {}
             }
         }
     }
@@ -3352,6 +3384,30 @@ mod tests {
     use std::cell::Cell;
 
     use super::*;
+
+    #[test]
+    fn seat_devices_survive_capability_changes() {
+        // Pointer and keyboard, then a virtual keyboard leaving, coming back, the pointer
+        // going away and both returning: each device is bound once per stretch it is there.
+        let mut keyboard = false;
+        let mut pointer = false;
+        let mut binds = (0, 0);
+        for caps in [3u32, 1, 3, 3, 2, 0, 3] {
+            for (bound, bit, count) in [(&mut keyboard, 2, &mut binds.0), (&mut pointer, 1, &mut binds.1)] {
+                match seat_device(*bound, caps & bit != 0) {
+                    SeatDevice::Bind => {
+                        *bound = true;
+                        *count += 1;
+                    }
+                    SeatDevice::Release => *bound = false,
+                    SeatDevice::Keep => {}
+                }
+                assert_eq!(*bound, caps & bit != 0);
+            }
+        }
+        assert_eq!(binds, (3, 2));
+        assert_eq!(seat_device(true, true), SeatDevice::Keep);
+    }
 
     #[test]
     fn rejects_required_globals_below_supported_versions() {

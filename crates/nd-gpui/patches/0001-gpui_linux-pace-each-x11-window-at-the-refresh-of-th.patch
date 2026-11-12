@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FormalSnake <kyaniserni@gmail.com>
 Date: Tue, 13 Oct 2026 19:16:52 +0100
-Subject: [PATCH 01/26] gpui_linux: pace each x11 window at the refresh of the
+Subject: [PATCH 01/27] gpui_linux: pace each x11 window at the refresh of the
  crtc it is on
 
 ---
@@ -9,7 +9,7 @@ Subject: [PATCH 01/26] gpui_linux: pace each x11 window at the refresh of the
  1 file changed, 134 insertions(+), 35 deletions(-)
 
 diff --git a/crates/gpui_linux/src/linux/x11/client.rs b/crates/gpui_linux/src/linux/x11/client.rs
-index e21f019..4aaa112 100644
+index e21f019c64..4aaa112077 100644
 --- a/crates/gpui_linux/src/linux/x11/client.rs
 +++ b/crates/gpui_linux/src/linux/x11/client.rs
 @@ -1049,6 +1049,7 @@ impl X11Client {

@@ -26,3 +26,4 @@
 0024-gpui-drop-an-app-s-windows-before-its-platform.patch
 0025-gpui_linux-ignore-keys-and-modifiers-until-a-wayland.patch
 0026-gpui-blur-what-an-element-covers-with-a-backdrop-fil.patch
+0027-gpui_linux-keep-seat-devices-across-a-capabilities-c.patch

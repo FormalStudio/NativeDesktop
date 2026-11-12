@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FormalSnake <kyaniserni@gmail.com>
 Date: Wed, 4 Nov 2026 13:55:49 +0000
-Subject: [PATCH 17/26] gpui_linux: read a wayland or x11 window back in
+Subject: [PATCH 17/27] gpui_linux: read a wayland or x11 window back in
  render_to_image
 
 The Metal and DirectX renderers implement render_to_image; on Linux the default returned an
@@ -17,7 +17,7 @@ which gpui_linux's test-support turns on, so neither crate's manifest changes.
  4 files changed, 127 insertions(+), 57 deletions(-)
 
 diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
-index 6851b36..b9b48db 100644
+index 6851b36e72..b9b48dbc20 100644
 --- a/crates/gpui/src/platform.rs
 +++ b/crates/gpui/src/platform.rs
 @@ -52,7 +52,7 @@ use async_task::Runnable;
@@ -30,7 +30,7 @@ index 6851b36..b9b48db 100644
  use image::{AnimationDecoder as _, DynamicImage, Frame};
  use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/src/linux/wayland/window.rs
-index 4d56ac2..7c9bd42 100644
+index 4d56ac2f4f..7c9bd422d1 100644
 --- a/crates/gpui_linux/src/linux/wayland/window.rs
 +++ b/crates/gpui_linux/src/linux/wayland/window.rs
 @@ -2170,6 +2170,18 @@ impl PlatformWindow for WaylandWindow {
@@ -53,7 +53,7 @@ index 4d56ac2..7c9bd42 100644
          self.borrow()
              .renderer
 diff --git a/crates/gpui_linux/src/linux/x11/window.rs b/crates/gpui_linux/src/linux/x11/window.rs
-index 95f31fe..3eede94 100644
+index 95f31fe2ef..3eede948dc 100644
 --- a/crates/gpui_linux/src/linux/x11/window.rs
 +++ b/crates/gpui_linux/src/linux/x11/window.rs
 @@ -1788,6 +1788,20 @@ impl PlatformWindow for X11Window {
@@ -78,7 +78,7 @@ index 95f31fe..3eede94 100644
          self.0
              .state
 diff --git a/crates/gpui_wgpu/src/wgpu_renderer.rs b/crates/gpui_wgpu/src/wgpu_renderer.rs
-index 4b82c94..6eae346 100644
+index 4b82c94198..6eae3469d6 100644
 --- a/crates/gpui_wgpu/src/wgpu_renderer.rs
 +++ b/crates/gpui_wgpu/src/wgpu_renderer.rs
 @@ -1559,6 +1559,29 @@ impl WgpuRenderer {

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FormalSnake <kyaniserni@gmail.com>
 Date: Wed, 4 Nov 2026 12:25:10 +0000
-Subject: [PATCH 15/26] gpui: resolve secondary- in a static keystroke with the
+Subject: [PATCH 15/27] gpui: resolve secondary- in a static keystroke with the
  os it was built for
 
 ---
@@ -11,7 +11,7 @@ Subject: [PATCH 15/26] gpui: resolve secondary- in a static keystroke with the
  3 files changed, 41 insertions(+), 3 deletions(-)
 
 diff --git a/crates/gpui/src/keymap/binding.rs b/crates/gpui/src/keymap/binding.rs
-index 1ca888b..c3a77c1 100644
+index 1ca888b67b..c3a77c1374 100644
 --- a/crates/gpui/src/keymap/binding.rs
 +++ b/crates/gpui/src/keymap/binding.rs
 @@ -31,7 +31,8 @@ impl Clone for KeyBinding {
@@ -25,7 +25,7 @@ index 1ca888b..c3a77c1 100644
          let context_predicate =
              context.map(|context| KeyBindingContextPredicate::parse(context).unwrap().into());
 diff --git a/crates/gpui/src/platform/keystroke.rs b/crates/gpui/src/platform/keystroke.rs
-index b995508..85d61df 100644
+index b995508cc3..85d61df64d 100644
 --- a/crates/gpui/src/platform/keystroke.rs
 +++ b/crates/gpui/src/platform/keystroke.rs
 @@ -116,9 +116,10 @@ impl Keystroke {
@@ -60,7 +60,7 @@ index b995508..85d61df 100644
 +    }
 +}
 diff --git a/crates/gpui/src/platform/platform_info.rs b/crates/gpui/src/platform/platform_info.rs
-index e71b787..9b9b8dd 100644
+index e71b787f74..9b9b8dd365 100644
 --- a/crates/gpui/src/platform/platform_info.rs
 +++ b/crates/gpui/src/platform/platform_info.rs
 @@ -47,3 +47,25 @@ impl PlatformInfo {

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FormalSnake <kyaniserni@gmail.com>
 Date: Wed, 4 Nov 2026 11:41:22 +0000
-Subject: [PATCH 19/26] gpui_linux: give a wayland window that is not resizable
+Subject: [PATCH 19/27] gpui_linux: give a wayland window that is not resizable
  a fixed size hint
 
 ---
@@ -9,7 +9,7 @@ Subject: [PATCH 19/26] gpui_linux: give a wayland window that is not resizable
  1 file changed, 12 insertions(+), 3 deletions(-)
 
 diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/src/linux/wayland/window.rs
-index 7c9bd42..8926e64 100644
+index 7c9bd422d1..8926e6424d 100644
 --- a/crates/gpui_linux/src/linux/wayland/window.rs
 +++ b/crates/gpui_linux/src/linux/wayland/window.rs
 @@ -650,9 +650,18 @@ impl WaylandWindowState {

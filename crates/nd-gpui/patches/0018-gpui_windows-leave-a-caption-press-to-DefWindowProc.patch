@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FormalSnake <kyaniserni@gmail.com>
 Date: Wed, 4 Nov 2026 13:56:00 +0000
-Subject: [PATCH 18/26] gpui_windows: leave a caption press to DefWindowProc
+Subject: [PATCH 18/27] gpui_windows: leave a caption press to DefWindowProc
 
 A press on a drag area belongs to DefWindowProc: its move loop, Snap, and maximize on double
 click. Dispatched as a mouse down, the element that owns the area takes it, and the window
@@ -11,7 +11,7 @@ never moves.
  1 file changed, 6 insertions(+)
 
 diff --git a/crates/gpui_windows/src/events.rs b/crates/gpui_windows/src/events.rs
-index 465b6b1..0c8b852 100644
+index 465b6b14a6..0c8b852337 100644
 --- a/crates/gpui_windows/src/events.rs
 +++ b/crates/gpui_windows/src/events.rs
 @@ -1083,6 +1083,12 @@ impl WindowsWindowInner {

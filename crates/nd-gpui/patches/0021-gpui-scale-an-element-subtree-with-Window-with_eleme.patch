@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FormalSnake <kyaniserni@gmail.com>
 Date: Mon, 9 Nov 2026 11:36:27 +0000
-Subject: [PATCH 21/26] gpui: scale an element subtree with
+Subject: [PATCH 21/27] gpui: scale an element subtree with
  Window::with_element_scale
 
 ---
@@ -9,7 +9,7 @@ Subject: [PATCH 21/26] gpui: scale an element subtree with
  1 file changed, 260 insertions(+), 13 deletions(-)
 
 diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
-index 779b7f6..be42eb4 100644
+index 779b7f6082..be42eb43f0 100644
 --- a/crates/gpui/src/window.rs
 +++ b/crates/gpui/src/window.rs
 @@ -829,6 +829,82 @@ impl HitboxId {

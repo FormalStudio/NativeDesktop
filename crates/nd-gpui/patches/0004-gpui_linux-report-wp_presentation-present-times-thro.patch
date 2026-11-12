@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FormalSnake <kyaniserni@gmail.com>
 Date: Tue, 13 Oct 2026 20:52:09 +0100
-Subject: [PATCH 04/26] gpui_linux: report wp_presentation present times
+Subject: [PATCH 04/27] gpui_linux: report wp_presentation present times
  through Window::last_presentation
 
 ---
@@ -12,7 +12,7 @@ Subject: [PATCH 04/26] gpui_linux: report wp_presentation present times
  4 files changed, 104 insertions(+)
 
 diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
-index 6ddbac4..bb092ad 100644
+index 6ddbac4c43..bb092ad014 100644
 --- a/crates/gpui/src/platform.rs
 +++ b/crates/gpui/src/platform.rs
 @@ -845,6 +845,16 @@ pub enum Decorations {
@@ -46,7 +46,7 @@ index 6ddbac4..bb092ad 100644
  
      // Mobile platform methods.
 diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
-index c2ba13d..9cfaec8 100644
+index c2ba13d506..9cfaec8970 100644
 --- a/crates/gpui/src/window.rs
 +++ b/crates/gpui/src/window.rs
 @@ -7194,6 +7194,12 @@ impl Window {
@@ -63,7 +63,7 @@ index c2ba13d..9cfaec8 100644
      /// This is macOS specific.
      pub fn titlebar_double_click(&self) {
 diff --git a/crates/gpui_linux/src/linux/wayland/client.rs b/crates/gpui_linux/src/linux/wayland/client.rs
-index 625b1d5..b989c25 100644
+index 625b1d5192..b989c25e88 100644
 --- a/crates/gpui_linux/src/linux/wayland/client.rs
 +++ b/crates/gpui_linux/src/linux/wayland/client.rs
 @@ -60,6 +60,7 @@ use wayland_protocols::wp::text_input::zv3::client::zwp_text_input_v3::{
@@ -163,7 +163,7 @@ index 625b1d5..b989c25 100644
      fn event(
          this: &mut Self,
 diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/src/linux/wayland/window.rs
-index 9ef0e36..717712a 100644
+index 9ef0e3608e..717712a916 100644
 --- a/crates/gpui_linux/src/linux/wayland/window.rs
 +++ b/crates/gpui_linux/src/linux/wayland/window.rs
 @@ -143,6 +143,7 @@ pub struct WaylandWindowState {

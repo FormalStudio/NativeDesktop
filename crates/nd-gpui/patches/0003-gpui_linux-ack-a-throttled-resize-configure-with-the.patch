@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FormalSnake <kyaniserni@gmail.com>
 Date: Tue, 13 Oct 2026 20:50:52 +0100
-Subject: [PATCH 03/26] gpui_linux: ack a throttled resize configure with the
+Subject: [PATCH 03/27] gpui_linux: ack a throttled resize configure with the
  frame that applies it
 
 ---
@@ -9,7 +9,7 @@ Subject: [PATCH 03/26] gpui_linux: ack a throttled resize configure with the
  1 file changed, 14 insertions(+), 3 deletions(-)
 
 diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/src/linux/wayland/window.rs
-index 6647a8e..9ef0e36 100644
+index 6647a8ef7f..9ef0e3608e 100644
 --- a/crates/gpui_linux/src/linux/wayland/window.rs
 +++ b/crates/gpui_linux/src/linux/wayland/window.rs
 @@ -138,6 +138,11 @@ pub struct WaylandWindowState {

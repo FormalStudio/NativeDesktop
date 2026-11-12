@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FormalSnake <kyaniserni@gmail.com>
 Date: Tue, 13 Oct 2026 19:24:54 +0100
-Subject: [PATCH 02/26] gpui_wgpu: create the gl backend only when vulkan alone
+Subject: [PATCH 02/27] gpui_wgpu: create the gl backend only when vulkan alone
  fails
 
 ---
@@ -10,7 +10,7 @@ Subject: [PATCH 02/26] gpui_wgpu: create the gl backend only when vulkan alone
  2 files changed, 90 insertions(+), 35 deletions(-)
 
 diff --git a/crates/gpui_wgpu/src/wgpu_context.rs b/crates/gpui_wgpu/src/wgpu_context.rs
-index 5563a76..8e03552 100644
+index 5563a761d3..8e03552afb 100644
 --- a/crates/gpui_wgpu/src/wgpu_context.rs
 +++ b/crates/gpui_wgpu/src/wgpu_context.rs
 @@ -122,6 +122,17 @@ impl raw_window_handle::HasDisplayHandle for WebDisplaySource {
@@ -116,7 +116,7 @@ index 5563a76..8e03552 100644
      fn device_errors_are_observed_independently() {
          let errors = DeviceErrorState::default();
 diff --git a/crates/gpui_wgpu/src/wgpu_renderer.rs b/crates/gpui_wgpu/src/wgpu_renderer.rs
-index 46f9ffd..5d7f7bf 100644
+index 46f9ffdb98..5d7f7bfb63 100644
 --- a/crates/gpui_wgpu/src/wgpu_renderer.rs
 +++ b/crates/gpui_wgpu/src/wgpu_renderer.rs
 @@ -302,43 +302,28 @@ impl WgpuRenderer {

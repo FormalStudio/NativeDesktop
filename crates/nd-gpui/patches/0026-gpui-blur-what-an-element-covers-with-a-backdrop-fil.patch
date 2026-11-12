@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FormalSnake <kyaniserni@gmail.com>
 Date: Wed, 11 Nov 2026 15:03:08 +0000
-Subject: [PATCH 26/26] gpui: blur what an element covers with a backdrop
+Subject: [PATCH 26/27] gpui: blur what an element covers with a backdrop
  filter
 
 ---
@@ -28,7 +28,7 @@ Subject: [PATCH 26/26] gpui: blur what an element covers with a backdrop
  create mode 100644 crates/gpui_windows/src/directx_backdrop.rs
 
 diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
-index b9b48db..43d904d 100644
+index b9b48dbc20..43d904d84b 100644
 --- a/crates/gpui/src/platform.rs
 +++ b/crates/gpui/src/platform.rs
 @@ -1310,6 +1310,11 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
@@ -44,7 +44,7 @@ index b9b48db..43d904d 100644
      fn zoom(&self);
      fn toggle_fullscreen(&self);
 diff --git a/crates/gpui/src/scene.rs b/crates/gpui/src/scene.rs
-index 6992dc0..86eb046 100644
+index 6992dc036e..86eb0467b8 100644
 --- a/crates/gpui/src/scene.rs
 +++ b/crates/gpui/src/scene.rs
 @@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
@@ -451,7 +451,7 @@ index 6992dc0..86eb046 100644
 +    }
 +}
 diff --git a/crates/gpui/src/style.rs b/crates/gpui/src/style.rs
-index 323c79e..bf1f08c 100644
+index 323c79e004..bf1f08c6a1 100644
 --- a/crates/gpui/src/style.rs
 +++ b/crates/gpui/src/style.rs
 @@ -5,7 +5,7 @@ use std::{
@@ -594,7 +594,7 @@ index 323c79e..bf1f08c 100644
              mouse_cursor: None,
              opacity: None,
 diff --git a/crates/gpui/src/styled.rs b/crates/gpui/src/styled.rs
-index aa77a20..281269b 100644
+index aa77a20a44..281269b7d8 100644
 --- a/crates/gpui/src/styled.rs
 +++ b/crates/gpui/src/styled.rs
 @@ -1,5 +1,5 @@
@@ -618,7 +618,7 @@ index aa77a20..281269b 100644
      fn opacity(mut self, opacity: f32) -> Self {
          self.style().opacity = Some(opacity);
 diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
-index 20fdcb0..726ed78 100644
+index 20fdcb0d0c..726ed78edf 100644
 --- a/crates/gpui/src/window.rs
 +++ b/crates/gpui/src/window.rs
 @@ -8,7 +8,8 @@ use crate::subscription::SingleSubscriberSet;
@@ -798,7 +798,7 @@ index 20fdcb0..726ed78 100644
      fn test_element_scale_maps_paint_and_hit_testing(cx: &mut TestAppContext) {
          struct Scaled(Rc<Cell<Option<crate::HitboxId>>>);
 diff --git a/crates/gpui_apple/src/gpui_apple.rs b/crates/gpui_apple/src/gpui_apple.rs
-index 4ce5848..1d9375f 100644
+index 4ce5848e58..1d9375f02f 100644
 --- a/crates/gpui_apple/src/gpui_apple.rs
 +++ b/crates/gpui_apple/src/gpui_apple.rs
 @@ -9,6 +9,7 @@ mod dispatcher;
@@ -811,7 +811,7 @@ index 4ce5848..1d9375f 100644
  
 diff --git a/crates/gpui_apple/src/metal_backdrop.rs b/crates/gpui_apple/src/metal_backdrop.rs
 new file mode 100644
-index 0000000..8307a6f
+index 0000000000..8307a6f94b
 --- /dev/null
 +++ b/crates/gpui_apple/src/metal_backdrop.rs
 @@ -0,0 +1,555 @@
@@ -1371,7 +1371,7 @@ index 0000000..8307a6f
 +    blurred: Option<Texture>,
 +}
 diff --git a/crates/gpui_apple/src/metal_renderer.rs b/crates/gpui_apple/src/metal_renderer.rs
-index 9b98a23..eb19f1b 100644
+index 9b98a23a41..eb19f1b900 100644
 --- a/crates/gpui_apple/src/metal_renderer.rs
 +++ b/crates/gpui_apple/src/metal_renderer.rs
 @@ -1,4 +1,5 @@
@@ -1578,7 +1578,7 @@ index 9b98a23..eb19f1b 100644
      fn path_intermediate_textures_are_reused_until_resize() -> Result<()> {
          let mut renderer = MetalRenderer::new_headless(Default::default())?;
 diff --git a/crates/gpui_apple/src/shaders.metal b/crates/gpui_apple/src/shaders.metal
-index 2b52bb9..a2f68d4 100644
+index 2b52bb9ecc..a2f68d4e99 100644
 --- a/crates/gpui_apple/src/shaders.metal
 +++ b/crates/gpui_apple/src/shaders.metal
 @@ -469,7 +469,7 @@ vertex ShadowVertexOutput shadow_vertex(
@@ -1610,7 +1610,7 @@ index 2b52bb9..a2f68d4 100644
  
    return input.color * float4(1., 1., 1., alpha);
 diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/src/linux/wayland/window.rs
-index 9beebea..7b5609f 100644
+index 9beebea311..7b5609f5cd 100644
 --- a/crates/gpui_linux/src/linux/wayland/window.rs
 +++ b/crates/gpui_linux/src/linux/wayland/window.rs
 @@ -36,7 +36,7 @@ use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1;
@@ -1799,7 +1799,7 @@ index 9beebea..7b5609f 100644
  }
 diff --git a/crates/gpui_wgpu/src/backdrop.rs b/crates/gpui_wgpu/src/backdrop.rs
 new file mode 100644
-index 0000000..c848cc4
+index 0000000000..c848cc4869
 --- /dev/null
 +++ b/crates/gpui_wgpu/src/backdrop.rs
 @@ -0,0 +1,704 @@
@@ -2508,7 +2508,7 @@ index 0000000..c848cc4
 +    composites: Vec<(u32, Option<u32>)>,
 +}
 diff --git a/crates/gpui_wgpu/src/gpui_wgpu.rs b/crates/gpui_wgpu/src/gpui_wgpu.rs
-index 29a79af..6af180c 100644
+index 29a79afc6e..6af180c9c5 100644
 --- a/crates/gpui_wgpu/src/gpui_wgpu.rs
 +++ b/crates/gpui_wgpu/src/gpui_wgpu.rs
 @@ -1,3 +1,4 @@
@@ -2517,7 +2517,7 @@ index 29a79af..6af180c 100644
  mod wgpu_atlas;
  mod wgpu_context;
 diff --git a/crates/gpui_wgpu/src/shaders.wgsl b/crates/gpui_wgpu/src/shaders.wgsl
-index dec2bdc..d1c5d89 100644
+index dec2bdcfbd..d1c5d89dad 100644
 --- a/crates/gpui_wgpu/src/shaders.wgsl
 +++ b/crates/gpui_wgpu/src/shaders.wgsl
 @@ -955,11 +955,11 @@ struct Shadow {
@@ -2564,7 +2564,7 @@ index dec2bdc..d1c5d89 100644
  
      return blend_color(input.color, alpha);
 diff --git a/crates/gpui_wgpu/src/wgpu_renderer.rs b/crates/gpui_wgpu/src/wgpu_renderer.rs
-index e8aed26..d418495 100644
+index e8aed262c7..d418495452 100644
 --- a/crates/gpui_wgpu/src/wgpu_renderer.rs
 +++ b/crates/gpui_wgpu/src/wgpu_renderer.rs
 @@ -198,6 +198,8 @@ struct WgpuResources {
@@ -2938,7 +2938,7 @@ index e8aed26..d418495 100644
          naga::valid::Validator::new(naga::valid::ValidationFlags::all(), capabilities)
 diff --git a/crates/gpui_windows/src/directx_backdrop.rs b/crates/gpui_windows/src/directx_backdrop.rs
 new file mode 100644
-index 0000000..0213462
+index 0000000000..021346203c
 --- /dev/null
 +++ b/crates/gpui_windows/src/directx_backdrop.rs
 @@ -0,0 +1,513 @@
@@ -3456,7 +3456,7 @@ index 0000000..0213462
 +    }
 +}
 diff --git a/crates/gpui_windows/src/directx_renderer.rs b/crates/gpui_windows/src/directx_renderer.rs
-index 0ee6a55..c24bce7 100644
+index 0ee6a55b49..c24bce7985 100644
 --- a/crates/gpui_windows/src/directx_renderer.rs
 +++ b/crates/gpui_windows/src/directx_renderer.rs
 @@ -23,6 +23,9 @@ use crate::directx_renderer::shader_resources::{RawShaderBytes, ShaderModule, Sh
@@ -3526,7 +3526,7 @@ index 0ee6a55..c24bce7 100644
          if surfaces.is_empty() {
              return Ok(());
 diff --git a/crates/gpui_windows/src/shaders.hlsl b/crates/gpui_windows/src/shaders.hlsl
-index 2f9a00c..92d190c 100644
+index 2f9a00c418..92d190cf21 100644
 --- a/crates/gpui_windows/src/shaders.hlsl
 +++ b/crates/gpui_windows/src/shaders.hlsl
 @@ -887,7 +887,7 @@ ShadowVertexOutput shadow_vertex(uint vertex_id: SV_VertexID, uint instance_id:

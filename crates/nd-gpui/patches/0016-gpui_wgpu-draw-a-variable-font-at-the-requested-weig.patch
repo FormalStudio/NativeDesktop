@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FormalSnake <kyaniserni@gmail.com>
 Date: Wed, 4 Nov 2026 13:54:43 +0000
-Subject: [PATCH 16/26] gpui_wgpu: draw a variable font at the requested weight
+Subject: [PATCH 16/27] gpui_wgpu: draw a variable font at the requested weight
 
 cosmic-text picks the closest face for a weight, which for a variable font is its one face
 at the default wght; nothing set the axis, so semibold and bold drew as regular. A request
@@ -12,7 +12,7 @@ normalized coordinates.
  1 file changed, 65 insertions(+), 3 deletions(-)
 
 diff --git a/crates/gpui_wgpu/src/cosmic_text_system.rs b/crates/gpui_wgpu/src/cosmic_text_system.rs
-index a5dc9d0..a3aa49c 100644
+index a5dc9d0a8f..a3aa49c36c 100644
 --- a/crates/gpui_wgpu/src/cosmic_text_system.rs
 +++ b/crates/gpui_wgpu/src/cosmic_text_system.rs
 @@ -54,6 +54,9 @@ struct CosmicTextSystemState {
