@@ -6,7 +6,8 @@ crate_version = "0.3.11"
 zed_rev = "f816e1f9263e3a8ef63c4baaa02e1441ce1c6038"
 
 # `remote` is fetched for the snapshot; `branch` is the queue applied on it. `scripts/gpui-fork
-# export` pushes the branch to `fork`, over ssh: zed's workflow files need a scope the gh token lacks.
+# export` pushes the branch to `fork`, as itself and as the fork's `main`. The push goes over ssh:
+# zed's workflow files need a scope the gh token lacks.
 remote = "https://github.com/zed-industries/zed"
 fork = "git@github.com:FormalStudio/zed.git"
 branch = "nd/f816e1f"

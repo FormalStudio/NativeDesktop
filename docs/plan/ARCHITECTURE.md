@@ -82,7 +82,7 @@ native widget's macOS module (checked by `nd check`, 15.4).
 `nd-gpui` pins exact versions, bumped weekly in one PR gated by tiers 1-2 (`docs/research/gpui.md`
 recommendation 1). GPUI owns the OS connections (the `wl_display` and registry, the Win32 wndproc
 and swap chain, the per-window AccessKit adapter), so protocol work happens inside GPUI, not beside
-it. `nativedesktop/zed` (branch `nd/<snapshot>`) is therefore a maintained fork from M0, consumed
+it. `FormalStudio/zed` (`main`, the queue on the pinned snapshot, also kept as `nd/<snapshot>`) is therefore a maintained fork from M0, consumed
 with `[patch.crates-io]` on the `gpui-pre-*` crates, with a rebase gate: each weekly bump rebases
 the queue and must pass tiers 1-2 before it merges. `nd-os-*` crates consume the patched APIs; they
 own no protocol objects, and plug into `nd-backend-gpui` through its `OsHooks` trait (window

@@ -8,7 +8,7 @@
 # through a generated [patch.crates-io] block.
 #
 #   apply            create the fork branch in the zed checkout: snapshot + queue (no-op if it exists)
-#   export           write the fork branch's commits back into the queue and push the branch to the fork
+#   export           write the fork branch's commits back into the queue and push the branch to the fork, as itself and as main
 #   vendor           regenerate crates/nd-gpui/vendor and the [patch.crates-io] block from the queue
 #   bump <version> <fast version>
 #                    rebase the fork branch onto the snapshot of gpui-pre <version>, move the pins
@@ -193,8 +193,8 @@ cmd_export() {
     git -C "$zed" format-patch --zero-commit --no-signature -o "$fork_dir/patches" "$rev..$branch" | xargs -n1 basename
   } >"$series.new"
   mv "$series.new" "$series"
-  git -C "$zed" push -q --force "$(get fork)" "$branch"
-  say "exported $(queue | wc -l | tr -d ' ') patch(es), pushed $branch to $(get fork)"
+  git -C "$zed" push -q --force "$(get fork)" "$branch" "$branch:main"
+  say "exported $(queue | wc -l | tr -d ' ') patch(es), pushed $branch and main to $(get fork)"
 }
 
 cmd_vendor() {
