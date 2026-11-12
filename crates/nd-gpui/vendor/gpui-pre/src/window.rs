@@ -4548,7 +4548,10 @@ impl Window {
         result
     }
 
-    pub(crate) fn with_element_opacity<R>(
+    /// Fades everything `f` paints by `opacity`, on top of any opacity already in effect.
+    /// Elements take theirs from [`crate::Style::opacity`]; a painter drawing on its own (a
+    /// compositor laying out surfaces) passes it here.
+    pub fn with_element_opacity<R>(
         &mut self,
         opacity: Option<f32>,
         f: impl FnOnce(&mut Self) -> R,
@@ -8518,6 +8521,33 @@ mod tests {
             };
             assert_eq!(shadow.inset, 2);
             assert!(scene.backdrops[0].order < shadow.order);
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_a_painter_fades_a_backdrop_with_the_element_opacity(cx: &mut TestAppContext) {
+        struct Faded;
+
+        impl Render for Faded {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                canvas(
+                    |_, _, _| (),
+                    |bounds, (), window, _| {
+                        window.with_element_opacity(Some(0.5), |window| {
+                            let filter = crate::BackdropFilter::blur(px(10.));
+                            window.paint_backdrop(bounds, Default::default(), &filter);
+                        })
+                    },
+                )
+                .size(px(100.))
+            }
+        }
+
+        let window = cx.add_window(|_, _| Faded);
+        cx.update_window(window.into(), |_, window, cx| {
+            window.draw(cx).clear(cx);
+            assert_eq!(window.rendered_frame.scene.backdrops[0].opacity, 0.5);
         })
         .unwrap();
     }
