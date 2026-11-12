@@ -1987,7 +1987,73 @@ mod tests {
             highlight: 0.,
             highlight_width: ScaledPixels(1.),
             sample_limit: None,
+            opacity: 1.,
+            fallback: gpui::Hsla::transparent_black(),
         }
+    }
+
+    #[test]
+    fn headless_renderer_fades_a_backdrop_with_its_opacity() -> Result<()> {
+        let mut renderer = MetalRenderer::new_headless(Default::default())?;
+        let mut scene = Scene::default();
+        scene.insert_primitive(solid_quad(0., 64., gpui::red()));
+        let white = gpui::Hsla { a: 0.5, ..gpui::white() };
+        scene.insert_primitive(gpui::Backdrop { opacity: 0.5, ..backdrop(0., 64., 6., white) });
+        scene.finish();
+
+        let image = renderer.render_scene_to_image(&scene, size(DevicePixels(64), DevicePixels(32)))?;
+        assert_pixel(&image, 8, 16, [255, 64, 64, 255]);
+        Ok(())
+    }
+
+    #[test]
+    fn headless_renderer_composites_a_batch_with_nothing_to_blur() -> Result<()> {
+        let mut renderer = MetalRenderer::new_headless(Default::default())?;
+        let mut scene = Scene::default();
+        scene.insert_primitive(solid_quad(0., 64., gpui::red()));
+        let white = gpui::Hsla { a: 0.5, ..gpui::white() };
+        let desktop = gpui::Backdrop { source: gpui::BackdropSource::Desktop, ..backdrop(0., 64., 6., white) };
+        scene.insert_primitive(desktop);
+        scene.finish();
+
+        let image = renderer.render_scene_to_image(&scene, size(DevicePixels(64), DevicePixels(32)))?;
+        // The window's content is cleared under a desktop backdrop and its tint laid alone.
+        let [r, g, b, a] = image.get_pixel(8, 16).0;
+        assert!(a.abs_diff(128) <= 3 && r == g && g == b, "pixel was {r} {g} {b} {a}");
+        Ok(())
+    }
+
+    #[test]
+    fn headless_renderer_keeps_an_outside_shadow_off_its_element() -> Result<()> {
+        let mut renderer = MetalRenderer::new_headless(Default::default())?;
+        let mut scene = Scene::default();
+        scene.insert_primitive(solid_quad(0., 64., gpui::white()));
+        let element = Bounds {
+            origin: point(ScaledPixels(16.), ScaledPixels(0.)),
+            size: size(ScaledPixels(32.), ScaledPixels(32.)),
+        };
+        let frame = Bounds {
+            origin: point(ScaledPixels(0.), ScaledPixels(0.)),
+            size: size(ScaledPixels(64.), ScaledPixels(32.)),
+        };
+        scene.insert_primitive(gpui::Shadow {
+            order: 0,
+            blur_radius: ScaledPixels(0.),
+            bounds: Bounds { origin: point(ScaledPixels(24.), ScaledPixels(0.)), ..element },
+            corner_radii: Default::default(),
+            content_mask: ContentMask { bounds: frame },
+            color: gpui::black(),
+            element_bounds: element,
+            element_corner_radii: Default::default(),
+            inset: 2,
+            pad: 0,
+        });
+        scene.finish();
+
+        let image = renderer.render_scene_to_image(&scene, size(DevicePixels(64), DevicePixels(32)))?;
+        assert_pixel(&image, 32, 16, [255, 255, 255, 255]);
+        assert_pixel(&image, 52, 16, [0, 0, 0, 255]);
+        Ok(())
     }
 
     fn assert_pixel(image: &RgbaImage, x: u32, y: u32, expected: [u8; 4]) {

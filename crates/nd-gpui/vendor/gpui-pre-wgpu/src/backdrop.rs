@@ -37,7 +37,7 @@ struct Params {
     // 0 composites the blur, 1 clears the shape, 2 lays the tint alone.
     mode: u32,
     has_source: u32,
-    pad: u32,
+    opacity: f32,
 }
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -139,7 +139,7 @@ fn fs_composite(in: Varyings) -> @location(0) vec4<f32> {
         discard;
     }
     if (params.mode == 1u) {
-        return vec4<f32>(0.0, 0.0, 0.0, coverage);
+        return vec4<f32>(0.0, 0.0, 0.0, coverage * params.opacity);
     }
 
     var color = vec4<f32>(0.0);
@@ -164,7 +164,7 @@ fn fs_composite(in: Varyings) -> @location(0) vec4<f32> {
         let add = saturate(params.highlight * rim * light);
         color = vec4<f32>(color.rgb + add * (1.0 - color.rgb), color.a + add * (1.0 - color.a));
     }
-    return color * coverage;
+    return color * coverage * params.opacity;
 }
 "#;
 
@@ -190,7 +190,7 @@ struct Params {
     highlight_width: f32,
     mode: u32,
     has_source: u32,
-    pad: u32,
+    opacity: f32,
 }
 
 const _: () = assert!(std::mem::offset_of!(Params, radii) == 96 && std::mem::size_of::<Params>() == 144);
@@ -534,7 +534,12 @@ impl Backdrops {
 
         let mut composites = Vec::with_capacity(backdrops.len());
         for (backdrop, region) in backdrops.iter().zip(&regions) {
-            let tint = Rgba::from(backdrop.tint);
+            // A surface without COPY_SRC (wgpu's GL backend offers none) cannot be blurred.
+            let tint = if backdrop.source == BackdropSource::Window && !has_source {
+                backdrop.unblurred_tint()
+            } else {
+                Rgba::from(backdrop.tint)
+            };
             let mask = backdrop.content_mask.bounds;
             let radii = backdrop.corner_radii;
             let mut p = Params {
@@ -552,6 +557,7 @@ impl Backdrops {
                 saturation: backdrop.saturation,
                 highlight: backdrop.highlight,
                 highlight_width: backdrop.highlight_width.0,
+                opacity: backdrop.opacity,
                 ..base
             };
             if let Some(r) = region {

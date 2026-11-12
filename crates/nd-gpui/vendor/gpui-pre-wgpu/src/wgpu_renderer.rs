@@ -199,7 +199,8 @@ struct WgpuResources {
     path_intermediate_view: Option<wgpu::TextureView>,
     path_msaa_texture: Option<wgpu::Texture>,
     path_msaa_view: Option<wgpu::TextureView>,
-    backdrops: crate::backdrop::Backdrops,
+    /// Built by the first frame that draws a backdrop.
+    backdrops: Option<crate::backdrop::Backdrops>,
 }
 
 struct CachedTextureBindGroup {
@@ -273,6 +274,9 @@ pub struct WgpuRenderer {
     /// Draws the frames of a live resize, while the surface is larger than the drawable.
     edge_extend: Option<EdgeExtend>,
     needs_redraw: bool,
+    /// Whether the surface can be copied from, which backdrops need: it is configured so the
+    /// first time a frame draws one.
+    surface_copy_src: bool,
 }
 
 /// How far a live resize lets the surface outgrow the drawable before it reconfigures, in device
@@ -725,11 +729,8 @@ impl WgpuRenderer {
             );
         }
 
-        // Backdrops copy what the frame has drawn so far out of it.
-        let usage = wgpu::TextureUsages::RENDER_ATTACHMENT
-            | (surface_caps.usages & wgpu::TextureUsages::COPY_SRC);
         let surface_config = wgpu::SurfaceConfiguration {
-            usage,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,
             color_space: wgpu::SurfaceColorSpace::Auto,
             width: clamped_width.max(1),
@@ -763,6 +764,10 @@ impl WgpuRenderer {
             surface.configure(&context.device, &surface_config);
         }
 
+        let surface_copy_src = surface
+            .get_capabilities(&context.adapter)
+            .usages
+            .contains(wgpu::TextureUsages::COPY_SRC);
         let surface_format = surface_config.format;
         let alpha_mode = surface_config.alpha_mode;
         let max_texture_size = context.device.limits().max_texture_dimension_2d;
@@ -788,6 +793,7 @@ impl WgpuRenderer {
             observed_error_generation: 0,
             last_surface_error: None,
             needs_redraw: false,
+            surface_copy_src,
         })
     }
 }
@@ -1529,6 +1535,14 @@ impl WgpuRenderer {
             self.failed_frame_count = 0;
         }
 
+        if self.surface_copy_src
+            && !self.surface_config.usage.contains(wgpu::TextureUsages::COPY_SRC)
+            && scene.backdrops.iter().any(|b| b.source == gpui::BackdropSource::Window)
+        {
+            self.surface_config.usage |= wgpu::TextureUsages::COPY_SRC;
+            surface.configure(&core.resources.device, &self.surface_config);
+        }
+
         let frame = match surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame) => frame,
             wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
@@ -1751,8 +1765,6 @@ impl WgpuRendererCore {
         });
         let max_texture_size = device.limits().max_texture_dimension_2d;
 
-        let backdrops = crate::backdrop::Backdrops::new(&device, target_format);
-
         Self {
             resources: WgpuResources {
                 device,
@@ -1769,7 +1781,7 @@ impl WgpuRendererCore {
                 path_intermediate_view: None,
                 path_msaa_texture: None,
                 path_msaa_view: None,
-                backdrops,
+                backdrops: None,
             },
             atlas,
             path_globals_offset,
@@ -1918,7 +1930,11 @@ impl WgpuRendererCore {
         self.prepare_texture_bind_groups(scene);
         if !scene.backdrops.is_empty() {
             let device = Arc::clone(&self.resources.device);
-            self.resources.backdrops.begin_frame(&device, &scene.backdrops);
+            let format = self.target_format;
+            self.resources
+                .backdrops
+                .get_or_insert_with(|| crate::backdrop::Backdrops::new(&device, format))
+                .begin_frame(&device, &scene.backdrops);
         }
 
         let mut encoder =
@@ -2038,7 +2054,9 @@ impl WgpuRendererCore {
                     PrimitiveBatch::Backdrops(range) => {
                         drop(pass);
                         let resources = &mut self.resources;
-                        let prepared = resources.backdrops.prepare(
+                        let backdrops =
+                            resources.backdrops.as_mut().expect("built by the frame's first backdrop");
+                        let prepared = backdrops.prepare(
                             &resources.device,
                             &resources.queue,
                             &mut encoder,
@@ -2059,7 +2077,9 @@ impl WgpuRendererCore {
                             depth_stencil_attachment: None,
                             ..Default::default()
                         });
-                        self.resources.backdrops.composite(&prepared, &mut pass);
+                        if let Some(backdrops) = &self.resources.backdrops {
+                            backdrops.composite(&prepared, &mut pass);
+                        }
                     }
                 }
             }
@@ -3377,7 +3397,72 @@ mod tests {
             highlight: 0.,
             highlight_width: ScaledPixels(1.),
             sample_limit: None,
+            opacity: 1.,
+            fallback: Hsla::transparent_black(),
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn headless_renderer_fades_a_backdrop_with_its_opacity() -> anyhow::Result<()> {
+        let mut renderer = WgpuHeadlessRenderer::new()?;
+        let mut scene = Scene::default();
+        scene.insert_primitive(solid_quad(0.0, 0.0, 64.0, 32.0, gpui::red()));
+        let white = Hsla { a: 0.5, ..gpui::white() };
+        scene.insert_primitive(gpui::Backdrop { opacity: 0.5, ..backdrop(0.0, 0.0, 64.0, 32.0, 6.0, white) });
+        scene.finish();
+
+        let image = renderer.render_scene_to_image(&scene, device_size(64, 32))?;
+        assert_pixel(&image, 8, 16, [255, 64, 64, 255]);
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn headless_renderer_keeps_an_outside_shadow_off_its_element() -> anyhow::Result<()> {
+        let mut renderer = WgpuHeadlessRenderer::new()?;
+        let mut scene = Scene::default();
+        let frame = solid_quad(0.0, 0.0, 64.0, 32.0, gpui::white());
+        let element = solid_quad(16.0, 0.0, 32.0, 32.0, gpui::white()).bounds;
+        let content_mask = frame.content_mask.clone();
+        scene.insert_primitive(frame);
+        scene.insert_primitive(Shadow {
+            order: 0,
+            blur_radius: ScaledPixels(0.0),
+            bounds: solid_quad(24.0, 0.0, 32.0, 32.0, gpui::white()).bounds,
+            corner_radii: Corners::default(),
+            content_mask,
+            color: gpui::black(),
+            element_bounds: element,
+            element_corner_radii: Corners::default(),
+            inset: 2,
+            pad: 0,
+        });
+        scene.finish();
+
+        let image = renderer.render_scene_to_image(&scene, device_size(64, 32))?;
+        assert_pixel(&image, 32, 16, [255, 255, 255, 255]);
+        assert_pixel(&image, 52, 16, [0, 0, 0, 255]);
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn headless_renderer_builds_backdrop_pipelines_for_the_first_backdrop() -> anyhow::Result<()> {
+        let mut renderer = WgpuHeadlessRenderer::new()?;
+        let mut scene = Scene::default();
+        scene.insert_primitive(solid_quad(0.0, 0.0, 64.0, 32.0, gpui::red()));
+        scene.finish();
+        renderer.render_scene_to_image(&scene, device_size(64, 32))?;
+        assert!(renderer.core.resources.backdrops.is_none());
+
+        let mut scene = Scene::default();
+        scene.insert_primitive(solid_quad(0.0, 0.0, 64.0, 32.0, gpui::red()));
+        scene.insert_primitive(backdrop(0.0, 0.0, 64.0, 32.0, 6.0, Hsla::transparent_black()));
+        scene.finish();
+        renderer.render_scene_to_image(&scene, device_size(64, 32))?;
+        assert!(renderer.core.resources.backdrops.is_some());
+        Ok(())
     }
 
     #[cfg(target_os = "linux")]

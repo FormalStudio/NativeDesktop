@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AtlasTextureId, AtlasTile, Background, Bounds, ContentMask, Corners, Edges, Hsla, Pixels,
-    Point, Radians, ScaledPixels, Size, bounds_tree::BoundsTree, point,
+    Point, Radians, Rgba, ScaledPixels, Size, bounds_tree::BoundsTree, point,
 };
 use std::{
     fmt::Debug,
@@ -493,10 +493,12 @@ impl<'a> Iterator for BatchIterator<'a> {
             PrimitiveKind::Backdrop => {
                 let backdrops_start = self.backdrops_start;
                 let mut backdrops_end = backdrops_start + 1;
-                self.backdrops_iter.next();
+                let first_order = self.backdrops_iter.next().map(|backdrop| backdrop.order);
+                // Only backdrops of one order have disjoint sample regions (BoundsTree), so
+                // only they may read one copy of the frame and share the scratch textures.
                 while self
                     .backdrops_iter
-                    .next_if(|backdrop| (backdrop.order, batch_kind) < max_order_and_kind)
+                    .next_if(|backdrop| Some(backdrop.order) == first_order)
                     .is_some()
                 {
                     backdrops_end += 1;
@@ -627,7 +629,8 @@ pub struct Shadow {
     pub color: Hsla,
     pub element_bounds: Bounds<ScaledPixels>,
     pub element_corner_radii: Corners<ScaledPixels>,
-    /// 0 = drop shadow (rendered outside the element), 1 = inset shadow (rendered inside).
+    /// 0 = drop shadow, 1 = inset shadow (rendered inside the element), 2 = drop shadow
+    /// rendered outside the element only.
     pub inset: u32,
     pub pad: u32, // align to 8 bytes
 }
@@ -673,6 +676,10 @@ pub struct Backdrop {
     pub highlight_width: ScaledPixels,
     /// The most the blur may read, from [`BackdropFilter::within`].
     pub sample_limit: Option<Bounds<ScaledPixels>>,
+    /// The element's opacity, scaling the whole composite: blur, tint and rim.
+    pub opacity: f32,
+    /// Laid under the tint instead of the blur where the renderer cannot read the window.
+    pub fallback: Hsla,
 }
 
 impl Backdrop {
@@ -687,6 +694,18 @@ impl Backdrop {
             Some(limit) => sample.intersect(&limit),
             None => sample,
         }
+    }
+
+    /// The tint over the fallback, as one colour: what a renderer lays instead of the blur where
+    /// it cannot read the window.
+    pub fn unblurred_tint(&self) -> Rgba {
+        let (tint, under) = (Rgba::from(self.tint), Rgba::from(self.fallback));
+        let a = tint.a + under.a * (1. - tint.a);
+        if a <= 0. {
+            return tint;
+        }
+        let mix = |t: f32, u: f32| (t * tint.a + u * under.a * (1. - tint.a)) / a;
+        Rgba { r: mix(tint.r, under.r), g: mix(tint.g, under.g), b: mix(tint.b, under.b), a }
     }
 
     /// How far renderers shrink the sample region before the blur, a power of two that brings
@@ -1124,7 +1143,20 @@ mod tests {
             highlight: 0.,
             highlight_width: ScaledPixels(1.),
             sample_limit: None,
+            opacity: 1.,
+            fallback: Hsla::default(),
         }
+    }
+
+    #[test]
+    fn without_the_window_a_backdrop_lays_its_tint_over_its_fallback() {
+        let mut backdrop = backdrop(0., 10., 4.);
+        backdrop.tint = Hsla { a: 0.5, ..crate::white() };
+        backdrop.fallback = crate::black();
+        let c = backdrop.unblurred_tint();
+        assert!((c.r - 0.5).abs() < 1e-3 && (c.a - 1.).abs() < 1e-3, "{c:?}");
+        backdrop.fallback = Hsla::transparent_black();
+        assert_eq!(backdrop.unblurred_tint(), Rgba::from(backdrop.tint));
     }
 
     #[test]
@@ -1180,6 +1212,17 @@ mod tests {
         scene.insert_primitive(backdrop(500., 50., 4.));
         scene.finish();
         assert_eq!(kinds(&scene), ["quads", "backdrops"]);
+    }
+
+    #[test]
+    fn overlapping_backdrops_with_nothing_between_take_a_batch_each() {
+        let mut scene = Scene::default();
+        scene.insert_primitive(quad(0., 1000.));
+        scene.insert_primitive(backdrop(0., 100., 4.));
+        scene.insert_primitive(backdrop(20., 40., 4.));
+        scene.finish();
+        assert!(scene.backdrops[0].order < scene.backdrops[1].order);
+        assert_eq!(kinds(&scene), ["quads", "backdrops", "backdrops"]);
     }
 
     #[test]

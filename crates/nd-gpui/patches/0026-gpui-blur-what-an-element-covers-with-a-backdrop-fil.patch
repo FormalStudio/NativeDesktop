@@ -6,20 +6,23 @@ Subject: [PATCH 26/26] gpui: blur what an element covers with a backdrop
 
 ---
  crates/gpui/src/platform.rs                   |   5 +
- crates/gpui/src/scene.rs                      | 226 +++++-
- crates/gpui/src/style.rs                      |  98 ++-
+ crates/gpui/src/scene.rs                      | 273 ++++++-
+ crates/gpui/src/style.rs                      | 104 ++-
  crates/gpui/src/styled.rs                     |   8 +-
- crates/gpui/src/window.rs                     |  48 +-
+ crates/gpui/src/window.rs                     | 104 ++-
  crates/gpui_apple/src/gpui_apple.rs           |   1 +
- crates/gpui_apple/src/metal_backdrop.rs       | 538 ++++++++++++++
- crates/gpui_apple/src/metal_renderer.rs       | 104 +++
+ crates/gpui_apple/src/metal_backdrop.rs       | 555 ++++++++++++++
+ crates/gpui_apple/src/metal_renderer.rs       | 170 +++++
+ crates/gpui_apple/src/shaders.metal           |   8 +-
  crates/gpui_linux/src/linux/wayland/window.rs | 113 ++-
- crates/gpui_wgpu/src/backdrop.rs              | 698 ++++++++++++++++++
+ crates/gpui_wgpu/src/backdrop.rs              | 704 ++++++++++++++++++
  crates/gpui_wgpu/src/gpui_wgpu.rs             |   1 +
- crates/gpui_wgpu/src/wgpu_renderer.rs         | 138 +++-
- crates/gpui_windows/src/directx_backdrop.rs   | 512 +++++++++++++
+ crates/gpui_wgpu/src/shaders.wgsl             |  14 +-
+ crates/gpui_wgpu/src/wgpu_renderer.rs         | 221 +++++-
+ crates/gpui_windows/src/directx_backdrop.rs   | 513 +++++++++++++
  crates/gpui_windows/src/directx_renderer.rs   |  24 +
- 14 files changed, 2468 insertions(+), 46 deletions(-)
+ crates/gpui_windows/src/shaders.hlsl          |   8 +-
+ 17 files changed, 2768 insertions(+), 58 deletions(-)
  create mode 100644 crates/gpui_apple/src/metal_backdrop.rs
  create mode 100644 crates/gpui_wgpu/src/backdrop.rs
  create mode 100644 crates/gpui_windows/src/directx_backdrop.rs
@@ -41,9 +44,18 @@ index b9b48db..43d904d 100644
      fn zoom(&self);
      fn toggle_fullscreen(&self);
 diff --git a/crates/gpui/src/scene.rs b/crates/gpui/src/scene.rs
-index 6992dc0..f8dfe1a 100644
+index 6992dc0..86eb046 100644
 --- a/crates/gpui/src/scene.rs
 +++ b/crates/gpui/src/scene.rs
+@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
+ 
+ use crate::{
+     AtlasTextureId, AtlasTile, Background, Bounds, ContentMask, Corners, Edges, Hsla, Pixels,
+-    Point, Radians, ScaledPixels, Size, bounds_tree::BoundsTree, point,
++    Point, Radians, Rgba, ScaledPixels, Size, bounds_tree::BoundsTree, point,
+ };
+ use std::{
+     fmt::Debug,
 @@ -50,6 +50,7 @@ pub struct Scene {
      pub subpixel_sprites: Vec<SubpixelSprite>,
      pub polychrome_sprites: Vec<PolychromeSprite>,
@@ -167,17 +179,19 @@ index 6992dc0..f8dfe1a 100644
              (
                  self.shadows_iter.peek().map(|s| s.order),
                  PrimitiveKind::Shadow,
-@@ -461,6 +490,20 @@ impl<'a> Iterator for BatchIterator<'a> {
+@@ -461,6 +490,22 @@ impl<'a> Iterator for BatchIterator<'a> {
                  self.surfaces_start = surfaces_end;
                  Some(PrimitiveBatch::Surfaces(surfaces_start..surfaces_end))
              }
 +            PrimitiveKind::Backdrop => {
 +                let backdrops_start = self.backdrops_start;
 +                let mut backdrops_end = backdrops_start + 1;
-+                self.backdrops_iter.next();
++                let first_order = self.backdrops_iter.next().map(|backdrop| backdrop.order);
++                // Only backdrops of one order have disjoint sample regions (BoundsTree), so
++                // only they may read one copy of the frame and share the scratch textures.
 +                while self
 +                    .backdrops_iter
-+                    .next_if(|backdrop| (backdrop.order, batch_kind) < max_order_and_kind)
++                    .next_if(|backdrop| Some(backdrop.order) == first_order)
 +                    .is_some()
 +                {
 +                    backdrops_end += 1;
@@ -188,7 +202,7 @@ index 6992dc0..f8dfe1a 100644
          }
      }
  }
-@@ -493,6 +536,9 @@ pub enum PrimitiveBatch {
+@@ -493,6 +538,9 @@ pub enum PrimitiveBatch {
          range: Range<usize>,
      },
      Surfaces(Range<usize>),
@@ -198,7 +212,7 @@ index 6992dc0..f8dfe1a 100644
  }
  
  impl PrimitiveBatch {
-@@ -525,6 +571,7 @@ impl PrimitiveBatch {
+@@ -525,6 +573,7 @@ impl PrimitiveBatch {
                  )
              }
              Self::Surfaces(range) => format!("surfaces ({})", range.len()),
@@ -206,7 +220,17 @@ index 6992dc0..f8dfe1a 100644
          }
      }
  }
-@@ -591,6 +638,74 @@ impl From<Shadow> for Primitive {
+@@ -580,7 +629,8 @@ pub struct Shadow {
+     pub color: Hsla,
+     pub element_bounds: Bounds<ScaledPixels>,
+     pub element_corner_radii: Corners<ScaledPixels>,
+-    /// 0 = drop shadow (rendered outside the element), 1 = inset shadow (rendered inside).
++    /// 0 = drop shadow, 1 = inset shadow (rendered inside the element), 2 = drop shadow
++    /// rendered outside the element only.
+     pub inset: u32,
+     pub pad: u32, // align to 8 bytes
+ }
+@@ -591,6 +641,90 @@ impl From<Shadow> for Primitive {
      }
  }
  
@@ -245,6 +269,10 @@ index 6992dc0..f8dfe1a 100644
 +    pub highlight_width: ScaledPixels,
 +    /// The most the blur may read, from [`BackdropFilter::within`].
 +    pub sample_limit: Option<Bounds<ScaledPixels>>,
++    /// The element's opacity, scaling the whole composite: blur, tint and rim.
++    pub opacity: f32,
++    /// Laid under the tint instead of the blur where the renderer cannot read the window.
++    pub fallback: Hsla,
 +}
 +
 +impl Backdrop {
@@ -259,6 +287,18 @@ index 6992dc0..f8dfe1a 100644
 +            Some(limit) => sample.intersect(&limit),
 +            None => sample,
 +        }
++    }
++
++    /// The tint over the fallback, as one colour: what a renderer lays instead of the blur where
++    /// it cannot read the window.
++    pub fn unblurred_tint(&self) -> Rgba {
++        let (tint, under) = (Rgba::from(self.tint), Rgba::from(self.fallback));
++        let a = tint.a + under.a * (1. - tint.a);
++        if a <= 0. {
++            return tint;
++        }
++        let mix = |t: f32, u: f32| (t * tint.a + u * under.a * (1. - tint.a)) / a;
++        Rgba { r: mix(tint.r, under.r), g: mix(tint.g, under.g), b: mix(tint.b, under.b), a }
 +    }
 +
 +    /// How far renderers shrink the sample region before the blur, a power of two that brings
@@ -281,7 +321,7 @@ index 6992dc0..f8dfe1a 100644
  /// The style of a border.
  #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
  #[repr(C)]
-@@ -975,3 +1090,104 @@ impl PathVertex<Pixels> {
+@@ -975,3 +1109,128 @@ impl PathVertex<Pixels> {
          }
      }
  }
@@ -319,7 +359,20 @@ index 6992dc0..f8dfe1a 100644
 +            highlight: 0.,
 +            highlight_width: ScaledPixels(1.),
 +            sample_limit: None,
++            opacity: 1.,
++            fallback: Hsla::default(),
 +        }
++    }
++
++    #[test]
++    fn without_the_window_a_backdrop_lays_its_tint_over_its_fallback() {
++        let mut backdrop = backdrop(0., 10., 4.);
++        backdrop.tint = Hsla { a: 0.5, ..crate::white() };
++        backdrop.fallback = crate::black();
++        let c = backdrop.unblurred_tint();
++        assert!((c.r - 0.5).abs() < 1e-3 && (c.a - 1.).abs() < 1e-3, "{c:?}");
++        backdrop.fallback = Hsla::transparent_black();
++        assert_eq!(backdrop.unblurred_tint(), Rgba::from(backdrop.tint));
 +    }
 +
 +    #[test]
@@ -378,6 +431,17 @@ index 6992dc0..f8dfe1a 100644
 +    }
 +
 +    #[test]
++    fn overlapping_backdrops_with_nothing_between_take_a_batch_each() {
++        let mut scene = Scene::default();
++        scene.insert_primitive(quad(0., 1000.));
++        scene.insert_primitive(backdrop(0., 100., 4.));
++        scene.insert_primitive(backdrop(20., 40., 4.));
++        scene.finish();
++        assert!(scene.backdrops[0].order < scene.backdrops[1].order);
++        assert_eq!(kinds(&scene), ["quads", "backdrops", "backdrops"]);
++    }
++
++    #[test]
 +    fn a_wide_blur_is_downsampled_to_a_dozen_taps() {
 +        assert_eq!(backdrop(0., 10., 0.).downsample_factor(), 1);
 +        assert_eq!(backdrop(0., 10., 4.).downsample_factor(), 1);
@@ -387,7 +451,7 @@ index 6992dc0..f8dfe1a 100644
 +    }
 +}
 diff --git a/crates/gpui/src/style.rs b/crates/gpui/src/style.rs
-index 323c79e..1a4d001 100644
+index 323c79e..bf1f08c 100644
 --- a/crates/gpui/src/style.rs
 +++ b/crates/gpui/src/style.rs
 @@ -5,7 +5,7 @@ use std::{
@@ -409,7 +473,7 @@ index 323c79e..1a4d001 100644
      /// The text style of this element
      #[refineable]
      pub text: TextStyleRefinement,
-@@ -344,6 +347,94 @@ pub enum Visibility {
+@@ -344,6 +347,95 @@ pub enum Visibility {
      Hidden,
  }
  
@@ -432,9 +496,10 @@ index 323c79e..1a4d001 100644
 +    /// Painted instead where the source cannot be blurred: a desktop backdrop in an opaque
 +    /// window or on a compositor without a blur protocol.
 +    pub fallback: Hsla,
-+    /// The window's area the blur may read, its edge repeated beyond them; `None` reads the
-+    /// whole frame. Set it to the content's bounds when a frame draws a shadow or nothing around
-+    /// them, so an element at the content's edge does not blur that in.
++    /// The area the blur may read, its edge repeated beyond it; `None` reads the whole frame.
++    /// In the coordinates of the bounds given to `paint_backdrop`, so an element scale applies
++    /// to it as to them. Set it to the content's bounds when a frame draws a shadow or nothing
++    /// around them, so an element at the content's edge does not blur that in.
 +    #[serde(skip)]
 +    pub within: Option<Bounds<Pixels>>,
 +}
@@ -494,7 +559,7 @@ index 323c79e..1a4d001 100644
 +        self
 +    }
 +
-+    /// Limits what the blur reads to `bounds`, in window coordinates.
++    /// Limits what the blur reads to `bounds`, in the coordinates of the element's bounds.
 +    pub fn within(mut self, bounds: Bounds<Pixels>) -> Self {
 +        self.within = Some(bounds);
 +        self
@@ -504,18 +569,23 @@ index 323c79e..1a4d001 100644
  /// The possible values of the box-shadow property
  #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
  pub struct BoxShadow {
-@@ -710,6 +801,10 @@ impl Style {
+@@ -708,7 +800,14 @@ impl Style {
+             .to_pixels(rem_size)
+             .clamp_radii_for_quad_size(bounds.size);
  
-         window.paint_drop_shadows(bounds, corner_radii, &self.box_shadow);
- 
+-        window.paint_drop_shadows(bounds, corner_radii, &self.box_shadow);
++        // A backdrop must not blur its own element's shadow (macOS glass does not), so the
++        // shadow goes on after it, outside the shape the backdrop shows through.
 +        if let Some(backdrop) = &self.backdrop {
 +            window.paint_backdrop(bounds, corner_radii, backdrop);
++            window.paint_drop_shadows_outside(bounds, corner_radii, &self.box_shadow);
++        } else {
++            window.paint_drop_shadows(bounds, corner_radii, &self.box_shadow);
 +        }
-+
+ 
          let background_color = self.background.as_ref().and_then(Fill::color);
          if background_color.is_some_and(|color| !color.is_transparent()) {
-             let mut border_color = match background_color {
-@@ -806,6 +901,7 @@ impl Default for Style {
+@@ -806,6 +905,7 @@ impl Default for Style {
              border_style: BorderStyle::default(),
              corner_radii: Corners::default(),
              box_shadow: Default::default(),
@@ -548,7 +618,7 @@ index aa77a20..281269b 100644
      fn opacity(mut self, opacity: f32) -> Self {
          self.style().opacity = Some(opacity);
 diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
-index 20fdcb0..ca8df32 100644
+index 20fdcb0..18112b9 100644
 --- a/crates/gpui/src/window.rs
 +++ b/crates/gpui/src/window.rs
 @@ -8,7 +8,8 @@ use crate::subscription::SingleSubscriberSet;
@@ -561,7 +631,43 @@ index 20fdcb0..ca8df32 100644
      Capslock, Context, Corners, CursorHideMode, CursorStyle, Decorations, DevicePixels,
      DispatchActionListener, DispatchNodeId, DispatchTree, DisplayId, Edges, Effect, Entity,
      EntityId, EventEmitter, FileDropEvent, FontId, Global, GlobalElementId, GlyphId, GpuSpecs,
-@@ -4967,6 +4968,51 @@ impl Window {
+@@ -4939,6 +4940,28 @@ impl Window {
+         bounds: Bounds<Pixels>,
+         corner_radii: Corners<Pixels>,
+         shadows: &[BoxShadow],
++    ) {
++        self.insert_drop_shadows(bounds, corner_radii, shadows, 0);
++    }
++
++    /// Like [`Self::paint_drop_shadows`], but keeps the shadows outside the element's shape,
++    /// for an element whose backdrop must not blur its own shadow. Paint them after
++    /// [`Self::paint_backdrop`].
++    pub fn paint_drop_shadows_outside(
++        &mut self,
++        bounds: Bounds<Pixels>,
++        corner_radii: Corners<Pixels>,
++        shadows: &[BoxShadow],
++    ) {
++        self.insert_drop_shadows(bounds, corner_radii, shadows, 2);
++    }
++
++    fn insert_drop_shadows(
++        &mut self,
++        bounds: Bounds<Pixels>,
++        corner_radii: Corners<Pixels>,
++        shadows: &[BoxShadow],
++        kind: u32,
+     ) {
+         self.invalidator.debug_assert_paint();
+ 
+@@ -4961,12 +4984,62 @@ impl Window {
+                 color: shadow.color.opacity(opacity),
+                 element_bounds,
+                 element_corner_radii,
+-                inset: 0,
++                inset: kind,
+                 pad: 0,
+             });
          }
      }
  
@@ -595,6 +701,9 @@ index 20fdcb0..ca8df32 100644
 +
 +        let scale_factor = self.length_scale();
 +        let opacity = self.element_opacity();
++        if opacity <= 0. {
++            return;
++        }
 +        self.next_frame.scene.insert_primitive(Backdrop {
 +            order: 0,
 +            source: filter.source,
@@ -603,16 +712,52 @@ index 20fdcb0..ca8df32 100644
 +            corner_radii: corner_radii.scale(scale_factor),
 +            blur_radius: filter.blur_radius.scale(scale_factor),
 +            saturation: filter.saturation,
-+            tint: filter.tint.opacity(opacity),
-+            highlight: filter.highlight * opacity,
++            tint: filter.tint,
++            highlight: filter.highlight,
 +            highlight_width: filter.highlight_width.scale(scale_factor),
 +            sample_limit: filter.within.map(|within| self.snap_bounds(within)),
++            opacity,
++            fallback: filter.fallback,
 +        });
 +    }
 +
      /// Paint the inset shadows from `shadows` into the scene at the current z-index. Should
      /// be called after the element's background so the shadow layers on top of the fill.
      /// Drop shadows are skipped; paint those with [`Self::paint_drop_shadows`] before the background.
+@@ -8422,6 +8495,33 @@ mod tests {
+         });
+     }
+ 
++    #[gpui::test]
++    fn test_a_backdrop_blurs_before_its_shadow_paints_outside_it(cx: &mut TestAppContext) {
++        struct Glass;
++
++        impl Render for Glass {
++            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
++                let shadow = crate::BoxShadow::new(px(0.), px(3.), hsla(0., 0., 0., 0.1));
++                div()
++                    .size(px(100.))
++                    .shadow(vec![shadow.blur_radius(px(12.))])
++                    .backdrop(crate::BackdropFilter::blur(px(10.)))
++            }
++        }
++
++        let window = cx.add_window(|_, _| Glass);
++        cx.update_window(window.into(), |_, window, cx| {
++            window.draw(cx).clear(cx);
++            let scene = &window.rendered_frame.scene;
++            let [shadow] = scene.shadows.as_slice() else {
++                panic!("expected one shadow, got {}", scene.shadows.len());
++            };
++            assert_eq!(shadow.inset, 2);
++            assert!(scene.backdrops[0].order < shadow.order);
++        })
++        .unwrap();
++    }
++
+     #[gpui::test]
+     fn test_element_scale_maps_paint_and_hit_testing(cx: &mut TestAppContext) {
+         struct Scaled(Rc<Cell<Option<crate::HitboxId>>>);
 diff --git a/crates/gpui_apple/src/gpui_apple.rs b/crates/gpui_apple/src/gpui_apple.rs
 index 4ce5848..1d9375f 100644
 --- a/crates/gpui_apple/src/gpui_apple.rs
@@ -627,10 +772,10 @@ index 4ce5848..1d9375f 100644
  
 diff --git a/crates/gpui_apple/src/metal_backdrop.rs b/crates/gpui_apple/src/metal_backdrop.rs
 new file mode 100644
-index 0000000..f0d4e32
+index 0000000..8307a6f
 --- /dev/null
 +++ b/crates/gpui_apple/src/metal_backdrop.rs
-@@ -0,0 +1,538 @@
+@@ -0,0 +1,555 @@
 +//! Backdrops on Metal, the same passes as gpui_wgpu's `backdrop.rs`: each region is copied out of
 +//! the frame, box-downsampled, blurred across and down, then composited in its rounded bounds.
 +//! Intermediates keep each region at its own origin, so one frame-sized texture holds a batch.
@@ -673,7 +818,7 @@ index 0000000..f0d4e32
 +    float highlight_width;
 +    uint mode;
 +    uint has_source;
-+    uint pad;
++    float opacity;
 +};
 +
 +struct Varyings {
@@ -767,7 +912,7 @@ index 0000000..f0d4e32
 +        discard_fragment();
 +    }
 +    if (params.mode == 1u) {
-+        return float4(0.0, 0.0, 0.0, coverage);
++        return float4(0.0, 0.0, 0.0, coverage * params.opacity);
 +    }
 +
 +    float4 color = float4(0.0);
@@ -793,7 +938,7 @@ index 0000000..f0d4e32
 +        float add = saturate(params.highlight * rim * light);
 +        color = float4(color.rgb + add * (1.0 - color.rgb), color.a + add * (1.0 - color.a));
 +    }
-+    return color * coverage;
++    return color * coverage * params.opacity;
 +}
 +"#;
 +
@@ -819,7 +964,7 @@ index 0000000..f0d4e32
 +    highlight_width: f32,
 +    mode: u32,
 +    has_source: u32,
-+    pad: u32,
++    opacity: f32,
 +}
 +
 +const _: () = assert!(std::mem::offset_of!(Params, radii) == 96 && std::mem::size_of::<Params>() == 144);
@@ -867,6 +1012,8 @@ index 0000000..f0d4e32
 +    erase: Pipeline,
 +    /// The copy of the frame, and the two textures the blur ping-pongs between.
 +    scratch: Option<[Texture; 3]>,
++    /// Bound where a batch blurs nothing, for the texture the composite function declares.
++    placeholder: Texture,
 +}
 +
 +enum Blend {
@@ -913,6 +1060,18 @@ index 0000000..f0d4e32
 +                .newRenderPipelineStateWithDescriptor_error(&descriptor)
 +                .with_context(|| format!("creating {label} render pipeline"))
 +        };
++        let descriptor = MTLTextureDescriptor::new();
++        // SAFETY: A 1x1 2D texture.
++        unsafe {
++            descriptor.setWidth(1);
++            descriptor.setHeight(1);
++        }
++        descriptor.setPixelFormat(MTLPixelFormat::BGRA8Unorm);
++        descriptor.setStorageMode(MTLStorageMode::Private);
++        descriptor.setUsage(MTLTextureUsage::ShaderRead);
++        let placeholder = device
++            .newTextureWithDescriptor(&descriptor)
++            .context("allocating the backdrop placeholder texture")?;
 +        Ok(Self {
 +            region: pipeline(
 +                "backdrop_downsample",
@@ -934,6 +1093,7 @@ index 0000000..f0d4e32
 +                Blend::Erase,
 +            )?,
 +            scratch: None,
++            placeholder,
 +        })
 +    }
 +
@@ -1012,6 +1172,7 @@ index 0000000..f0d4e32
 +                saturation: backdrop.saturation,
 +                highlight: backdrop.highlight,
 +                highlight_width: backdrop.highlight_width.0,
++                opacity: backdrop.opacity,
 +                ..base
 +            };
 +            if let Some(r) = region {
@@ -1113,7 +1274,7 @@ index 0000000..f0d4e32
 +                    width: rw,
 +                    height: rh,
 +                });
-+                draw(&encoder, &params, Some(source));
++                draw(&encoder, &params, source);
 +            }
 +            encoder.endEncoding();
 +        }
@@ -1130,13 +1291,14 @@ index 0000000..f0d4e32
 +        prepared: &Prepared,
 +        encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>,
 +    ) {
++        let source = prepared.blurred.as_ref().unwrap_or(&self.placeholder);
 +        for (params, desktop) in &prepared.composites {
 +            if *desktop {
 +                encoder.setRenderPipelineState(&self.erase);
-+                draw(encoder, &Params { mode: 1, ..*params }, prepared.blurred.as_ref());
++                draw(encoder, &Params { mode: 1, ..*params }, source);
 +            }
 +            encoder.setRenderPipelineState(&self.composite);
-+            draw(encoder, params, prepared.blurred.as_ref());
++            draw(encoder, params, source);
 +        }
 +    }
 +}
@@ -1144,7 +1306,7 @@ index 0000000..f0d4e32
 +fn draw(
 +    encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>,
 +    params: &Params,
-+    source: Option<&Texture>,
++    source: &Texture,
 +) {
 +    // SAFETY: The bytes are a live `Params`, which matches the shader's packed `Params`, copied
 +    // into slot 0 of both stages; the texture is retained by the encoder.
@@ -1159,7 +1321,7 @@ index 0000000..f0d4e32
 +            mem::size_of::<Params>(),
 +            0,
 +        );
-+        encoder.setFragmentTexture_atIndex(source.map(|t| t.as_ref()), 0);
++        encoder.setFragmentTexture_atIndex(Some(source.as_ref()), 0);
 +        encoder.drawPrimitives_vertexStart_vertexCount(MTLPrimitiveType::TriangleStrip, 0, 4);
 +    }
 +}
@@ -1170,7 +1332,7 @@ index 0000000..f0d4e32
 +    blurred: Option<Texture>,
 +}
 diff --git a/crates/gpui_apple/src/metal_renderer.rs b/crates/gpui_apple/src/metal_renderer.rs
-index 9b98a23..30032bc 100644
+index 9b98a23..eb19f1b 100644
 --- a/crates/gpui_apple/src/metal_renderer.rs
 +++ b/crates/gpui_apple/src/metal_renderer.rs
 @@ -1,4 +1,5 @@
@@ -1223,7 +1385,7 @@ index 9b98a23..30032bc 100644
                  PrimitiveBatch::SubpixelSprites { .. } => unreachable!(),
              }
          }
-@@ -1929,6 +1953,86 @@ mod tests {
+@@ -1929,6 +1953,152 @@ mod tests {
      };
      use objc2_metal::MTLCommandBufferStatus;
  
@@ -1261,7 +1423,73 @@ index 9b98a23..30032bc 100644
 +            highlight: 0.,
 +            highlight_width: ScaledPixels(1.),
 +            sample_limit: None,
++            opacity: 1.,
++            fallback: gpui::Hsla::transparent_black(),
 +        }
++    }
++
++    #[test]
++    fn headless_renderer_fades_a_backdrop_with_its_opacity() -> Result<()> {
++        let mut renderer = MetalRenderer::new_headless(Default::default())?;
++        let mut scene = Scene::default();
++        scene.insert_primitive(solid_quad(0., 64., gpui::red()));
++        let white = gpui::Hsla { a: 0.5, ..gpui::white() };
++        scene.insert_primitive(gpui::Backdrop { opacity: 0.5, ..backdrop(0., 64., 6., white) });
++        scene.finish();
++
++        let image = renderer.render_scene_to_image(&scene, size(DevicePixels(64), DevicePixels(32)))?;
++        assert_pixel(&image, 8, 16, [255, 64, 64, 255]);
++        Ok(())
++    }
++
++    #[test]
++    fn headless_renderer_composites_a_batch_with_nothing_to_blur() -> Result<()> {
++        let mut renderer = MetalRenderer::new_headless(Default::default())?;
++        let mut scene = Scene::default();
++        scene.insert_primitive(solid_quad(0., 64., gpui::red()));
++        let white = gpui::Hsla { a: 0.5, ..gpui::white() };
++        let desktop = gpui::Backdrop { source: gpui::BackdropSource::Desktop, ..backdrop(0., 64., 6., white) };
++        scene.insert_primitive(desktop);
++        scene.finish();
++
++        let image = renderer.render_scene_to_image(&scene, size(DevicePixels(64), DevicePixels(32)))?;
++        // The window's content is cleared under a desktop backdrop and its tint laid alone.
++        let [r, g, b, a] = image.get_pixel(8, 16).0;
++        assert!(a.abs_diff(128) <= 3 && r == g && g == b, "pixel was {r} {g} {b} {a}");
++        Ok(())
++    }
++
++    #[test]
++    fn headless_renderer_keeps_an_outside_shadow_off_its_element() -> Result<()> {
++        let mut renderer = MetalRenderer::new_headless(Default::default())?;
++        let mut scene = Scene::default();
++        scene.insert_primitive(solid_quad(0., 64., gpui::white()));
++        let element = Bounds {
++            origin: point(ScaledPixels(16.), ScaledPixels(0.)),
++            size: size(ScaledPixels(32.), ScaledPixels(32.)),
++        };
++        let frame = Bounds {
++            origin: point(ScaledPixels(0.), ScaledPixels(0.)),
++            size: size(ScaledPixels(64.), ScaledPixels(32.)),
++        };
++        scene.insert_primitive(gpui::Shadow {
++            order: 0,
++            blur_radius: ScaledPixels(0.),
++            bounds: Bounds { origin: point(ScaledPixels(24.), ScaledPixels(0.)), ..element },
++            corner_radii: Default::default(),
++            content_mask: ContentMask { bounds: frame },
++            color: gpui::black(),
++            element_bounds: element,
++            element_corner_radii: Default::default(),
++            inset: 2,
++            pad: 0,
++        });
++        scene.finish();
++
++        let image = renderer.render_scene_to_image(&scene, size(DevicePixels(64), DevicePixels(32)))?;
++        assert_pixel(&image, 32, 16, [255, 255, 255, 255]);
++        assert_pixel(&image, 52, 16, [0, 0, 0, 255]);
++        Ok(())
 +    }
 +
 +    fn assert_pixel(image: &RgbaImage, x: u32, y: u32, expected: [u8; 4]) {
@@ -1310,6 +1538,38 @@ index 9b98a23..30032bc 100644
      #[test]
      fn path_intermediate_textures_are_reused_until_resize() -> Result<()> {
          let mut renderer = MetalRenderer::new_headless(Default::default())?;
+diff --git a/crates/gpui_apple/src/shaders.metal b/crates/gpui_apple/src/shaders.metal
+index 2b52bb9..a2f68d4 100644
+--- a/crates/gpui_apple/src/shaders.metal
++++ b/crates/gpui_apple/src/shaders.metal
+@@ -469,7 +469,7 @@ vertex ShadowVertexOutput shadow_vertex(
+   Shadow shadow = shadows[shadow_id];
+ 
+   Bounds_ScaledPixels bounds;
+-  if (shadow.inset != 0u) {
++  if (shadow.inset == 1u) {
+     bounds = shadow.element_bounds;
+   } else {
+     // Leave room for the gaussian tail outside the shadow rect.
+@@ -542,13 +542,17 @@ fragment float4 shadow_fragment(ShadowFragmentInput input [[stage_in]],
+     }
+   }
+ 
+-  if (shadow.inset != 0u) {
++  if (shadow.inset == 1u) {
+     // The inset shadow is the complement of the (blurred) hole rect, clipped to the element.
+     // `saturate(0.5 - d)` gives a 1-pixel antialiased edge: d <= -0.5 -> 1, d >= 0.5 -> 0.
+     alpha = 1. - alpha;
+     float element_distance = quad_sdf(input.position.xy, shadow.element_bounds,
+                                       shadow.element_corner_radii);
+     alpha *= saturate(0.5 - element_distance);
++  } else if (shadow.inset == 2u) {
++    float element_distance = quad_sdf(input.position.xy, shadow.element_bounds,
++                                      shadow.element_corner_radii);
++    alpha *= saturate(0.5 + element_distance);
+   }
+ 
+   return input.color * float4(1., 1., 1., alpha);
 diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/src/linux/wayland/window.rs
 index 9beebea..7b5609f 100644
 --- a/crates/gpui_linux/src/linux/wayland/window.rs
@@ -1500,10 +1760,10 @@ index 9beebea..7b5609f 100644
  }
 diff --git a/crates/gpui_wgpu/src/backdrop.rs b/crates/gpui_wgpu/src/backdrop.rs
 new file mode 100644
-index 0000000..209a6a6
+index 0000000..c848cc4
 --- /dev/null
 +++ b/crates/gpui_wgpu/src/backdrop.rs
-@@ -0,0 +1,698 @@
+@@ -0,0 +1,704 @@
 +//! Backdrops: what a frame has drawn behind an element, blurred and tinted (`Scene::backdrops`).
 +//!
 +//! A batch of backdrops shares a draw order, so their sample regions do not overlap. The main
@@ -1543,7 +1803,7 @@ index 0000000..209a6a6
 +    // 0 composites the blur, 1 clears the shape, 2 lays the tint alone.
 +    mode: u32,
 +    has_source: u32,
-+    pad: u32,
++    opacity: f32,
 +}
 +
 +@group(0) @binding(0) var<uniform> params: Params;
@@ -1645,7 +1905,7 @@ index 0000000..209a6a6
 +        discard;
 +    }
 +    if (params.mode == 1u) {
-+        return vec4<f32>(0.0, 0.0, 0.0, coverage);
++        return vec4<f32>(0.0, 0.0, 0.0, coverage * params.opacity);
 +    }
 +
 +    var color = vec4<f32>(0.0);
@@ -1670,7 +1930,7 @@ index 0000000..209a6a6
 +        let add = saturate(params.highlight * rim * light);
 +        color = vec4<f32>(color.rgb + add * (1.0 - color.rgb), color.a + add * (1.0 - color.a));
 +    }
-+    return color * coverage;
++    return color * coverage * params.opacity;
 +}
 +"#;
 +
@@ -1696,7 +1956,7 @@ index 0000000..209a6a6
 +    highlight_width: f32,
 +    mode: u32,
 +    has_source: u32,
-+    pad: u32,
++    opacity: f32,
 +}
 +
 +const _: () = assert!(std::mem::offset_of!(Params, radii) == 96 && std::mem::size_of::<Params>() == 144);
@@ -2040,7 +2300,12 @@ index 0000000..209a6a6
 +
 +        let mut composites = Vec::with_capacity(backdrops.len());
 +        for (backdrop, region) in backdrops.iter().zip(&regions) {
-+            let tint = Rgba::from(backdrop.tint);
++            // A surface without COPY_SRC (wgpu's GL backend offers none) cannot be blurred.
++            let tint = if backdrop.source == BackdropSource::Window && !has_source {
++                backdrop.unblurred_tint()
++            } else {
++                Rgba::from(backdrop.tint)
++            };
 +            let mask = backdrop.content_mask.bounds;
 +            let radii = backdrop.corner_radii;
 +            let mut p = Params {
@@ -2058,6 +2323,7 @@ index 0000000..209a6a6
 +                saturation: backdrop.saturation,
 +                highlight: backdrop.highlight,
 +                highlight_width: backdrop.highlight_width.0,
++                opacity: backdrop.opacity,
 +                ..base
 +            };
 +            if let Some(r) = region {
@@ -2211,19 +2477,77 @@ index 29a79af..6af180c 100644
  mod cosmic_text_system;
  mod wgpu_atlas;
  mod wgpu_context;
+diff --git a/crates/gpui_wgpu/src/shaders.wgsl b/crates/gpui_wgpu/src/shaders.wgsl
+index dec2bdc..d1c5d89 100644
+--- a/crates/gpui_wgpu/src/shaders.wgsl
++++ b/crates/gpui_wgpu/src/shaders.wgsl
+@@ -955,11 +955,11 @@ struct Shadow {
+     corner_radii: Corners,
+     content_mask: Bounds,
+     color: Hsla,
+-    // Only consulted when `inset == 1u`: the element's own bounds, used as a rounded-rect
+-    // clip so the shadow never escapes the element.
++    // Not consulted when `inset == 0u`: the element's own bounds, used as a rounded-rect
++    // clip that keeps the shadow inside (1u) or outside (2u) the element.
+     element_bounds: Bounds,
+     element_corner_radii: Corners,
+-    // 0 = drop shadow, 1 = inset shadow.
++    // 0 = drop shadow, 1 = inset shadow, 2 = drop shadow outside the element.
+     inset: u32,
+     pad: u32, // align to 8 bytes
+ }
+@@ -978,7 +978,7 @@ fn vs_shadow(@builtin(vertex_index) vertex_id: u32, @builtin(instance_index) ins
+     var shadow = load_shadow(instance_id);
+ 
+     var geometry: Bounds;
+-    if (shadow.inset != 0u) {
++    if (shadow.inset == 1u) {
+         geometry = shadow.element_bounds;
+     } else {
+         // Leave room for the gaussian tail outside the shadow rect.
+@@ -1033,13 +1033,17 @@ fn fs_shadow(input: ShadowVarying) -> @location(0) vec4<f32> {
+         }
+     }
+ 
+-    if (shadow.inset != 0u) {
++    if (shadow.inset == 1u) {
+         // The inset shadow is the complement of the (blurred) hole rect, clipped to the element.
+         // `saturate(0.5 - d)` gives a 1-pixel antialiased edge: d <= -0.5 -> 1, d >= 0.5 -> 0.
+         alpha = 1.0 - alpha;
+         let element_distance = quad_sdf(input.position.xy, shadow.element_bounds,
+                                         shadow.element_corner_radii);
+         alpha *= saturate(0.5 - element_distance);
++    } else if (shadow.inset == 2u) {
++        let element_distance = quad_sdf(input.position.xy, shadow.element_bounds,
++                                        shadow.element_corner_radii);
++        alpha *= saturate(0.5 + element_distance);
+     }
+ 
+     return blend_color(input.color, alpha);
 diff --git a/crates/gpui_wgpu/src/wgpu_renderer.rs b/crates/gpui_wgpu/src/wgpu_renderer.rs
-index e8aed26..9c0a569 100644
+index e8aed26..d418495 100644
 --- a/crates/gpui_wgpu/src/wgpu_renderer.rs
 +++ b/crates/gpui_wgpu/src/wgpu_renderer.rs
-@@ -198,6 +198,7 @@ struct WgpuResources {
+@@ -198,6 +198,8 @@ struct WgpuResources {
      path_intermediate_view: Option<wgpu::TextureView>,
      path_msaa_texture: Option<wgpu::Texture>,
      path_msaa_view: Option<wgpu::TextureView>,
-+    backdrops: crate::backdrop::Backdrops,
++    /// Built by the first frame that draws a backdrop.
++    backdrops: Option<crate::backdrop::Backdrops>,
  }
  
  struct CachedTextureBindGroup {
-@@ -436,13 +437,13 @@ impl EdgeExtend {
+@@ -271,6 +273,9 @@ pub struct WgpuRenderer {
+     /// Draws the frames of a live resize, while the surface is larger than the drawable.
+     edge_extend: Option<EdgeExtend>,
+     needs_redraw: bool,
++    /// Whether the surface can be copied from, which backdrops need: it is configured so the
++    /// first time a frame draws one.
++    surface_copy_src: bool,
+ }
+ 
+ /// How far a live resize lets the surface outgrow the drawable before it reconfigures, in device
+@@ -436,13 +441,13 @@ impl EdgeExtend {
          device: &wgpu::Device,
          format: wgpu::TextureFormat,
          size: Size<DevicePixels>,
@@ -2239,7 +2563,7 @@ index e8aed26..9c0a569 100644
          }
          let texture = device.create_texture(&wgpu::TextureDescriptor {
              label: Some("edge_extend_frame"),
-@@ -455,7 +456,9 @@ impl EdgeExtend {
+@@ -455,7 +460,9 @@ impl EdgeExtend {
              sample_count: 1,
              dimension: wgpu::TextureDimension::D2,
              format,
@@ -2250,7 +2574,7 @@ index e8aed26..9c0a569 100644
              view_formats: &[],
          });
          let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-@@ -473,8 +476,8 @@ impl EdgeExtend {
+@@ -473,8 +480,8 @@ impl EdgeExtend {
                  },
              ],
          });
@@ -2261,7 +2585,7 @@ index e8aed26..9c0a569 100644
      }
  
      /// `core`'s [`WgpuRendererCore::render_frame`] for a frame larger than the `drawable` the
-@@ -490,8 +493,8 @@ impl EdgeExtend {
+@@ -490,8 +497,8 @@ impl EdgeExtend {
          clear_color: wgpu::Color,
      ) -> Result<wgpu::SubmissionIndex> {
          let device = Arc::clone(&core.resources.device);
@@ -2272,20 +2596,41 @@ index e8aed26..9c0a569 100644
  
          let Some((_, _, bind_group)) = &self.target else {
              unreachable!("created above");
-@@ -721,8 +724,11 @@ impl WgpuRenderer {
-             );
+@@ -756,6 +763,10 @@ impl WgpuRenderer {
+             surface.configure(&context.device, &surface_config);
          }
  
-+        // Backdrops copy what the frame has drawn so far out of it.
-+        let usage = wgpu::TextureUsages::RENDER_ATTACHMENT
-+            | (surface_caps.usages & wgpu::TextureUsages::COPY_SRC);
-         let surface_config = wgpu::SurfaceConfiguration {
--            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-+            usage,
-             format: surface_format,
-             color_space: wgpu::SurfaceColorSpace::Auto,
-             width: clamped_width.max(1),
-@@ -1578,6 +1584,7 @@ impl WgpuRenderer {
++        let surface_copy_src = surface
++            .get_capabilities(&context.adapter)
++            .usages
++            .contains(wgpu::TextureUsages::COPY_SRC);
+         let surface_format = surface_config.format;
+         let alpha_mode = surface_config.alpha_mode;
+         let max_texture_size = context.device.limits().max_texture_dimension_2d;
+@@ -781,6 +792,7 @@ impl WgpuRenderer {
+             observed_error_generation: 0,
+             last_surface_error: None,
+             needs_redraw: false,
++            surface_copy_src,
+         })
+     }
+ }
+@@ -1522,6 +1534,14 @@ impl WgpuRenderer {
+             self.failed_frame_count = 0;
+         }
+ 
++        if self.surface_copy_src
++            && !self.surface_config.usage.contains(wgpu::TextureUsages::COPY_SRC)
++            && scene.backdrops.iter().any(|b| b.source == gpui::BackdropSource::Window)
++        {
++            self.surface_config.usage |= wgpu::TextureUsages::COPY_SRC;
++            surface.configure(&core.resources.device, &self.surface_config);
++        }
++
+         let frame = match surface.get_current_texture() {
+             wgpu::CurrentSurfaceTexture::Success(frame) => frame,
+             wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
+@@ -1578,6 +1598,7 @@ impl WgpuRenderer {
          } else {
              core.render_frame(
                  scene,
@@ -2293,7 +2638,7 @@ index e8aed26..9c0a569 100644
                  &frame_view,
                  size,
                  premultiplied_alpha,
-@@ -1608,6 +1615,7 @@ impl WgpuRenderer {
+@@ -1608,6 +1629,7 @@ impl WgpuRenderer {
          let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
          core.render_frame(
              scene,
@@ -2301,24 +2646,15 @@ index e8aed26..9c0a569 100644
              &view,
              size,
              premultiplied_alpha,
-@@ -1742,6 +1750,8 @@ impl WgpuRendererCore {
-         });
-         let max_texture_size = device.limits().max_texture_dimension_2d;
- 
-+        let backdrops = crate::backdrop::Backdrops::new(&device, target_format);
-+
-         Self {
-             resources: WgpuResources {
-                 device,
-@@ -1758,6 +1768,7 @@ impl WgpuRendererCore {
+@@ -1758,6 +1780,7 @@ impl WgpuRendererCore {
                  path_intermediate_view: None,
                  path_msaa_texture: None,
                  path_msaa_view: None,
-+                backdrops,
++                backdrops: None,
              },
              atlas,
              path_globals_offset,
-@@ -1822,6 +1833,7 @@ impl WgpuRendererCore {
+@@ -1822,6 +1845,7 @@ impl WgpuRendererCore {
      fn render_frame(
          &mut self,
          scene: &Scene,
@@ -2326,7 +2662,7 @@ index e8aed26..9c0a569 100644
          target_view: &wgpu::TextureView,
          size: Size<DevicePixels>,
          premultiplied_alpha: bool,
-@@ -1873,7 +1885,7 @@ impl WgpuRendererCore {
+@@ -1873,7 +1897,7 @@ impl WgpuRendererCore {
              bytemuck::bytes_of(&gamma_params),
          );
  
@@ -2335,7 +2671,7 @@ index e8aed26..9c0a569 100644
              .inspect_err(|_| {
                  // Queue writes are staged before encoding; flush them even if the frame fails.
                  self.resources.queue.submit(std::iter::empty());
-@@ -1883,6 +1895,7 @@ impl WgpuRendererCore {
+@@ -1883,6 +1907,7 @@ impl WgpuRendererCore {
      fn record_frame(
          &mut self,
          scene: &Scene,
@@ -2343,25 +2679,31 @@ index e8aed26..9c0a569 100644
          frame_view: &wgpu::TextureView,
          clear_color: wgpu::Color,
      ) -> Result<wgpu::SubmissionIndex> {
-@@ -1902,6 +1915,10 @@ impl WgpuRendererCore {
+@@ -1902,6 +1927,14 @@ impl WgpuRendererCore {
                  )
              })?;
          self.prepare_texture_bind_groups(scene);
 +        if !scene.backdrops.is_empty() {
 +            let device = Arc::clone(&self.resources.device);
-+            self.resources.backdrops.begin_frame(&device, &scene.backdrops);
++            let format = self.target_format;
++            self.resources
++                .backdrops
++                .get_or_insert_with(|| crate::backdrop::Backdrops::new(&device, format))
++                .begin_frame(&device, &scene.backdrops);
 +        }
  
          let mut encoder =
              self.resources()
-@@ -2017,6 +2034,32 @@ impl WgpuRendererCore {
+@@ -2017,6 +2050,36 @@ impl WgpuRendererCore {
                      PrimitiveBatch::Surfaces(range) => {
                          self.draw_surfaces(scene, range, &instance_bindings.surfaces, &mut pass);
                      }
 +                    PrimitiveBatch::Backdrops(range) => {
 +                        drop(pass);
 +                        let resources = &mut self.resources;
-+                        let prepared = resources.backdrops.prepare(
++                        let backdrops =
++                            resources.backdrops.as_mut().expect("built by the frame's first backdrop");
++                        let prepared = backdrops.prepare(
 +                            &resources.device,
 +                            &resources.queue,
 +                            &mut encoder,
@@ -2382,12 +2724,14 @@ index e8aed26..9c0a569 100644
 +                            depth_stencil_attachment: None,
 +                            ..Default::default()
 +                        });
-+                        self.resources.backdrops.composite(&prepared, &mut pass);
++                        if let Some(backdrops) = &self.resources.backdrops {
++                            backdrops.composite(&prepared, &mut pass);
++                        }
 +                    }
                  }
              }
          }
-@@ -2825,14 +2868,13 @@ impl WgpuHeadlessRenderer {
+@@ -2825,14 +2888,13 @@ impl WgpuHeadlessRenderer {
      fn render(&mut self, scene: &Scene, size: Size<DevicePixels>) -> anyhow::Result<()> {
          self.check_gpu_errors()?;
          self.ensure_render_target(size)?;
@@ -2406,7 +2750,7 @@ index e8aed26..9c0a569 100644
          Ok(())
      }
  
-@@ -3140,7 +3182,7 @@ mod tests {
+@@ -3140,7 +3202,7 @@ mod tests {
          linear_gradient,
      };
      #[cfg(target_os = "linux")]
@@ -2415,7 +2759,7 @@ index e8aed26..9c0a569 100644
  
      #[cfg(target_os = "linux")]
      fn device_size(width: i32, height: i32) -> Size<DevicePixels> {
-@@ -3311,6 +3353,72 @@ mod tests {
+@@ -3311,6 +3373,137 @@ mod tests {
          );
      }
  
@@ -2442,7 +2786,72 @@ index e8aed26..9c0a569 100644
 +            highlight: 0.,
 +            highlight_width: ScaledPixels(1.),
 +            sample_limit: None,
++            opacity: 1.,
++            fallback: Hsla::transparent_black(),
 +        }
++    }
++
++    #[cfg(target_os = "linux")]
++    #[test]
++    fn headless_renderer_fades_a_backdrop_with_its_opacity() -> anyhow::Result<()> {
++        let mut renderer = WgpuHeadlessRenderer::new()?;
++        let mut scene = Scene::default();
++        scene.insert_primitive(solid_quad(0.0, 0.0, 64.0, 32.0, gpui::red()));
++        let white = Hsla { a: 0.5, ..gpui::white() };
++        scene.insert_primitive(gpui::Backdrop { opacity: 0.5, ..backdrop(0.0, 0.0, 64.0, 32.0, 6.0, white) });
++        scene.finish();
++
++        let image = renderer.render_scene_to_image(&scene, device_size(64, 32))?;
++        assert_pixel(&image, 8, 16, [255, 64, 64, 255]);
++        Ok(())
++    }
++
++    #[cfg(target_os = "linux")]
++    #[test]
++    fn headless_renderer_keeps_an_outside_shadow_off_its_element() -> anyhow::Result<()> {
++        let mut renderer = WgpuHeadlessRenderer::new()?;
++        let mut scene = Scene::default();
++        let frame = solid_quad(0.0, 0.0, 64.0, 32.0, gpui::white());
++        let element = solid_quad(16.0, 0.0, 32.0, 32.0, gpui::white()).bounds;
++        let content_mask = frame.content_mask.clone();
++        scene.insert_primitive(frame);
++        scene.insert_primitive(Shadow {
++            order: 0,
++            blur_radius: ScaledPixels(0.0),
++            bounds: solid_quad(24.0, 0.0, 32.0, 32.0, gpui::white()).bounds,
++            corner_radii: Corners::default(),
++            content_mask,
++            color: gpui::black(),
++            element_bounds: element,
++            element_corner_radii: Corners::default(),
++            inset: 2,
++            pad: 0,
++        });
++        scene.finish();
++
++        let image = renderer.render_scene_to_image(&scene, device_size(64, 32))?;
++        assert_pixel(&image, 32, 16, [255, 255, 255, 255]);
++        assert_pixel(&image, 52, 16, [0, 0, 0, 255]);
++        Ok(())
++    }
++
++    #[cfg(target_os = "linux")]
++    #[test]
++    fn headless_renderer_builds_backdrop_pipelines_for_the_first_backdrop() -> anyhow::Result<()> {
++        let mut renderer = WgpuHeadlessRenderer::new()?;
++        let mut scene = Scene::default();
++        scene.insert_primitive(solid_quad(0.0, 0.0, 64.0, 32.0, gpui::red()));
++        scene.finish();
++        renderer.render_scene_to_image(&scene, device_size(64, 32))?;
++        assert!(renderer.core.resources.backdrops.is_none());
++
++        let mut scene = Scene::default();
++        scene.insert_primitive(solid_quad(0.0, 0.0, 64.0, 32.0, gpui::red()));
++        scene.insert_primitive(backdrop(0.0, 0.0, 64.0, 32.0, 6.0, Hsla::transparent_black()));
++        scene.finish();
++        renderer.render_scene_to_image(&scene, device_size(64, 32))?;
++        assert!(renderer.core.resources.backdrops.is_some());
++        Ok(())
 +    }
 +
 +    #[cfg(target_os = "linux")]
@@ -2490,10 +2899,10 @@ index e8aed26..9c0a569 100644
          naga::valid::Validator::new(naga::valid::ValidationFlags::all(), capabilities)
 diff --git a/crates/gpui_windows/src/directx_backdrop.rs b/crates/gpui_windows/src/directx_backdrop.rs
 new file mode 100644
-index 0000000..7824919
+index 0000000..0213462
 --- /dev/null
 +++ b/crates/gpui_windows/src/directx_backdrop.rs
-@@ -0,0 +1,512 @@
+@@ -0,0 +1,513 @@
 +//! Backdrops on Direct3D 11, the same passes as gpui_wgpu's `backdrop.rs`: each region is copied
 +//! out of the frame, box-downsampled, blurred across and down, then composited in its rounded
 +//! bounds. Intermediates keep each region at its own origin, so one frame-sized texture holds a
@@ -2531,7 +2940,7 @@ index 0000000..7824919
 +    float highlight_width;
 +    uint mode;
 +    uint has_source;
-+    uint pad;
++    float opacity;
 +};
 +
 +Texture2D<float4> source : register(t0);
@@ -2612,7 +3021,7 @@ index 0000000..7824919
 +        discard;
 +    }
 +    if (mode == 1u) {
-+        return float4(0.0, 0.0, 0.0, coverage);
++        return float4(0.0, 0.0, 0.0, coverage * opacity);
 +    }
 +
 +    float4 color = float4(0.0, 0.0, 0.0, 0.0);
@@ -2636,7 +3045,7 @@ index 0000000..7824919
 +        float add = saturate(highlight * rim * light);
 +        color = float4(color.rgb + add * (1.0 - color.rgb), color.a + add * (1.0 - color.a));
 +    }
-+    return color * coverage;
++    return color * coverage * opacity;
 +}
 +"#;
 +
@@ -2662,7 +3071,7 @@ index 0000000..7824919
 +    highlight_width: f32,
 +    mode: u32,
 +    has_source: u32,
-+    pad: u32,
++    opacity: f32,
 +}
 +
 +const _: () = assert!(std::mem::offset_of!(Params, radii) == 96 && std::mem::size_of::<Params>() == 144);
@@ -2981,6 +3390,7 @@ index 0000000..7824919
 +                saturation: backdrop.saturation,
 +                highlight: backdrop.highlight,
 +                highlight_width: backdrop.highlight_width.0,
++                opacity: backdrop.opacity,
 +                ..base
 +            };
 +            if let Some(r) = region {
@@ -3076,3 +3486,35 @@ index 0ee6a55..c24bce7 100644
      fn draw_surfaces(&mut self, surfaces: &[PaintSurface]) -> Result<()> {
          if surfaces.is_empty() {
              return Ok(());
+diff --git a/crates/gpui_windows/src/shaders.hlsl b/crates/gpui_windows/src/shaders.hlsl
+index 2f9a00c..92d190c 100644
+--- a/crates/gpui_windows/src/shaders.hlsl
++++ b/crates/gpui_windows/src/shaders.hlsl
+@@ -887,7 +887,7 @@ ShadowVertexOutput shadow_vertex(uint vertex_id: SV_VertexID, uint instance_id:
+     Shadow shadow = shadows[shadow_id];
+ 
+     Bounds bounds;
+-    if (shadow.inset != 0u) {
++    if (shadow.inset == 1u) {
+         bounds = shadow.element_bounds;
+     } else {
+         // Leave room for the gaussian tail outside the shadow rect.
+@@ -941,13 +941,17 @@ float4 shadow_fragment(ShadowFragmentInput input): SV_TARGET {
+         }
+     }
+ 
+-    if (shadow.inset != 0u) {
++    if (shadow.inset == 1u) {
+         // The inset shadow is the complement of the (blurred) hole rect, clipped to the element.
+         // `saturate(0.5 - d)` gives a 1-pixel antialiased edge: d <= -0.5 -> 1, d >= 0.5 -> 0.
+         alpha = 1.0 - alpha;
+         float element_distance = quad_sdf(input.position.xy, shadow.element_bounds,
+                                           shadow.element_corner_radii);
+         alpha *= saturate(0.5 - element_distance);
++    } else if (shadow.inset == 2u) {
++        float element_distance = quad_sdf(input.position.xy, shadow.element_bounds,
++                                          shadow.element_corner_radii);
++        alpha *= saturate(0.5 + element_distance);
+     }
+ 
+     return input.color * float4(1., 1., 1., alpha);

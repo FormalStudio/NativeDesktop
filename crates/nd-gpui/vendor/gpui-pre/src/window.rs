@@ -4941,6 +4941,28 @@ impl Window {
         corner_radii: Corners<Pixels>,
         shadows: &[BoxShadow],
     ) {
+        self.insert_drop_shadows(bounds, corner_radii, shadows, 0);
+    }
+
+    /// Like [`Self::paint_drop_shadows`], but keeps the shadows outside the element's shape,
+    /// for an element whose backdrop must not blur its own shadow. Paint them after
+    /// [`Self::paint_backdrop`].
+    pub fn paint_drop_shadows_outside(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        corner_radii: Corners<Pixels>,
+        shadows: &[BoxShadow],
+    ) {
+        self.insert_drop_shadows(bounds, corner_radii, shadows, 2);
+    }
+
+    fn insert_drop_shadows(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        corner_radii: Corners<Pixels>,
+        shadows: &[BoxShadow],
+        kind: u32,
+    ) {
         self.invalidator.debug_assert_paint();
 
         let scale_factor = self.length_scale();
@@ -4962,7 +4984,7 @@ impl Window {
                 color: shadow.color.opacity(opacity),
                 element_bounds,
                 element_corner_radii,
-                inset: 0,
+                inset: kind,
                 pad: 0,
             });
         }
@@ -4998,6 +5020,9 @@ impl Window {
 
         let scale_factor = self.length_scale();
         let opacity = self.element_opacity();
+        if opacity <= 0. {
+            return;
+        }
         self.next_frame.scene.insert_primitive(Backdrop {
             order: 0,
             source: filter.source,
@@ -5006,10 +5031,12 @@ impl Window {
             corner_radii: corner_radii.scale(scale_factor),
             blur_radius: filter.blur_radius.scale(scale_factor),
             saturation: filter.saturation,
-            tint: filter.tint.opacity(opacity),
-            highlight: filter.highlight * opacity,
+            tint: filter.tint,
+            highlight: filter.highlight,
             highlight_width: filter.highlight_width.scale(scale_factor),
             sample_limit: filter.within.map(|within| self.snap_bounds(within)),
+            opacity,
+            fallback: filter.fallback,
         });
     }
 
@@ -8466,6 +8493,33 @@ mod tests {
             assert_eq!(handles.handles.len(), 0);
             assert!(handles.dropped_handles.is_empty());
         });
+    }
+
+    #[gpui::test]
+    fn test_a_backdrop_blurs_before_its_shadow_paints_outside_it(cx: &mut TestAppContext) {
+        struct Glass;
+
+        impl Render for Glass {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                let shadow = crate::BoxShadow::new(px(0.), px(3.), hsla(0., 0., 0., 0.1));
+                div()
+                    .size(px(100.))
+                    .shadow(vec![shadow.blur_radius(px(12.))])
+                    .backdrop(crate::BackdropFilter::blur(px(10.)))
+            }
+        }
+
+        let window = cx.add_window(|_, _| Glass);
+        cx.update_window(window.into(), |_, window, cx| {
+            window.draw(cx).clear(cx);
+            let scene = &window.rendered_frame.scene;
+            let [shadow] = scene.shadows.as_slice() else {
+                panic!("expected one shadow, got {}", scene.shadows.len());
+            };
+            assert_eq!(shadow.inset, 2);
+            assert!(scene.backdrops[0].order < shadow.order);
+        })
+        .unwrap();
     }
 
     #[gpui::test]
