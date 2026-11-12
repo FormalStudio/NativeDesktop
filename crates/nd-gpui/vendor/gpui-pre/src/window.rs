@@ -5093,6 +5093,7 @@ impl Window {
             mask,
             mirror: filter.mirror,
             clamp: filter.clamp,
+            tone: filter.tone,
         });
     }
 

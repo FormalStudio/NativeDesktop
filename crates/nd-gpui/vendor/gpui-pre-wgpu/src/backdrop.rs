@@ -48,9 +48,14 @@ struct Params {
     has_clamp: u32,
     clamp_low: f32,
     clamp_high: f32,
+    // Tone the blur by its luma instead of saturating it: g0 + g1 L + g2 L^2 + (k0 + k1 L)(c - L).
+    has_tone: u32,
+    tone_g0: f32,
+    tone_g1: f32,
+    tone_g2: f32,
+    tone_k0: f32,
+    tone_k1: f32,
     pad0: u32,
-    pad1: u32,
-    pad2: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -178,8 +183,17 @@ fn fs_composite(in: Varyings) -> @location(0) vec4<f32> {
         let blurred = params.dst_origin + (p - params.src_origin) / params.factor;
         color = sample_clamped(blurred, params.dst_origin, params.dst_origin + params.dst_size);
         let luma = dot(color.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
-        let saturated = mix(vec3<f32>(luma), color.rgb, params.saturation);
-        color = vec4<f32>(select(max(saturated, vec3<f32>(0.0)), saturated, params.has_clamp != 0u), color.a);
+        if (params.has_tone != 0u) {
+            // The curve is not linear, so it takes the straight colour.
+            let a = max(color.a, 1e-6);
+            let l = luma / a;
+            let g = params.tone_g0 + l * (params.tone_g1 + l * params.tone_g2);
+            let toned = vec3<f32>(g) + (params.tone_k0 + params.tone_k1 * l) * (color.rgb / a - vec3<f32>(l));
+            color = vec4<f32>(saturate(toned) * color.a, color.a);
+        } else {
+            let saturated = mix(vec3<f32>(luma), color.rgb, params.saturation);
+            color = vec4<f32>(select(max(saturated, vec3<f32>(0.0)), saturated, params.has_clamp != 0u), color.a);
+        }
     }
     let tint = params.tint;
     color = vec4<f32>(tint.rgb * tint.a + color.rgb * (1.0 - tint.a), tint.a + color.a * (1.0 - tint.a));
@@ -237,10 +251,12 @@ struct Params {
     has_clamp: u32,
     clamp_low: f32,
     clamp_high: f32,
-    pad: [u32; 3],
+    has_tone: u32,
+    tone: [f32; 5],
+    pad: u32,
 }
 
-const _: () = assert!(std::mem::offset_of!(Params, radii) == 96 && std::mem::size_of::<Params>() == 192);
+const _: () = assert!(std::mem::offset_of!(Params, radii) == 96 && std::mem::size_of::<Params>() == 208);
 
 /// A backdrop's sample region in whole frame pixels and the factor it is downsampled by.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -639,6 +655,8 @@ impl Backdrops {
                 has_clamp: backdrop.clamp.is_some() as u32,
                 clamp_low: backdrop.clamp.map_or(0., |c| c[0]),
                 clamp_high: backdrop.clamp.map_or(1., |c| c[1]),
+                has_tone: backdrop.tone.is_some() as u32,
+                tone: backdrop.tone.unwrap_or_default(),
                 ..base
             };
             if let Some(r) = region {
@@ -933,16 +951,20 @@ mod tests {
             mask: 0,
             mirror: true,
             clamp: None,
+            tone: None,
         };
         let out = draw(w, h, &pixels, backdrop)?;
         Some((4..4 + width).map(|x| out[((3 * w + x) * 4) as usize]).collect())
     }
 
     /// Opaque red under dark regular glass (saturation 1.5, tint (75, 73, 68) at 0.58), 8 x 8.
-    fn glass_over_red() -> Option<[u8; 4]> {
+    fn glass_over_red(tone: Option<[f32; 5]>) -> Option<[u8; 4]> {
         let pixels: Vec<u8> = (0..64).flat_map(|_| [255, 0, 0, 255]).collect();
         let all = Bounds { origin: point(px(0.), px(0.)), size: size(px(8.), px(8.)) }.scale(1.);
-        let tint = Rgba { r: 75. / 255., g: 73. / 255., b: 68. / 255., a: 0.58 };
+        let tint = match tone {
+            Some(_) => Rgba { r: 0., g: 0., b: 0., a: 0. },
+            None => Rgba { r: 75. / 255., g: 73. / 255., b: 68. / 255., a: 0.58 },
+        };
         let backdrop = Backdrop {
             order: 0,
             source: BackdropSource::Window,
@@ -960,6 +982,7 @@ mod tests {
             mask: 0,
             mirror: false,
             clamp: None,
+            tone,
         };
         let out = draw(8, 8, &pixels, backdrop)?;
         let i = (4 * 8 + 4) * 4;
@@ -970,7 +993,7 @@ mod tests {
     // lifts the tinted result, and only then is it bounded by alpha.
     #[test]
     fn a_saturated_backdrop_is_bounded_by_alpha_after_its_tint() {
-        let Some(got) = glass_over_red() else {
+        let Some(got) = glass_over_red(None) else {
             eprintln!("no wgpu adapter, skipped");
             return;
         };
@@ -991,6 +1014,21 @@ mod tests {
             for v in got {
                 assert!((v as i32 - want).abs() <= 1, "{width} px: {v}, want {want}");
             }
+        }
+    }
+
+    // macOS's dark regular glass over opaque red, as atoll fits it: red's luma is low, so the
+    // curve lifts it little and its chroma gains enough to keep red full. The capture
+    // compositor asserts the same value.
+    #[test]
+    fn a_toned_backdrop_keeps_a_saturated_red_full() {
+        let tone = [31.1 / 255., 255.4 / 255., -127. / 255., 1.305, -0.538];
+        let Some(got) = glass_over_red(Some(tone)) else {
+            eprintln!("no wgpu adapter, skipped");
+            return;
+        };
+        for (v, want) in got.into_iter().zip([255, 15, 15, 255]) {
+            assert!((v as i32 - want).abs() <= 1, "{got:?}, want [255, 15, 15, 255]");
         }
     }
 }

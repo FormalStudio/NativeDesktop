@@ -702,6 +702,8 @@ pub struct Backdrop {
     pub mirror: bool,
     /// From [`BackdropFilter::clamp`]; Metal and Direct3D clamp the saturated blur to 0.
     pub clamp: Option<[f32; 2]>,
+    /// From [`BackdropFilter::tone`]; Metal and Direct3D saturate instead.
+    pub tone: Option<[f32; 5]>,
 }
 
 /// Coverage a backdrop is multiplied by, for a clip a content mask cannot hold (a circle, a
@@ -1182,6 +1184,7 @@ mod tests {
             mask: 0,
             mirror: false,
             clamp: None,
+            tone: None,
         }
     }
 
