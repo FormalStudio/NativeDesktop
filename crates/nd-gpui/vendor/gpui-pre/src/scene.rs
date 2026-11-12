@@ -671,14 +671,22 @@ pub struct Backdrop {
     pub highlight: f32,
     /// Width of the rim light.
     pub highlight_width: ScaledPixels,
+    /// The most the blur may read, from [`BackdropFilter::within`].
+    pub sample_limit: Option<Bounds<ScaledPixels>>,
 }
 
 impl Backdrop {
-    /// The region the blur reads: the clipped bounds grown by three standard deviations.
+    /// The region the blur reads: the clipped bounds grown by three standard deviations, within
+    /// the sample limit.
     pub fn sample_bounds(&self) -> Bounds<ScaledPixels> {
-        self.bounds
+        let sample = self
+            .bounds
             .intersect(&self.content_mask.bounds)
-            .dilate(self.blur_radius * 3.)
+            .dilate(self.blur_radius * 3.);
+        match self.sample_limit {
+            Some(limit) => sample.intersect(&limit),
+            None => sample,
+        }
     }
 
     /// How far renderers shrink the sample region before the blur, a power of two that brings
@@ -1115,7 +1123,17 @@ mod tests {
             tint: Hsla::default(),
             highlight: 0.,
             highlight_width: ScaledPixels(1.),
+            sample_limit: None,
         }
+    }
+
+    #[test]
+    fn a_sample_limit_bounds_what_a_backdrop_reads() {
+        let mut backdrop = backdrop(0., 100., 4.);
+        assert_eq!(backdrop.sample_bounds().origin.x, ScaledPixels(-12.));
+        backdrop.sample_limit = Some(bounds(0., 1000.));
+        assert_eq!(backdrop.sample_bounds().origin.x, ScaledPixels(0.));
+        assert_eq!(backdrop.sample_bounds().size.width, ScaledPixels(112.));
     }
 
     fn kinds(scene: &Scene) -> Vec<&'static str> {

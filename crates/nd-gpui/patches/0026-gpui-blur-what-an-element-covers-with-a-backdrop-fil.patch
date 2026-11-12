@@ -6,20 +6,20 @@ Subject: [PATCH 26/26] gpui: blur what an element covers with a backdrop
 
 ---
  crates/gpui/src/platform.rs                   |   5 +
- crates/gpui/src/scene.rs                      | 208 +++++-
- crates/gpui/src/style.rs                      |  86 ++-
+ crates/gpui/src/scene.rs                      | 226 +++++-
+ crates/gpui/src/style.rs                      |  98 ++-
  crates/gpui/src/styled.rs                     |   8 +-
- crates/gpui/src/window.rs                     |  47 +-
+ crates/gpui/src/window.rs                     |  48 +-
  crates/gpui_apple/src/gpui_apple.rs           |   1 +
  crates/gpui_apple/src/metal_backdrop.rs       | 538 ++++++++++++++
- crates/gpui_apple/src/metal_renderer.rs       | 103 +++
+ crates/gpui_apple/src/metal_renderer.rs       | 104 +++
  crates/gpui_linux/src/linux/wayland/window.rs | 113 ++-
  crates/gpui_wgpu/src/backdrop.rs              | 698 ++++++++++++++++++
  crates/gpui_wgpu/src/gpui_wgpu.rs             |   1 +
- crates/gpui_wgpu/src/wgpu_renderer.rs         | 137 +++-
+ crates/gpui_wgpu/src/wgpu_renderer.rs         | 138 +++-
  crates/gpui_windows/src/directx_backdrop.rs   | 512 +++++++++++++
  crates/gpui_windows/src/directx_renderer.rs   |  24 +
- 14 files changed, 2435 insertions(+), 46 deletions(-)
+ 14 files changed, 2468 insertions(+), 46 deletions(-)
  create mode 100644 crates/gpui_apple/src/metal_backdrop.rs
  create mode 100644 crates/gpui_wgpu/src/backdrop.rs
  create mode 100644 crates/gpui_windows/src/directx_backdrop.rs
@@ -41,7 +41,7 @@ index b9b48db..43d904d 100644
      fn zoom(&self);
      fn toggle_fullscreen(&self);
 diff --git a/crates/gpui/src/scene.rs b/crates/gpui/src/scene.rs
-index 6992dc0..79311f1 100644
+index 6992dc0..f8dfe1a 100644
 --- a/crates/gpui/src/scene.rs
 +++ b/crates/gpui/src/scene.rs
 @@ -50,6 +50,7 @@ pub struct Scene {
@@ -206,7 +206,7 @@ index 6992dc0..79311f1 100644
          }
      }
  }
-@@ -591,6 +638,66 @@ impl From<Shadow> for Primitive {
+@@ -591,6 +638,74 @@ impl From<Shadow> for Primitive {
      }
  }
  
@@ -243,14 +243,22 @@ index 6992dc0..79311f1 100644
 +    pub highlight: f32,
 +    /// Width of the rim light.
 +    pub highlight_width: ScaledPixels,
++    /// The most the blur may read, from [`BackdropFilter::within`].
++    pub sample_limit: Option<Bounds<ScaledPixels>>,
 +}
 +
 +impl Backdrop {
-+    /// The region the blur reads: the clipped bounds grown by three standard deviations.
++    /// The region the blur reads: the clipped bounds grown by three standard deviations, within
++    /// the sample limit.
 +    pub fn sample_bounds(&self) -> Bounds<ScaledPixels> {
-+        self.bounds
++        let sample = self
++            .bounds
 +            .intersect(&self.content_mask.bounds)
-+            .dilate(self.blur_radius * 3.)
++            .dilate(self.blur_radius * 3.);
++        match self.sample_limit {
++            Some(limit) => sample.intersect(&limit),
++            None => sample,
++        }
 +    }
 +
 +    /// How far renderers shrink the sample region before the blur, a power of two that brings
@@ -273,7 +281,7 @@ index 6992dc0..79311f1 100644
  /// The style of a border.
  #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
  #[repr(C)]
-@@ -975,3 +1082,94 @@ impl PathVertex<Pixels> {
+@@ -975,3 +1090,104 @@ impl PathVertex<Pixels> {
          }
      }
  }
@@ -310,7 +318,17 @@ index 6992dc0..79311f1 100644
 +            tint: Hsla::default(),
 +            highlight: 0.,
 +            highlight_width: ScaledPixels(1.),
++            sample_limit: None,
 +        }
++    }
++
++    #[test]
++    fn a_sample_limit_bounds_what_a_backdrop_reads() {
++        let mut backdrop = backdrop(0., 100., 4.);
++        assert_eq!(backdrop.sample_bounds().origin.x, ScaledPixels(-12.));
++        backdrop.sample_limit = Some(bounds(0., 1000.));
++        assert_eq!(backdrop.sample_bounds().origin.x, ScaledPixels(0.));
++        assert_eq!(backdrop.sample_bounds().size.width, ScaledPixels(112.));
 +    }
 +
 +    fn kinds(scene: &Scene) -> Vec<&'static str> {
@@ -369,7 +387,7 @@ index 6992dc0..79311f1 100644
 +    }
 +}
 diff --git a/crates/gpui/src/style.rs b/crates/gpui/src/style.rs
-index 323c79e..5b3f941 100644
+index 323c79e..1a4d001 100644
 --- a/crates/gpui/src/style.rs
 +++ b/crates/gpui/src/style.rs
 @@ -5,7 +5,7 @@ use std::{
@@ -391,7 +409,7 @@ index 323c79e..5b3f941 100644
      /// The text style of this element
      #[refineable]
      pub text: TextStyleRefinement,
-@@ -344,6 +347,82 @@ pub enum Visibility {
+@@ -344,6 +347,94 @@ pub enum Visibility {
      Hidden,
  }
  
@@ -414,6 +432,11 @@ index 323c79e..5b3f941 100644
 +    /// Painted instead where the source cannot be blurred: a desktop backdrop in an opaque
 +    /// window or on a compositor without a blur protocol.
 +    pub fallback: Hsla,
++    /// The window's area the blur may read, its edge repeated beyond them; `None` reads the
++    /// whole frame. Set it to the content's bounds when a frame draws a shadow or nothing around
++    /// them, so an element at the content's edge does not blur that in.
++    #[serde(skip)]
++    pub within: Option<Bounds<Pixels>>,
 +}
 +
 +impl Default for BackdropFilter {
@@ -426,6 +449,7 @@ index 323c79e..5b3f941 100644
 +            highlight: 0.,
 +            highlight_width: px(1.),
 +            fallback: Hsla::transparent_black(),
++            within: None,
 +        }
 +    }
 +}
@@ -469,12 +493,18 @@ index 323c79e..5b3f941 100644
 +        self.fallback = fallback.into();
 +        self
 +    }
++
++    /// Limits what the blur reads to `bounds`, in window coordinates.
++    pub fn within(mut self, bounds: Bounds<Pixels>) -> Self {
++        self.within = Some(bounds);
++        self
++    }
 +}
 +
  /// The possible values of the box-shadow property
  #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
  pub struct BoxShadow {
-@@ -710,6 +789,10 @@ impl Style {
+@@ -710,6 +801,10 @@ impl Style {
  
          window.paint_drop_shadows(bounds, corner_radii, &self.box_shadow);
  
@@ -485,7 +515,7 @@ index 323c79e..5b3f941 100644
          let background_color = self.background.as_ref().and_then(Fill::color);
          if background_color.is_some_and(|color| !color.is_transparent()) {
              let mut border_color = match background_color {
-@@ -806,6 +889,7 @@ impl Default for Style {
+@@ -806,6 +901,7 @@ impl Default for Style {
              border_style: BorderStyle::default(),
              corner_radii: Corners::default(),
              box_shadow: Default::default(),
@@ -518,7 +548,7 @@ index aa77a20..281269b 100644
      fn opacity(mut self, opacity: f32) -> Self {
          self.style().opacity = Some(opacity);
 diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
-index 20fdcb0..6033ef8 100644
+index 20fdcb0..ca8df32 100644
 --- a/crates/gpui/src/window.rs
 +++ b/crates/gpui/src/window.rs
 @@ -8,7 +8,8 @@ use crate::subscription::SingleSubscriberSet;
@@ -531,7 +561,7 @@ index 20fdcb0..6033ef8 100644
      Capslock, Context, Corners, CursorHideMode, CursorStyle, Decorations, DevicePixels,
      DispatchActionListener, DispatchNodeId, DispatchTree, DisplayId, Edges, Effect, Entity,
      EntityId, EventEmitter, FileDropEvent, FontId, Global, GlobalElementId, GlyphId, GpuSpecs,
-@@ -4967,6 +4968,50 @@ impl Window {
+@@ -4967,6 +4968,51 @@ impl Window {
          }
      }
  
@@ -576,6 +606,7 @@ index 20fdcb0..6033ef8 100644
 +            tint: filter.tint.opacity(opacity),
 +            highlight: filter.highlight * opacity,
 +            highlight_width: filter.highlight_width.scale(scale_factor),
++            sample_limit: filter.within.map(|within| self.snap_bounds(within)),
 +        });
 +    }
 +
@@ -1139,7 +1170,7 @@ index 0000000..f0d4e32
 +    blurred: Option<Texture>,
 +}
 diff --git a/crates/gpui_apple/src/metal_renderer.rs b/crates/gpui_apple/src/metal_renderer.rs
-index 9b98a23..ebe2304 100644
+index 9b98a23..30032bc 100644
 --- a/crates/gpui_apple/src/metal_renderer.rs
 +++ b/crates/gpui_apple/src/metal_renderer.rs
 @@ -1,4 +1,5 @@
@@ -1192,7 +1223,7 @@ index 9b98a23..ebe2304 100644
                  PrimitiveBatch::SubpixelSprites { .. } => unreachable!(),
              }
          }
-@@ -1929,6 +1953,85 @@ mod tests {
+@@ -1929,6 +1953,86 @@ mod tests {
      };
      use objc2_metal::MTLCommandBufferStatus;
  
@@ -1229,6 +1260,7 @@ index 9b98a23..ebe2304 100644
 +            tint,
 +            highlight: 0.,
 +            highlight_width: ScaledPixels(1.),
++            sample_limit: None,
 +        }
 +    }
 +
@@ -2180,7 +2212,7 @@ index 29a79af..6af180c 100644
  mod wgpu_atlas;
  mod wgpu_context;
 diff --git a/crates/gpui_wgpu/src/wgpu_renderer.rs b/crates/gpui_wgpu/src/wgpu_renderer.rs
-index e8aed26..2b0a964 100644
+index e8aed26..9c0a569 100644
 --- a/crates/gpui_wgpu/src/wgpu_renderer.rs
 +++ b/crates/gpui_wgpu/src/wgpu_renderer.rs
 @@ -198,6 +198,7 @@ struct WgpuResources {
@@ -2383,7 +2415,7 @@ index e8aed26..2b0a964 100644
  
      #[cfg(target_os = "linux")]
      fn device_size(width: i32, height: i32) -> Size<DevicePixels> {
-@@ -3311,6 +3353,71 @@ mod tests {
+@@ -3311,6 +3353,72 @@ mod tests {
          );
      }
  
@@ -2409,6 +2441,7 @@ index e8aed26..2b0a964 100644
 +            tint,
 +            highlight: 0.,
 +            highlight_width: ScaledPixels(1.),
++            sample_limit: None,
 +        }
 +    }
 +

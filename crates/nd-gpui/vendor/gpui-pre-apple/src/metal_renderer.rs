@@ -1986,6 +1986,7 @@ mod tests {
             tint,
             highlight: 0.,
             highlight_width: ScaledPixels(1.),
+            sample_limit: None,
         }
     }
 

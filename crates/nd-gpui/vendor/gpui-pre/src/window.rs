@@ -5009,6 +5009,7 @@ impl Window {
             tint: filter.tint.opacity(opacity),
             highlight: filter.highlight * opacity,
             highlight_width: filter.highlight_width.scale(scale_factor),
+            sample_limit: filter.within.map(|within| self.snap_bounds(within)),
         });
     }
 

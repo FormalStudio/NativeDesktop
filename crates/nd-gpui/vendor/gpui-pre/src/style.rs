@@ -366,6 +366,11 @@ pub struct BackdropFilter {
     /// Painted instead where the source cannot be blurred: a desktop backdrop in an opaque
     /// window or on a compositor without a blur protocol.
     pub fallback: Hsla,
+    /// The window's area the blur may read, its edge repeated beyond them; `None` reads the
+    /// whole frame. Set it to the content's bounds when a frame draws a shadow or nothing around
+    /// them, so an element at the content's edge does not blur that in.
+    #[serde(skip)]
+    pub within: Option<Bounds<Pixels>>,
 }
 
 impl Default for BackdropFilter {
@@ -378,6 +383,7 @@ impl Default for BackdropFilter {
             highlight: 0.,
             highlight_width: px(1.),
             fallback: Hsla::transparent_black(),
+            within: None,
         }
     }
 }
@@ -419,6 +425,12 @@ impl BackdropFilter {
     /// Sets the colour painted where the source cannot be blurred.
     pub fn fallback(mut self, fallback: impl Into<Hsla>) -> Self {
         self.fallback = fallback.into();
+        self
+    }
+
+    /// Limits what the blur reads to `bounds`, in window coordinates.
+    pub fn within(mut self, bounds: Bounds<Pixels>) -> Self {
+        self.within = Some(bounds);
         self
     }
 }
