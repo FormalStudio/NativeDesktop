@@ -428,6 +428,8 @@ pub(crate) struct WaylandClientState {
     // changed before the next one.
     in_progress_outputs: HashMap<ObjectId, InProgressOutput>,
     wl_outputs: HashMap<ObjectId, wl_output::WlOutput>,
+    // Each output's xdg-output, destroyed with it.
+    xdg_outputs: HashMap<ObjectId, zxdg_output_v1::ZxdgOutputV1>,
     // Registry global names of the outputs, for `global_remove`.
     output_globals: HashMap<u32, ObjectId>,
     keyboard_layout: LinuxKeyboardLayout,
@@ -1099,11 +1101,14 @@ impl WaylandConnection {
             frame_ping,
         )
         .context("failed to bind required Wayland globals")?;
-        if let Some(manager) = &globals.xdg_output_manager {
-            for (id, output) in &wl_outputs {
-                manager.get_xdg_output(output, &qh, id.clone());
-            }
-        }
+        #[allow(clippy::mutable_key_type)]
+        let xdg_outputs: HashMap<ObjectId, zxdg_output_v1::ZxdgOutputV1> = match &globals.xdg_output_manager {
+            Some(manager) => wl_outputs
+                .iter()
+                .map(|(id, output)| (id.clone(), manager.get_xdg_output(output, &qh, id.clone())))
+                .collect(),
+            None => HashMap::default(),
+        };
 
         let data_device = globals
             .data_device_manager
@@ -1139,6 +1144,7 @@ impl WaylandConnection {
             in_progress_outputs,
             output_globals,
             wl_outputs,
+            xdg_outputs,
             windows: HashMap::default(),
             common,
             keyboard_layout: LinuxKeyboardLayout::new(UNKNOWN_KEYBOARD_LAYOUT_NAME),
@@ -1688,7 +1694,8 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for WaylandClientStat
                     };
                     let output = registry.bind::<wl_output::WlOutput, _, _>(name, version, qh, ());
                     if let Some(manager) = &state.globals.xdg_output_manager {
-                        manager.get_xdg_output(&output, qh, output.id());
+                        let xdg = manager.get_xdg_output(&output, qh, output.id());
+                        state.xdg_outputs.insert(output.id(), xdg);
                     }
 
                     state
@@ -1705,6 +1712,9 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for WaylandClientStat
                 };
                 let was_complete = state.outputs.remove(&id).is_some();
                 state.in_progress_outputs.remove(&id);
+                if let Some(xdg) = state.xdg_outputs.remove(&id) {
+                    xdg.destroy();
+                }
                 if let Some(output) = state.wl_outputs.remove(&id)
                     && output.version() >= wl_output::REQ_RELEASE_SINCE
                 {
