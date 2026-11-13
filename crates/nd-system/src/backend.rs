@@ -123,6 +123,10 @@ pub trait Backend: Send + Sync + 'static {
     fn reveal_path(&self, path: PathBuf) -> Result<()> {
         Err(Error::unsupported(Feature::Shell))
     }
+    /// PNG bytes, `side` pixels square. Called from any thread.
+    fn file_icon(&self, path: PathBuf, side: u32) -> Result<Vec<u8>> {
+        Err(Error::unsupported(Feature::FileIcons))
+    }
 
     /// Creates or replaces the item with `tray.id`.
     fn tray_set(&self, tray: Tray, reply: Reply<()>) {

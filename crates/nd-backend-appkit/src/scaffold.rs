@@ -35,6 +35,8 @@ pub struct PaneIvars {
     /// `content_edge_on_hover`: whether the edge effect under the toolbar shows now.
     edge: RefCell<Option<Rc<Cell<bool>>>>,
     edge_tracker: RefCell<Option<Retained<crate::edge::NdEdgeTracker>>>,
+    /// The scaffold's sidebar pane, on the sidebar material.
+    sidebar: Cell<bool>,
 }
 
 define_class!(
@@ -112,6 +114,18 @@ impl NdPaneView {
         None
     }
 
+    /// Whether the pane holding `view` is a scaffold's sidebar; `None` outside any pane.
+    pub(crate) fn in_sidebar(view: &NSView) -> Option<bool> {
+        let mut cursor = unsafe { view.superview() };
+        while let Some(v) = cursor {
+            if let Some(pane) = v.downcast_ref::<NdPaneView>() {
+                return Some(pane.ivars().sidebar.get());
+            }
+            cursor = unsafe { v.superview() };
+        }
+        None
+    }
+
     pub(crate) fn set_on_resize(&self, hook: Option<Hook>) {
         *self.ivars().on_resize.borrow_mut() = hook;
     }
@@ -157,6 +171,7 @@ impl PaneNative {
             content.set_passes_clicks();
         }
         let host = NdPaneView::new(mtm, &content);
+        host.ivars().sidebar.set(props.role == PaneRole::Sidebar);
         if props.role == PaneRole::Content && props.edge_on_hover {
             *host.ivars().edge.borrow_mut() = Some(Rc::new(Cell::new(false)));
         }

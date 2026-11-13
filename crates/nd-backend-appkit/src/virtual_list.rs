@@ -133,6 +133,9 @@ pub struct Shared {
     /// Points of the list under the window's bars at its top: model offset 0 sits this far down
     /// the clip view, so rows scroll under the bars (which blur them) and rest clear of them.
     bars: Cell<f64>,
+    /// The part of `bars` that is the table's floating header, which the clip view clears on
+    /// its own: it is in the clip's resting origin, never in the scroll view's content insets.
+    header_over: Cell<f64>,
     /// Points of the list under a bar floating over its foot: the last rows scroll up clear of it.
     foot: Cell<f64>,
     /// A list without selection never highlights a clicked row.
@@ -171,6 +174,7 @@ impl Shared {
             asked: RefCell::default(),
             edges: Cell::new((false, false)),
             bars: Cell::new(0.),
+            header_over: Cell::new(0.),
             foot: Cell::new(0.),
             selection: Cell::new(props.selection),
             drag_kind: RefCell::new(props.drag_kind.clone()),
@@ -256,6 +260,8 @@ impl Shared {
 
 #[derive(Default)]
 pub struct HoverRowIvars {
+    /// The row fills under the pointer: a full width table's rows do.
+    hovers: Cell<bool>,
     hovered: Cell<bool>,
     area: RefCell<Option<Retained<NSTrackingArea>>>,
 }
@@ -273,6 +279,9 @@ define_class!(
             let _: () = unsafe { msg_send![super(self), updateTrackingAreas] };
             if let Some(old) = self.ivars().area.take() {
                 self.removeTrackingArea(&old);
+            }
+            if !self.ivars().hovers.get() {
+                return;
             }
             let options = NSTrackingAreaOptions::MouseEnteredAndExited
                 | NSTrackingAreaOptions::ActiveInKeyWindow
@@ -306,10 +315,28 @@ define_class!(
             self.ivars().hovered.set(false);
         }
 
+        // The row's texts are nd's own, not fields in an NSTableCellView, so AppKit recolours
+        // nothing: they draw again and read the row's background style themselves.
+        #[unsafe(method(setSelected:))]
+        fn set_selected(&self, selected: bool) {
+            let _: () = unsafe { msg_send![super(self), setSelected: selected] };
+            crate::views::redraw_texts(self);
+        }
+
+        #[unsafe(method(setEmphasized:))]
+        fn set_emphasized(&self, emphasized: bool) {
+            let _: () = unsafe { msg_send![super(self), setEmphasized: emphasized] };
+            crate::views::redraw_texts(self);
+        }
+
         #[unsafe(method(drawBackgroundInRect:))]
         fn draw_background(&self, rect: NSRect) {
             let _: () = unsafe { msg_send![super(self), drawBackgroundInRect: rect] };
-            if !self.ivars().hovered.get() || self.isSelected() {
+            // The table's style settles at its first commit, after its first rows are made.
+            let full_width = unsafe { self.superview() }
+                .and_then(|v| v.downcast::<NSTableView>().ok())
+                .is_some_and(|t| t.style() == NSTableViewStyle::FullWidth);
+            if !full_width || !self.ivars().hovered.get() || self.isSelected() {
                 return;
             }
             let path = NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(self.bounds(), 6., 6.);
@@ -339,8 +366,9 @@ fn settle_hovers(view: &NSView) {
 }
 
 impl NdHoverRowView {
-    fn new(mtm: MainThreadMarker) -> Retained<Self> {
-        let this = Self::alloc(mtm).set_ivars(HoverRowIvars::default());
+    fn new(mtm: MainThreadMarker, hovers: bool) -> Retained<Self> {
+        let ivars = HoverRowIvars { hovers: Cell::new(hovers), ..Default::default() };
+        let this = Self::alloc(mtm).set_ivars(ivars);
         unsafe { msg_send![super(this), init] }
     }
 
@@ -426,15 +454,15 @@ define_class!(
             id.map(|id| Retained::into_super(shared.container(id, col)))
         }
 
-        /// A table's rows get the hover fill Music's song tables have; a source list and a plain
-        /// list of mixed rows keep AppKit's own row view.
+        /// Rows that can be selected are nd's, so their texts follow the selection. A full width
+        /// table's also get the hover fill Music's song tables have; an inset table and a plain
+        /// list of mixed rows do not.
         #[unsafe(method_id(tableView:rowViewForRow:))]
-        fn row_view_for(&self, table: &NSTableView, _row: NSInteger) -> Option<Retained<NSTableRowView>> {
+        fn row_view_for(&self, _table: &NSTableView, _row: NSInteger) -> Option<Retained<NSTableRowView>> {
             let shared = &self.ivars().shared;
-            let hovers = matches!(*shared.kind.borrow(), ListKind::Table(_))
-                && shared.selection.get() != Selection::None
-                && table.style() != NSTableViewStyle::SourceList;
-            hovers.then(|| Retained::into_super(NdHoverRowView::new(MainThreadMarker::from(self))))
+            let hovers = matches!(*shared.kind.borrow(), ListKind::Table(_));
+            (shared.selection.get() != Selection::None)
+                .then(|| Retained::into_super(NdHoverRowView::new(MainThreadMarker::from(self), hovers)))
         }
 
         #[unsafe(method(tableViewSelectionDidChange:))]
@@ -496,7 +524,8 @@ define_class!(
             let Some(table) = column.tableView() else { return };
             let index = table.columnWithIdentifier(&column.identifier());
             if index >= 0 {
-                shared.emit.emit(ColumnResized { column: index as usize, width: column.width() as f32 });
+                let width = (column.width() + column_chrome(&table)) as f32;
+                shared.emit.emit(ColumnResized { column: index as usize, width });
                 shared.wake.wake();
             }
         }
@@ -787,9 +816,11 @@ impl TableNative {
             let ListKind::Table(columns) = &props.kind else { return };
             let table_columns = self.table.tableColumns();
             self.shared.programmatic(|| {
+                let chrome = column_chrome(&self.table);
                 for (c, tc) in columns.iter().zip(table_columns.iter()) {
-                    if (tc.width() - f64::from(c.width)).abs() > 0.5 {
-                        tc.setWidth(f64::from(c.width));
+                    let width = (f64::from(c.width) - chrome).max(f64::from(c.min_width));
+                    if (tc.width() - width).abs() > 0.5 {
+                        tc.setWidth(width);
                     }
                     let indicator = c.sort.map(|d| match d {
                         SortDirection::Ascending => "NSAscendingSortIndicator",
@@ -985,13 +1016,17 @@ impl TableNative {
         } else {
             0.
         };
-        let bars = bars(&self.scroll);
+        self.apply_inset_style();
+        self.fit_columns();
+        let over = header_over(&self.scroll, &self.table);
+        let bars = bars(&self.scroll) + over;
+        shared.header_over.set(over);
         shared.bars.set(bars);
         let foot = foot(&self.scroll);
         shared.foot.set(foot);
         {
             let mut core = self.props.handle.0.borrow_mut();
-            core.set_viewport(f64::from(self.size.width), (visible.height - header - bars - foot).max(0.));
+            core.set_viewport(f64::from(self.size.width), (visible.height - (header - over) - bars - foot).max(0.));
         }
         let generation = self.props.handle.0.borrow().generation();
         let structural = self.generation != Some(generation);
@@ -1048,6 +1083,14 @@ impl TableNative {
                     self.table.noteHeightOfRowsWithIndexesChanged(&index_set(&changed));
                 }
             }
+            // The stripes AppKit draws past the last row repeat at `rowHeight`, which the
+            // delegate's heights leave at its default: carry the rows' own pitch on.
+            if self.table.usesAlternatingRowBackgroundColors()
+                && let Some(last) = shared.snap.borrow().heights.last().copied()
+                && (self.table.rowHeight() - last).abs() > 0.01
+            {
+                self.table.setRowHeight(last.max(1.));
+            }
             // Re-tiled now, not on the next display pass, so the document height the clip view
             // is placed against is the rows' sum.
             self.table.tile();
@@ -1058,6 +1101,46 @@ impl TableNative {
         let relayout = (width - self.row_width).abs() > 0.5;
         self.row_width = width;
         relayout
+    }
+
+    /// An inset list is a source list in a scaffold's sidebar (and where no scaffold says
+    /// otherwise), on the sidebar's material. In a content pane the source list's ground is a
+    /// flat grey, so there it is the inset style on the content's own background, with the
+    /// alternating rows of a table.
+    fn apply_inset_style(&self) {
+        if !self.props.inset {
+            return;
+        }
+        let content = crate::scaffold::NdPaneView::in_sidebar(&self.scroll) == Some(false);
+        let style = if content { NSTableViewStyle::Inset } else { NSTableViewStyle::SourceList };
+        if self.table.style() != style {
+            self.table.setStyle(style);
+            self.table.setUsesAlternatingRowBackgroundColors(content && matches!(self.props.kind, ListKind::Table(_)));
+        }
+    }
+
+    /// Keeps the columns at the widths the app gave less the table's own padding
+    /// ([`column_chrome`]), so columns the app sized to the pane fit it. The padding is known
+    /// only once the columns are in the table and its style is settled, so this runs at commit.
+    /// The last column is left alone while AppKit has grown it to fill a table that fits.
+    fn fit_columns(&self) {
+        let ListKind::Table(columns) = &self.props.kind else { return };
+        let chrome = column_chrome(&self.table);
+        if chrome <= 0. {
+            return;
+        }
+        let table_columns = self.table.tableColumns();
+        let last = columns.len().saturating_sub(1);
+        let fits = self.table.frame().size.width <= self.scroll.contentView().bounds().size.width + 0.5;
+        self.shared.programmatic(|| {
+            for (i, (c, tc)) in columns.iter().zip(table_columns.iter()).enumerate() {
+                let width = (f64::from(c.width) - chrome).max(f64::from(c.min_width));
+                let grown = i == last && fits && tc.width() > width;
+                if !grown && (tc.width() - width).abs() > 0.5 {
+                    tc.setWidth(width);
+                }
+            }
+        });
     }
 
     fn row_width_now(&self) -> f32 {
@@ -1093,7 +1176,7 @@ fn place_clip(scroll: &NSScrollView, shared: &Shared, handle: &ListHandle) {
     let layout = handle.0.borrow_mut().layout();
     let clip = scroll.contentView();
     let bars = shared.bars.get();
-    let inset = (-layout.scroll_top).max(0.) + bars;
+    let inset = (-layout.scroll_top).max(0.) + bars - shared.header_over.get();
     let foot = shared.foot.get();
     let current = scroll.contentInsets();
     if (current.top - inset).abs() > 0.25 || (current.bottom - foot).abs() > 0.25 {
@@ -1131,6 +1214,31 @@ impl Drop for TableNative {
 /// How far the window's bars (a toolbar over full-size content) reach down over the scroll view.
 fn bars(scroll: &NSScrollView) -> f64 {
     scroll.safeAreaInsets().top.max(0.)
+}
+
+/// How far the table's header reaches down over the rows' clip view. From macOS 26 the header
+/// floats over the rows instead of taking the scroll view's top, and the clip view rests that
+/// much further up, so row 0 sits at minus this height in the clip's bounds.
+fn header_over(scroll: &NSScrollView, table: &NSTableView) -> f64 {
+    let Some(header) = table.headerView().and_then(|h| unsafe { h.superview() }) else { return 0. };
+    let clip = scroll.contentView().frame();
+    let header = header.frame();
+    (header.origin.y + header.size.height - clip.origin.y).clamp(0., header.size.height)
+}
+
+/// The width a table takes beyond its columns' own, per column: the inset styles pad each row's
+/// ends and AppKit adds the intercell spacing to every column. A table's columns are given in
+/// whole widths, as the other backends lay them out, so this comes out of each.
+fn column_chrome(table: &NSTableView) -> f64 {
+    let columns = table.tableColumns();
+    let count = columns.count();
+    if count == 0 {
+        return 0.;
+    }
+    let spacing: f64 =
+        (0..count).map(|i| table.rectOfColumn(i as isize).size.width - columns.objectAtIndex(i).width()).sum();
+    let padding = 2. * table.rectOfColumn(0).origin.x;
+    ((spacing + padding) / count as f64).max(0.)
 }
 
 /// How far a bar floating over the pane's foot reaches up over the scroll view.

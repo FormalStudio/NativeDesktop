@@ -291,6 +291,9 @@ impl TabStripControl {
         let control = NSSegmentedControl::new(mtm);
         control.setSegmentStyle(NSSegmentStyle::Automatic);
         control.setTrackingMode(NSSegmentSwitchTracking::SelectOne);
+        if props.presentation == nd_components::TabStyle::Strip {
+            control.setSelectedSegmentBezelColor(Some(&objc2_app_kit::NSColor::controlColor()));
+        }
         target.wire(&control);
         let this = Self { control, _target: target, props: props.clone(), ids, selected };
         this.set_tabs(&props.tabs);

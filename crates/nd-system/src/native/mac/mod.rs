@@ -48,6 +48,47 @@ pub(crate) fn later_on_run_loop(f: impl FnOnce() + 'static) {
     }
 }
 
+/// `NSWorkspace`'s icon for `path`, drawn into a bitmap `side` pixels square and encoded as PNG.
+/// The icon service and a bitmap context are both safe off the main thread.
+fn file_icon(path: &std::path::Path, side: u32) -> Option<Vec<u8>> {
+    use objc2::AnyThread;
+    use objc2_app_kit::{
+        NSBitmapImageFileType, NSBitmapImageRep, NSCompositingOperation, NSDeviceRGBColorSpace, NSGraphicsContext,
+    };
+    use objc2_foundation::{NSDictionary, NSPoint, NSRect, NSSize};
+
+    objc2::rc::autoreleasepool(|_| {
+        let image = NSWorkspace::sharedWorkspace().iconForFile(&NSString::from_str(&path.to_string_lossy()));
+        // SAFETY: AppKit allocates the planes (a null pointer asks for that) for the size given.
+        let rep = unsafe {
+            NSBitmapImageRep::initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bytesPerRow_bitsPerPixel(
+            NSBitmapImageRep::alloc(),
+            std::ptr::null_mut(),
+            side as isize,
+            side as isize,
+            8,
+            4,
+            true,
+            false,
+            NSDeviceRGBColorSpace,
+            0,
+            32,
+        )
+        }?;
+        let context = NSGraphicsContext::graphicsContextWithBitmapImageRep(&rep)?;
+        let bounds = NSRect::new(NSPoint::ZERO, NSSize::new(f64::from(side), f64::from(side)));
+        NSGraphicsContext::saveGraphicsState_class();
+        NSGraphicsContext::setCurrentContext(Some(&context));
+        // The icon picks its rendition from the destination's pixels, whatever size it reports.
+        image.drawInRect_fromRect_operation_fraction(bounds, NSRect::ZERO, NSCompositingOperation::SourceOver, 1.);
+        context.flushGraphics();
+        NSGraphicsContext::restoreGraphicsState_class();
+        // SAFETY: an empty properties dictionary is valid for PNG.
+        let data = unsafe { rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &NSDictionary::new()) }?;
+        Some(data.to_vec())
+    })
+}
+
 /// Where events go once [`Backend::attach`] ran; main-thread observers read it.
 pub(crate) fn emitter() -> Emitter {
     EMITTER.get().cloned().unwrap_or_else(Emitter::detached)
@@ -156,6 +197,10 @@ impl Backend for MacBackend {
         let urls = NSArray::from_retained_slice(&[file_url(&path)]);
         NSWorkspace::sharedWorkspace().activateFileViewerSelectingURLs(&urls);
         Ok(())
+    }
+
+    fn file_icon(&self, path: PathBuf, side: u32) -> Result<Vec<u8>> {
+        file_icon(&path, side).ok_or_else(|| Error::Invalid(format!("no icon for {}", path.display())))
     }
 
     fn tray_set(&self, tray: Tray, reply: Reply<()>) {

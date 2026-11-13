@@ -11,9 +11,9 @@ use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2::{DefinedClass, MainThreadOnly, Message, define_class, msg_send};
 use objc2_app_kit::{
-    NSAccessibilityStaticTextRole, NSAttributedStringNSExtendedStringDrawing, NSEvent, NSEventModifierFlags, NSFont,
-    NSFontAttributeName, NSForegroundColorAttributeName, NSResponder, NSStringDrawingOptions, NSView,
-    NSViewLayerContentsRedrawPolicy,
+    NSAccessibilityStaticTextRole, NSAttributedStringNSExtendedStringDrawing, NSBackgroundStyle, NSEvent,
+    NSEventModifierFlags, NSFont, NSFontAttributeName, NSForegroundColorAttributeName, NSResponder,
+    NSStringDrawingOptions, NSTableRowView, NSView, NSViewLayerContentsRedrawPolicy,
 };
 use objc2_foundation::{MainThreadMarker, NSAttributedString, NSDictionary, NSPoint, NSRect, NSSize, NSString};
 
@@ -921,7 +921,7 @@ define_class!(
 
         #[unsafe(method(drawRect:))]
         fn draw_rect(&self, _dirty: NSRect) {
-            let Some(props) = self.ivars().props.borrow().clone() else { return };
+            let Some(props) = self.drawn_look() else { return };
             let text = attributed(&props, self.family().as_deref());
             match props.clamp {
                 Some(clamp) => {
@@ -997,6 +997,19 @@ impl NdTextView {
         self.ivars().props.borrow().clone()
     }
 
+    /// The look as it is drawn: on a table row's emphasized selection the label tones give way
+    /// to the selected text colour.
+    pub(crate) fn drawn_look(&self) -> Option<TextLook> {
+        let mut look = self.look()?;
+        if on_emphasized_row(self) {
+            look.color = look.color.on_selection();
+            for run in &mut look.runs {
+                run.color = run.color.map(crate::look::Color::on_selection);
+            }
+        }
+        Some(look)
+    }
+
     pub(crate) fn set_props(&self, props: &TextLook) {
         self.setAlphaValue(props.opacity.into());
         let links = props.has_links();
@@ -1048,6 +1061,29 @@ impl NdTextView {
         match family {
             Some(family) => measure_text(&props, family, width),
             None => measure_text(&props, self.family().as_deref(), width),
+        }
+    }
+}
+
+/// Whether `view` sits in a table row that draws the emphasized selection behind it.
+fn on_emphasized_row(view: &NSView) -> bool {
+    let mut at = unsafe { view.superview() };
+    while let Some(v) = at {
+        if let Some(row) = v.downcast_ref::<NSTableRowView>() {
+            return row.interiorBackgroundStyle() == NSBackgroundStyle::Emphasized;
+        }
+        at = unsafe { v.superview() };
+    }
+    false
+}
+
+/// Draws the texts under `view` again: their colours follow the row's selection.
+pub(crate) fn redraw_texts(view: &NSView) {
+    for sub in view.subviews().iter() {
+        if sub.downcast_ref::<NdTextView>().is_some() {
+            sub.setNeedsDisplay(true);
+        } else {
+            redraw_texts(&sub);
         }
     }
 }

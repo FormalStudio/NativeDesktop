@@ -352,6 +352,14 @@ impl Shell<'_> {
     pub fn reveal_path(&self, path: impl AsRef<Path>) -> Result<()> {
         self.0.0.backend.reveal_path(existing(path.as_ref())?)
     }
+
+    /// The icon the OS shows for the file or folder at `path`, as a PNG `side` pixels square:
+    /// an app's own icon, a folder's custom one, the document icon of the file's type. Only
+    /// where `nd::platform::has(Feature::FileIcons)`. It asks the OS's icon service, which can
+    /// read the disk, so call it off the main thread (`nd::system::spawn`) and keep the bytes.
+    pub fn file_icon(&self, path: impl AsRef<Path>, side: u32) -> Result<Vec<u8>> {
+        self.0.0.backend.file_icon(path.as_ref().to_owned(), side.clamp(1, 1024))
+    }
 }
 
 fn existing(path: &Path) -> Result<PathBuf> {

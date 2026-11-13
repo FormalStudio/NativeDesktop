@@ -29,11 +29,12 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{AllocAnyThread, DefinedClass, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSAccessibility, NSBackgroundStyle, NSBezelStyle, NSButton, NSColor, NSControlTextEditingDelegate, NSDragOperation,
-    NSDraggingSession, NSEvent, NSFont, NSFontWeightRegular, NSImageView, NSLayoutConstraint, NSLineBreakMode, NSMenu,
-    NSOutlineView, NSOutlineViewDataSource, NSOutlineViewDelegate, NSPasteboardItem, NSPasteboardWriting, NSResponder,
-    NSScrollView, NSTableCellView, NSTableColumn, NSTableRowView, NSTableViewAnimationOptions, NSTableViewDataSource,
-    NSTableViewDelegate, NSTableViewRowSizeStyle, NSTableViewStyle, NSTextField, NSTrackingArea, NSTrackingAreaOptions,
+    NSAccessibility, NSAppearanceCustomization, NSBackgroundStyle, NSBezelStyle, NSButton, NSColor,
+    NSControlTextEditingDelegate, NSDragOperation, NSDraggingSession, NSEvent, NSFont, NSFontWeightRegular,
+    NSImageView, NSLayoutConstraint, NSLineBreakMode, NSMenu, NSOutlineView, NSOutlineViewDataSource,
+    NSOutlineViewDelegate, NSPasteboardItem, NSPasteboardWriting, NSResponder, NSScrollView, NSTableCellView,
+    NSTableColumn, NSTableRowView, NSTableViewAnimationOptions, NSTableViewDataSource, NSTableViewDelegate,
+    NSTableViewRowSizeStyle, NSTableViewStyle, NSTextField, NSTrackingArea, NSTrackingAreaOptions,
     NSUserInterfaceItemIdentification, NSView,
 };
 use objc2_foundation::{
@@ -291,9 +292,17 @@ define_class!(
             if data.node_index(Some(item)).is_some_and(|i| data.nodes[i].section) {
                 return GROUP_ROW;
             }
-            let caption = data.node_index(Some(item)).is_some_and(|i| data.nodes[i].caption.is_some());
-            // A caption is a second line in the small system font under the row's own height.
-            if caption { outline.rowHeight() + caption_line(MainThreadMarker::from(outline)) } else { outline.rowHeight() }
+            let node = data.node_index(Some(item)).map(|i| &data.nodes[i]);
+            let (caption, meter) = node.map_or((false, false), |n| (n.caption.is_some(), n.meter.is_some()));
+            if !caption && !meter {
+                return outline.rowHeight();
+            }
+            // The title, a caption in the small system font under it and a meter under that,
+            // between the padding the cell pins them with.
+            let mtm = MainThreadMarker::from(outline);
+            let caption = if caption { text_line(mtm, NSFont::smallSystemFontSize()) } else { 0. };
+            let meter = if meter { METER_GAP + METER_HEIGHT } else { 0. };
+            (text_line(mtm, NSFont::systemFontSize()) + caption + meter + 2. * STACK_PAD).max(outline.rowHeight())
         }
 
         #[unsafe(method_id(outlineView:rowViewForItem:))]
@@ -379,9 +388,9 @@ fn changed_item(notification: &NSNotification) -> Option<Retained<AnyObject>> {
     info.objectForKey(&NSString::from_str("NSObject"))
 }
 
-fn caption_line(mtm: MainThreadMarker) -> f64 {
+fn text_line(mtm: MainThreadMarker, size: f64) -> f64 {
     let probe = NSTextField::labelWithString(&NSString::from_str("Ag"), mtm);
-    probe.setFont(Some(&NSFont::systemFontOfSize(NSFont::smallSystemFontSize())));
+    probe.setFont(Some(&NSFont::systemFontOfSize(size)));
     probe.intrinsicContentSize().height.ceil()
 }
 
@@ -389,6 +398,16 @@ fn caption_line(mtm: MainThreadMarker) -> f64 {
 /// size (measured on macOS 27; AppKit has no API for it). The outline adds the space above
 /// a section itself, so a header sits as Finder's do.
 const GROUP_ROW: f64 = 19.; // nd-lint: allow, AppKit's own group row height, which it does not expose
+
+/// The box every row's icon is centred in, so titles start at one x whatever each symbol's own
+/// width, and the space between it and the title: Finder's sidebar at the medium size.
+const ICON_BOX: f64 = 23.; // nd-lint: allow, measured from Finder's sidebar, which AppKit does not expose
+const ICON_GAP: f64 = 6.; // nd-lint: allow, as above
+/// A row's capacity meter: a hairline bar, as the storage bars in System Settings.
+const METER_HEIGHT: f64 = 3.; // nd-lint: allow, the meter's own size
+const METER_GAP: f64 = 3.; // nd-lint: allow, the meter's own size
+/// Above and below a row that stacks a caption or a meter under its title.
+const STACK_PAD: f64 = 5.; // nd-lint: allow, half of what a one line row leaves around its title
 
 const ROW_CELL: &str = "nd.source.row";
 /// How close to the visible rows' edge a drag scrolls the list, and how far a call scrolls it
@@ -476,6 +495,10 @@ pub struct CellIvars {
     art: Retained<NSView>,
     slot: ImageSlot,
     caption: Retained<NSTextField>,
+    /// The capacity meter: a track with its filled part inside, both layers.
+    meter: Retained<NSView>,
+    meter_fill: Retained<NSView>,
+    meter_width: RefCell<Option<Retained<NSLayoutConstraint>>>,
     badge: Retained<NSTextField>,
     actions: Retained<NSView>,
     /// The node the cell shows now, and the action ids of its buttons in order.
@@ -500,6 +523,12 @@ define_class!(
         fn set_background_style(&self, style: NSBackgroundStyle) {
             let _: () = unsafe { msg_send![super(self), setBackgroundStyle: style] };
             self.recolour(style);
+        }
+
+        #[unsafe(method(viewDidChangeEffectiveAppearance))]
+        fn appearance_changed(&self) {
+            let _: () = unsafe { msg_send![super(self), viewDidChangeEffectiveAppearance] };
+            self.recolour(self.backgroundStyle());
         }
 
         #[unsafe(method(actionClicked:))]
@@ -534,6 +563,9 @@ impl NdSourceCell {
             art: NSView::new(mtm),
             slot: ImageSlot::new(),
             caption: label(),
+            meter: NSView::new(mtm),
+            meter_fill: NSView::new(mtm),
+            meter_width: RefCell::default(),
             badge: label(),
             actions: NSView::new(mtm),
             node: RefCell::default(),
@@ -565,7 +597,21 @@ impl NdSourceCell {
                 NSFontWeightRegular
             })));
         iv.actions.setTranslatesAutoresizingMaskIntoConstraints(false);
-        for v in [&*iv.art as &NSView, &iv.icon, &iv.caption, &iv.badge, &iv.actions] {
+        for v in [&*iv.meter, &*iv.meter_fill] {
+            v.setTranslatesAutoresizingMaskIntoConstraints(false);
+            v.setWantsLayer(true);
+            if let Some(layer) = v.layer() {
+                layer.setCornerRadius(METER_HEIGHT / 2.);
+            }
+        }
+        iv.meter.addSubview(&iv.meter_fill);
+        NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&[
+            iv.meter.heightAnchor().constraintEqualToConstant(METER_HEIGHT),
+            iv.meter_fill.leadingAnchor().constraintEqualToAnchor(&iv.meter.leadingAnchor()),
+            iv.meter_fill.topAnchor().constraintEqualToAnchor(&iv.meter.topAnchor()),
+            iv.meter_fill.bottomAnchor().constraintEqualToAnchor(&iv.meter.bottomAnchor()),
+        ]));
+        for v in [&*iv.art as &NSView, &iv.icon, &iv.caption, &iv.meter, &iv.badge, &iv.actions] {
             this.addSubview(v);
         }
         unsafe { this.setImageView(Some(&iv.icon)) };
@@ -591,6 +637,20 @@ impl NdSourceCell {
         let caption = node.caption.as_deref().filter(|_| !node.section);
         iv.caption.setStringValue(&NSString::from_str(caption.unwrap_or("")));
         iv.caption.setHidden(caption.is_none());
+        let meter = node.meter.filter(|_| !node.section);
+        iv.meter.setHidden(meter.is_none());
+        if let Some(old) = iv.meter_width.borrow_mut().take() {
+            old.setActive(false);
+        }
+        if let Some(fraction) = meter {
+            let width = iv
+                .meter_fill
+                .widthAnchor()
+                .constraintEqualToAnchor_multiplier(&iv.meter.widthAnchor(), f64::from(fraction.clamp(0., 1.)));
+            width.setActive(true);
+            *iv.meter_width.borrow_mut() = Some(width);
+            iv.meter.setAccessibilityLabel(Some(&NSString::from_str(&format!("{:.0}% used", fraction * 100.))));
+        }
         let badge = node.badge.as_deref().filter(|_| !node.section);
         iv.badge.setStringValue(&NSString::from_str(badge.unwrap_or("")));
         iv.badge.setHidden(badge.is_none());
@@ -675,6 +735,23 @@ impl NdSourceCell {
             NSColor::secondaryLabelColor()
         };
         iv.caption.setTextColor(Some(&secondary));
+        // Layer colours do not follow the appearance on their own.
+        self.effectiveAppearance().performAsCurrentDrawingAppearance(&block2::RcBlock::new(|| {
+            let (track, fill) = if style == NSBackgroundStyle::Emphasized {
+                (
+                    NSColor::alternateSelectedControlTextColor().colorWithAlphaComponent(0.3),
+                    NSColor::alternateSelectedControlTextColor(),
+                )
+            } else {
+                (NSColor::quaternaryLabelColor(), NSColor::secondaryLabelColor())
+            };
+            if let Some(layer) = iv.meter.layer() {
+                layer.setBackgroundColor(Some(&track.CGColor()));
+            }
+            if let Some(layer) = iv.meter_fill.layer() {
+                layer.setBackgroundColor(Some(&fill.CGColor()));
+            }
+        }));
         // Counts recede behind the title, as in Notes' and Mail's sidebars, at the secondary text
         // token. On the unemphasized selection grey that token is under 4.5:1, so a selected
         // row's count takes the title's colour.
@@ -713,23 +790,27 @@ impl NdSourceCell {
                     .constraintEqualToSystemSpacingAfterAnchor_multiplier(&iv.art.trailingAnchor(), 1.),
             );
         } else if has_icon {
-            c.push(iv.icon.leadingAnchor().constraintEqualToAnchor(&self.leadingAnchor()));
+            c.push(iv.icon.centerXAnchor().constraintEqualToAnchor_constant(&self.leadingAnchor(), ICON_BOX / 2.));
             c.push(iv.icon.centerYAnchor().constraintEqualToAnchor(&self.centerYAnchor()));
-            c.push(
-                title
-                    .leadingAnchor()
-                    .constraintEqualToSystemSpacingAfterAnchor_multiplier(&iv.icon.trailingAnchor(), 1.),
-            );
+            c.push(title.leadingAnchor().constraintEqualToAnchor_constant(&self.leadingAnchor(), ICON_BOX + ICON_GAP));
         } else {
             c.push(title.leadingAnchor().constraintEqualToAnchor(&self.leadingAnchor()));
         }
         if has_caption {
-            c.push(title.topAnchor().constraintEqualToAnchor(&self.topAnchor()));
+            c.push(title.topAnchor().constraintEqualToAnchor_constant(&self.topAnchor(), STACK_PAD));
             c.push(iv.caption.topAnchor().constraintEqualToAnchor(&title.bottomAnchor()));
             c.push(iv.caption.leadingAnchor().constraintEqualToAnchor(&title.leadingAnchor()));
             c.push(iv.caption.trailingAnchor().constraintLessThanOrEqualToAnchor(&iv.actions.leadingAnchor()));
+        } else if !iv.meter.isHidden() {
+            c.push(title.topAnchor().constraintEqualToAnchor_constant(&self.topAnchor(), STACK_PAD));
         } else {
             c.push(title.centerYAnchor().constraintEqualToAnchor(&self.centerYAnchor()));
+        }
+        if !iv.meter.isHidden() {
+            let above = if has_caption { &iv.caption } else { &title };
+            c.push(iv.meter.topAnchor().constraintEqualToAnchor_constant(&above.bottomAnchor(), METER_GAP));
+            c.push(iv.meter.leadingAnchor().constraintEqualToAnchor(&title.leadingAnchor()));
+            c.push(iv.meter.trailingAnchor().constraintEqualToAnchor(&self.trailingAnchor()));
         }
         c.push(iv.actions.trailingAnchor().constraintEqualToAnchor(&self.trailingAnchor()));
         c.push(iv.actions.centerYAnchor().constraintEqualToAnchor(&self.centerYAnchor()));
