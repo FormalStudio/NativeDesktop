@@ -1,0 +1,71 @@
+From 99b77dee1fbb5b399ffa373c7a46d6d2664b7f04 Mon Sep 17 00:00:00 2001
+From: FormalSnake <kyaniserni@gmail.com>
+Date: Fri, 13 Nov 2026 02:45:45 +0000
+Subject: [PATCH 33/34] gpui: report the tiled sides under server-side
+ decorations too
+
+---
+ crates/gpui_linux/src/linux/wayland/window.rs | 4 ++++
+ crates/gpui/src/platform.rs                   | 3 +++
+ crates/gpui/src/window.rs                     | 9 ++++++++-
+ 3 files changed, 15 insertions(+), 1 deletion(-)
+
+diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/src/linux/wayland/window.rs
+index 7b5609f5..41c3ae74 100644
+--- a/crates/gpui_linux/src/linux/wayland/window.rs
++++ b/crates/gpui_linux/src/linux/wayland/window.rs
+@@ -2331,6 +2331,10 @@ impl PlatformWindow for WaylandWindow {
+         }
+     }
+ 
++    fn tiling(&self) -> Tiling {
++        self.borrow().tiling
++    }
++
+     fn request_decorations(&self, decorations: WindowDecorations) {
+         let mut state = self.borrow_mut();
+         match state.surface_state.decoration().as_ref() {
+diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
+index 43d904d8..b037e354 100644
+--- a/crates/gpui/src/platform.rs
++++ b/crates/gpui/src/platform.rs
+@@ -1405,6 +1405,9 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
+     fn window_decorations(&self) -> Decorations {
+         Decorations::Server
+     }
++    fn tiling(&self) -> Tiling {
++        Tiling::default()
++    }
+     fn set_app_id(&mut self, _app_id: &str) {}
+     fn map_window(&mut self) -> anyhow::Result<()> {
+         Ok(())
+diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
+index 6033ef83..e0b7ac9c 100644
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -22,7 +22,7 @@ use crate::{
+     SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledPixels, Scene, Shadow, SharedString, Size,
+     StrikethroughStyle, Style, SubpixelSprite, Subscription, SystemWindowTab,
+     SystemWindowTabController, TabStopMap, Task, TextInputConfiguration, TextInputStateChange,
+-    TextRenderingMode, TextStyle, TextStyleRefinement, ThermalState, TransformationMatrix,
++    TextRenderingMode, TextStyle, TextStyleRefinement, ThermalState, Tiling, TransformationMatrix,
+     Underline, UnderlineStyle, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
+     WindowControls, WindowDecorations, WindowInsets, WindowOptions, WindowParams, WindowTextSystem,
+     WindowVisibility, point, prelude::*, px, rems, size, transparent_black,
+@@ -3330,6 +3330,13 @@ impl Window {
+         self.platform_window.window_decorations()
+     }
+ 
++    /// Returns the sides the compositor tiles, whichever side draws the decorations
++    /// (Wayland). A server-side `Decorations` carries no tiling, yet the window's size
++    /// is still the layout's on a tiled side.
++    pub fn tiling(&self) -> Tiling {
++        self.platform_window.tiling()
++    }
++
+     /// Returns whether this window is resizable.
+     pub fn is_resizable(&self) -> bool {
+         self.is_resizable
+-- 
+2.56.0
+

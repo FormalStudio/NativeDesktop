@@ -53,7 +53,7 @@ use async_task::Runnable;
 use collections::FxHashMap;
 use futures::channel::oneshot;
 #[cfg(any(test, feature = "test-support", feature = "bench-support"))]
-pub use image::RgbaImage;
+use image::RgbaImage;
 use image::codecs::gif::GifDecoder;
 use image::{AnimationDecoder as _, DynamicImage, Frame};
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
@@ -846,37 +846,6 @@ pub enum Decorations {
     },
 }
 
-/// A configure from the compositor (Wayland `xdg_surface.configure`, X11 `ConfigureNotify`),
-/// reported once per configure as it arrives, in order, before the window applies it. Sizes are
-/// window geometry: the window without its client inset.
-#[derive(Debug, Copy, Clone, PartialEq)]
-pub struct Configure {
-    /// The configure's serial, 0 where the platform has none.
-    pub serial: u32,
-    /// The window geometry the compositor asked for; `None` leaves the size to the window.
-    pub size: Option<Size<Pixels>>,
-    /// The window geometry the window had last committed when the configure arrived.
-    pub geometry: Size<Pixels>,
-    /// The surface size the window had last committed when the configure arrived, the inset
-    /// included.
-    pub surface: Size<Pixels>,
-    /// The decorations in force for this configure, tiling included.
-    pub decorations: Decorations,
-    /// Whether this configure leaves the window maximized, or fullscreen.
-    pub maximized: bool,
-    pub fullscreen: bool,
-}
-
-/// A frame the compositor put on screen, as reported by the platform.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct PresentationTime {
-    /// When the frame turned into light, on the monotonic clock.
-    pub presented: std::time::Instant,
-    /// The display's refresh interval as the compositor predicts it for the next frame; `None`
-    /// when the output has no constant refresh.
-    pub refresh: Option<Duration>,
-}
-
 /// What window controls this platform supports
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 pub struct WindowControls {
@@ -1347,10 +1316,6 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     /// of any window update.
     fn on_visibility_change(&self, callback: Box<dyn FnMut(WindowVisibility)>);
     fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool)>);
-    /// Registers the callback invoked when the pointer device itself goes away (a
-    /// seat losing its pointer) while the window has it: no release follows, so a
-    /// capture taken by a press ends here, before the platform cancels the press.
-    fn on_pointer_removed(&self, _callback: Box<dyn FnMut()>) {}
     fn on_resize(&self, callback: Box<dyn FnMut(Size<Pixels>, f32)>);
     fn on_moved(&self, callback: Box<dyn FnMut()>);
     /// Registers the callback invoked when the window moves to another
@@ -1451,15 +1416,8 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
         WindowControls::default()
     }
     fn set_client_inset(&self, _inset: Pixels) {}
-    fn on_configure(&self, _callback: Box<dyn FnMut(Configure)>) {}
     fn set_client_corner_radii(&self, _radii: Corners<Pixels>) {}
     fn gpu_specs(&self) -> Option<GpuSpecs>;
-
-    /// When the compositor presented this window's latest frame, where the platform measures
-    /// presentation (Wayland `wp_presentation`).
-    fn last_presentation(&self) -> Option<PresentationTime> {
-        None
-    }
 
     fn update_ime_position(&self, _bounds: Bounds<Pixels>);
 
@@ -2677,11 +2635,6 @@ pub struct WindowOptions {
     /// The kind of window to create
     pub kind: WindowKind,
 
-    /// A window of another process to open this one as a child of, in place of the parent
-    /// [`WindowKind::Floating`] and [`WindowKind::Dialog`] otherwise take from the app's own
-    /// windows: a file chooser over the app that asked for it.
-    pub foreign_parent: Option<ForeignParent>,
-
     /// Whether the window can be moved by the user. When `false`, the user cannot drag
     /// the window (on macOS this sets `NSWindow.isMovable`, which also disables the
     /// Window-menu tiling items); programmatic moves are still allowed.
@@ -2771,9 +2724,6 @@ pub struct WindowParams {
     /// The kind of window to create
     #[cfg_attr(any(target_os = "linux", target_os = "freebsd"), allow(dead_code))]
     pub kind: WindowKind,
-
-    #[cfg_attr(not(any(target_os = "linux", target_os = "freebsd")), allow(dead_code))]
-    pub foreign_parent: Option<ForeignParent>,
 
     /// Whether the window should be movable by the user
     #[cfg_attr(any(target_os = "linux", target_os = "freebsd"), allow(dead_code))]
@@ -2869,7 +2819,6 @@ impl Default for WindowOptions {
             focus: true,
             show: true,
             kind: WindowKind::Normal,
-            foreign_parent: None,
             is_movable: true,
             app_owns_titlebar_drag: false,
             inactive_frame_interval: Some(Duration::from_micros(33_333)),
@@ -2901,56 +2850,6 @@ pub struct TitlebarOptions {
 
     /// The position of the macOS traffic light buttons
     pub traffic_light_position: Option<Point<Pixels>>,
-}
-
-/// A window of another process, by the handle that process exported for it. Only Linux reads
-/// it; a handle of the other display protocol than the one the app runs on is ignored.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub enum ForeignParent {
-    /// An xdg-foreign v2 handle, as `zxdg_exported_v2.handle` gave it to the exporting client.
-    Wayland(String),
-    /// An X11 window id.
-    X11(u32),
-}
-
-impl ForeignParent {
-    /// Reads the `wayland:<handle>` and `x11:<hex window id>` form xdg-desktop-portal hands its
-    /// backends as `parent_window`. An empty or unknown string is no parent.
-    pub fn from_portal(parent_window: &str) -> Option<Self> {
-        if let Some(handle) = parent_window.strip_prefix("wayland:") {
-            return (!handle.is_empty()).then(|| Self::Wayland(handle.to_owned()));
-        }
-        let xid = parent_window.strip_prefix("x11:")?;
-        let xid = xid.strip_prefix("0x").unwrap_or(xid);
-        u32::from_str_radix(xid, 16)
-            .ok()
-            .filter(|id| *id != 0)
-            .map(Self::X11)
-    }
-}
-
-#[cfg(test)]
-mod foreign_parent_tests {
-    use super::ForeignParent;
-
-    #[test]
-    fn test_foreign_parent_from_portal() {
-        assert_eq!(
-            ForeignParent::from_portal("wayland:5f1e-aa"),
-            Some(ForeignParent::Wayland("5f1e-aa".into()))
-        );
-        assert_eq!(
-            ForeignParent::from_portal("x11:3c00007"),
-            Some(ForeignParent::X11(0x3c00007))
-        );
-        assert_eq!(
-            ForeignParent::from_portal("x11:0x3c00007"),
-            Some(ForeignParent::X11(0x3c00007))
-        );
-        for none in ["", "wayland:", "x11:", "x11:0", "x11:zz", "mir:1"] {
-            assert_eq!(ForeignParent::from_portal(none), None, "{none:?}");
-        }
-    }
 }
 
 /// The kind of window to create
