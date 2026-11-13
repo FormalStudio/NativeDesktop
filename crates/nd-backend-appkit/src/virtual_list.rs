@@ -1273,6 +1273,46 @@ define_class!(
     }
 );
 
+pub struct GridViewIvars {
+    shared: Rc<Shared>,
+}
+
+define_class!(
+    // SAFETY: NSCollectionView may be subclassed; mouseDown calls super first.
+    #[unsafe(super(NSCollectionView, NSView, objc2_app_kit::NSResponder, NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[ivars = GridViewIvars]
+    pub struct NdGridView;
+
+    impl NdGridView {
+        // NSCollectionView selects on the press and has no double action: the second press of
+        // a double click on an item activates it, as a table's does its row.
+        #[unsafe(method(mouseDown:))]
+        fn mouse_down(&self, event: &NSEvent) {
+            let _: () = unsafe { msg_send![super(self), mouseDown: event] };
+            if event.clickCount() != 2 {
+                return;
+            }
+            let at = self.convertPoint_fromView(event.locationInWindow(), None);
+            let Some(path) = self.indexPathForItemAtPoint(at) else { return };
+            let shared = &self.ivars().shared;
+            let id = shared.snap.borrow().ids.get(path.item() as usize).copied();
+            if let Some(id) = id {
+                shared.emit.emit(RowActivated(id));
+                shared.wake.wake();
+            }
+        }
+    }
+);
+
+impl NdGridView {
+    fn new(mtm: MainThreadMarker, shared: Rc<Shared>) -> Retained<NSCollectionView> {
+        let this = Self::alloc(mtm).set_ivars(GridViewIvars { shared });
+        let this: Retained<Self> = unsafe { msg_send![super(this), init] };
+        Retained::into_super(this)
+    }
+}
+
 pub struct GridIvars {
     shared: Rc<Shared>,
 }
@@ -1393,7 +1433,7 @@ impl GridNative {
         let shared = Rc::new(Shared::new(mtm, props, emit, wake));
         let source = NdGridSource::alloc(mtm).set_ivars(GridIvars { shared: shared.clone() });
         let source: Retained<NdGridSource> = unsafe { msg_send![super(source), init] };
-        let collection = NSCollectionView::new(mtm);
+        let collection = NdGridView::new(mtm, shared.clone());
         let layout = NSCollectionViewFlowLayout::new(mtm);
         if let Some(g) = props.handle.0.borrow().grid() {
             layout.setItemSize(objc2_foundation::NSSize::new(g.item_width, g.item_height));

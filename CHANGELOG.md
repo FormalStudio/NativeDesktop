@@ -5,6 +5,10 @@ and the one it moves to.
 
 ## Unreleased
 
+- On AppKit, a row or grid item with a pointer gesture (`.on_tap`, `.on_double_tap`) no longer
+  keeps the press from its list: the table or grid still selects, drags and activates, and the
+  gesture still fires. Before, such rows could not be selected or opened with the mouse.
+- On AppKit, a double click on a grid item reports `ActivateEvent`, as a table's row does.
 - On AppKit, a table's first row sits under its header again. From macOS 26 the header floats
   over the rows and AppKit rests the clip view at minus its height; nd counted that height as
   room for rows and scrolled to zero, so the first row hid behind the header.

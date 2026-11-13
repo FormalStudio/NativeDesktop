@@ -172,6 +172,8 @@ pub struct LayerIvars {
     press_emit: RefCell<Option<(nd_ui::events::Emit, crate::events::Wake)>>,
     /// Where a held press went down, in the window, until it comes up or turns into a drag.
     press_at: Cell<Option<NSPoint>>,
+    /// The list around this view that took the press too and waits for its drags and release.
+    list_press: RefCell<Option<Retained<NSView>>>,
     tracking: RefCell<Option<Retained<objc2_app_kit::NSTrackingArea>>>,
     /// Where a hero in flight lives in the tree while it is drawn on the window's frame view.
     lifted: RefCell<Option<Home>>,
@@ -206,6 +208,7 @@ impl Default for LayerIvars {
             hovered: Cell::new(false),
             press_emit: RefCell::new(None),
             press_at: Cell::new(None),
+            list_press: RefCell::default(),
             tracking: RefCell::new(None),
             lifted: RefCell::new(None),
             outline: RefCell::new(None),
@@ -269,6 +272,7 @@ define_class!(
             }
             self.press(Some(event.locationInWindow()));
             if crate::gestures::mouse(self, event, PointerPhase::Down) {
+                self.press_in_list(event);
                 return;
             }
             let _: () = unsafe { msg_send![super(self), mouseDown: event] };
@@ -284,14 +288,19 @@ define_class!(
             }
             if !crate::gestures::mouse(self, event, PointerPhase::Move) {
                 let _: () = unsafe { msg_send![super(self), mouseDragged: event] };
+            } else if let Some(list) = self.ivars().list_press.borrow().clone() {
+                let _: () = unsafe { msg_send![&*list, mouseDragged: event] };
             }
         }
 
         #[unsafe(method(mouseUp:))]
         fn mouse_up(&self, event: &NSEvent) {
             self.press(None);
+            let list = self.ivars().list_press.take();
             if !crate::gestures::mouse(self, event, PointerPhase::Up) {
                 let _: () = unsafe { msg_send![super(self), mouseUp: event] };
+            } else if let Some(list) = list {
+                let _: () = unsafe { msg_send![&*list, mouseUp: event] };
             }
         }
 
@@ -657,6 +666,38 @@ impl NdLayerView {
     }
 
     /// A press went down at `at` (in the window), or the one held ended.
+    /// A press a pointer gesture took, on a view in a table's row or a grid's item: the list
+    /// still selects, drags and activates on it. The list can track the mouse to the release
+    /// inside its mouseDown, and then no mouseUp reaches this view, so the gesture is finished
+    /// here with the event that tracking stopped on.
+    fn press_in_list(&self, down: &NSEvent) {
+        let mut cursor = unsafe { self.superview() };
+        let list = loop {
+            let Some(v) = cursor else { return };
+            if v.downcast_ref::<objc2_app_kit::NSTableView>().is_some()
+                || v.downcast_ref::<objc2_app_kit::NSCollectionView>().is_some()
+            {
+                break v;
+            }
+            cursor = unsafe { v.superview() };
+        };
+        let _: () = unsafe { msg_send![&*list, mouseDown: down] };
+        let mtm = MainThreadMarker::from(self);
+        let last = objc2_app_kit::NSApplication::sharedApplication(mtm).currentEvent();
+        let phase = match last.as_deref().map(NSEvent::r#type) {
+            // The list did not track: its drags and release come to this view, which hands
+            // them on.
+            Some(objc2_app_kit::NSEventType::LeftMouseDown) => {
+                *self.ivars().list_press.borrow_mut() = Some(list);
+                return;
+            }
+            Some(objc2_app_kit::NSEventType::LeftMouseUp) => PointerPhase::Up,
+            _ => PointerPhase::Cancel,
+        };
+        self.press(None);
+        crate::gestures::mouse(self, last.as_deref().unwrap_or(down), phase);
+    }
+
     fn press(&self, at: Option<NSPoint>) {
         let ivars = self.ivars();
         let Some((emit, wake)) = ivars.press_emit.borrow().clone() else { return };
