@@ -1925,7 +1925,7 @@ impl PlatformWindow for WaylandWindow {
         Some(Rc::new(WaylandDisplay {
             id,
             name: display.name.clone(),
-            bounds: display.bounds.to_pixels(state.scale),
+            bounds: display.logical_bounds(state.scale),
             refresh_interval: display.refresh_interval,
         }))
     }
