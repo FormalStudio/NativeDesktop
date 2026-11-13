@@ -389,6 +389,17 @@ impl Output {
             None => self.bounds.to_pixels(scale),
         }
     }
+
+    /// Mode pixels per logical pixel: fractional when the compositor scales
+    /// the output by a fraction, which `scale` rounds up to an integer. The
+    /// larger sides are compared, since a rotated output's logical size is
+    /// transformed and its mode is not.
+    pub fn scale_factor(&self) -> f32 {
+        let Some(l) = self.logical else { return self.scale as f32 };
+        let mode = self.bounds.size.width.0.max(self.bounds.size.height.0);
+        let logical = l.size.width.0.max(l.size.height.0);
+        if logical > 0 { mode as f32 / logical as f32 } else { self.scale as f32 }
+    }
 }
 
 pub(crate) struct WaylandClientState {
@@ -1299,6 +1310,7 @@ impl WaylandConnection {
                     id: id.clone(),
                     name: output.name.clone(),
                     bounds: output.logical_bounds(output.scale as f32),
+                    scale: output.scale_factor(),
                     refresh_interval: output.refresh_interval,
                 }) as Rc<dyn PlatformDisplay>
             })

@@ -1926,6 +1926,7 @@ impl PlatformWindow for WaylandWindow {
             id,
             name: display.name.clone(),
             bounds: display.logical_bounds(state.scale),
+            scale: display.scale_factor(),
             refresh_interval: display.refresh_interval,
         }))
     }

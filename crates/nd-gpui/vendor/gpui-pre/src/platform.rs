@@ -653,6 +653,12 @@ pub trait PlatformDisplay: Debug {
     /// [`Window::refresh_interval`](crate::Window::refresh_interval).
     fn refresh_interval(&self) -> Option<Duration>;
 
+    /// Device pixels per logical pixel on this display, before any window
+    /// is shown on it. `None` when the platform doesn't report it.
+    fn scale_factor(&self) -> Option<f32> {
+        None
+    }
+
     /// Get the visible bounds for this display, excluding taskbar/dock areas.
     /// This is the usable area where windows can be placed without being obscured.
     /// Defaults to the full display bounds if not overridden.
