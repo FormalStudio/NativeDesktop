@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FormalSnake <kyaniserni@gmail.com>
 Date: Tue, 3 Nov 2026 12:22:55 +0000
-Subject: [PATCH 14/26] gpui: open a window as the child of another client's
+Subject: [PATCH 14/30] gpui: open a window as the child of another client's
  window
 
 ---
@@ -14,7 +14,7 @@ Subject: [PATCH 14/26] gpui: open a window as the child of another client's
  6 files changed, 109 insertions(+), 11 deletions(-)
 
 diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
-index bb092ad..6851b36 100644
+index bb092ad014..6851b36e72 100644
 --- a/crates/gpui/src/platform.rs
 +++ b/crates/gpui/src/platform.rs
 @@ -2633,6 +2633,11 @@ pub struct WindowOptions {
@@ -105,7 +105,7 @@ index bb092ad..6851b36 100644
  #[derive(Clone, Debug, PartialEq, Eq)]
  pub enum WindowKind {
 diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
-index 9cfaec8..779b7f6 100644
+index 9cfaec8970..779b7f6082 100644
 --- a/crates/gpui/src/window.rs
 +++ b/crates/gpui/src/window.rs
 @@ -1643,6 +1643,7 @@ impl Window {
@@ -125,7 +125,7 @@ index 9cfaec8..779b7f6 100644
                  app_owns_titlebar_drag,
                  is_resizable,
 diff --git a/crates/gpui_linux/src/linux/wayland/client.rs b/crates/gpui_linux/src/linux/wayland/client.rs
-index 53539ab..321c004 100644
+index 53539ab830..321c0047c6 100644
 --- a/crates/gpui_linux/src/linux/wayland/client.rs
 +++ b/crates/gpui_linux/src/linux/wayland/client.rs
 @@ -66,6 +66,7 @@ use wayland_protocols::xdg::activation::v1::client::{xdg_activation_token_v1, xd
@@ -173,7 +173,7 @@ index 53539ab..321c004 100644
  impl Dispatch<WlCallback, ObjectId> for WaylandClientStatePtr {
      fn event(
 diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/src/linux/wayland/window.rs
-index 811fe2b..4d56ac2 100644
+index 811fe2b205..4d56ac2f4f 100644
 --- a/crates/gpui_linux/src/linux/wayland/window.rs
 +++ b/crates/gpui_linux/src/linux/wayland/window.rs
 @@ -21,6 +21,7 @@ use wayland_client::{
@@ -262,7 +262,7 @@ index 811fe2b..4d56ac2 100644
          if source != previous_source
              && let Some(viewport) = &state.viewport
 diff --git a/crates/gpui_linux/src/linux/x11/client.rs b/crates/gpui_linux/src/linux/x11/client.rs
-index d5bb6da..f2ae756 100644
+index d5bb6daf54..f2ae756f12 100644
 --- a/crates/gpui_linux/src/linux/x11/client.rs
 +++ b/crates/gpui_linux/src/linux/x11/client.rs
 @@ -1695,8 +1695,10 @@ impl X11Client {
@@ -277,7 +277,7 @@ index d5bb6da..f2ae756 100644
              .map(|w| w.window.clone());
          let x_window = state
 diff --git a/crates/gpui_linux/src/linux/x11/window.rs b/crates/gpui_linux/src/linux/x11/window.rs
-index f6ee76a..95f31fe 100644
+index f6ee76ae8c..95f31fe2ef 100644
 --- a/crates/gpui_linux/src/linux/x11/window.rs
 +++ b/crates/gpui_linux/src/linux/x11/window.rs
 @@ -3,12 +3,12 @@ use x11rb::connection::RequestConnection;

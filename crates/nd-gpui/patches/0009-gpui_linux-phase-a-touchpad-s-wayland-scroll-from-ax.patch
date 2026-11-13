@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FormalSnake <kyaniserni@gmail.com>
 Date: Sat, 17 Oct 2026 14:32:33 +0100
-Subject: [PATCH 09/26] gpui_linux: phase a touchpad's wayland scroll from
+Subject: [PATCH 09/30] gpui_linux: phase a touchpad's wayland scroll from
  axis_source(finger) to axis_stop, one to one
 
 ---
@@ -9,7 +9,7 @@ Subject: [PATCH 09/26] gpui_linux: phase a touchpad's wayland scroll from
  1 file changed, 56 insertions(+), 10 deletions(-)
 
 diff --git a/crates/gpui_linux/src/linux/wayland/client.rs b/crates/gpui_linux/src/linux/wayland/client.rs
-index b989c25..53539ab 100644
+index b989c25e88..53539ab830 100644
 --- a/crates/gpui_linux/src/linux/wayland/client.rs
 +++ b/crates/gpui_linux/src/linux/wayland/client.rs
 @@ -404,6 +404,10 @@ pub(crate) struct WaylandClientState {

@@ -5,6 +5,9 @@ and the one it moves to.
 
 ## Unreleased
 
+- On AppKit, a right click on a list row with a menu of its own no longer selects the row: the
+  menu acts on its row, and the selection (in a browser, the tab on show) stays where it was, as
+  on GPUI. A menu around the list still selects the row alone first, which it did not on AppKit.
 - GPUI toolbar tabs show which one is selected, in each platform's selector: libadwaita's view
   switcher (icon and label, the selected one on a flat 10% tint) and a macOS preferences toolbar
   (icon over label, the selected icon in the accent) sit in the middle of the row in place of the

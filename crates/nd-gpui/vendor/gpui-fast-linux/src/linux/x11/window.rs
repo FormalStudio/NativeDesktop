@@ -255,6 +255,7 @@ pub struct Callbacks {
     close: Option<Box<dyn FnOnce()>>,
     appearance_changed: Option<Box<dyn FnMut()>>,
     button_layout_changed: Option<Box<dyn FnMut()>>,
+    configure: Option<Box<dyn FnMut(gpui::Configure)>>,
 }
 
 pub struct X11WindowState {
@@ -268,6 +269,8 @@ pub struct X11WindowState {
     visual_id: u32,
     pub(crate) counter_id: sync::Counter,
     pub(crate) last_sync_counter: Option<sync::Int64>,
+    /// The size last asked of the window manager, for `Configure`.
+    requested: Size<Pixels>,
     bounds: Bounds<Pixels>,
     scale_factor: f32,
     /// Taken when the window is dropped. Its GPU objects use the X connection, so they mustn't
@@ -297,6 +300,33 @@ pub struct X11WindowState {
 }
 
 impl X11WindowState {
+    fn decorations(&self) -> Decorations {
+        // Client window decorations require compositor support
+        if !self.client_side_decorations_supported {
+            return Decorations::Server;
+        }
+
+        match self.decorations {
+            WindowDecorations::Server => Decorations::Server,
+            WindowDecorations::Client => {
+                let tiling = if self.fullscreen {
+                    Tiling::tiled()
+                } else if let Some(edge_constraints) = &self.edge_constraints {
+                    edge_constraints.to_tiling()
+                } else {
+                    // https://source.chromium.org/chromium/chromium/src/+/main:ui/ozone/platform/x11/x11_window.cc;l=2519;drc=1f14cc876cc5bf899d13284a12c451498219bb2d
+                    Tiling {
+                        top: self.maximized_vertical,
+                        bottom: self.maximized_vertical,
+                        left: self.maximized_horizontal,
+                        right: self.maximized_horizontal,
+                    }
+                };
+                Decorations::Client { tiling }
+            }
+        }
+    }
+
     fn is_transparent(&self) -> bool {
         self.background_appearance != WindowBackgroundAppearance::Opaque
     }
@@ -872,6 +902,7 @@ impl X11WindowState {
                 accesskit_adapter: None,
                 counter_id: sync_request_counter,
                 last_sync_counter: None,
+                requested: bounds.to_pixels(scale_factor).size,
             })
         });
 
@@ -1306,9 +1337,23 @@ impl X11WindowStatePtr {
     }
 
     pub fn set_bounds(&self, bounds: Bounds<i32>) -> anyhow::Result<()> {
-        let (is_resize, content_size, scale_factor) = {
+        let (is_resize, content_size, scale_factor, configure) = {
             let mut state = self.state.borrow_mut();
             let bounds = bounds.map(|f| px(f as f32 / state.scale_factor));
+            // The record is in geometry units, the window without the client inset
+            // (_GTK_FRAME_EXTENTS), as Wayland's are.
+            let [left, right, top, bottom] = state.last_insets.map(|v| px(v as f32 / state.scale_factor));
+            let geometry = |s: Size<Pixels>| gpui::size(s.width - left - right, s.height - top - bottom);
+            let requested = state.requested;
+            let configure = gpui::Configure {
+                serial: 0,
+                size: Some(geometry(bounds.size)),
+                geometry: geometry(requested),
+                surface: requested,
+                decorations: state.decorations(),
+                maximized: !state.hidden && state.maximized_vertical && state.maximized_horizontal,
+                fullscreen: state.fullscreen,
+            };
 
             let is_resize = bounds.size.width != state.bounds.size.width
                 || bounds.size.height != state.bounds.size.height;
@@ -1325,7 +1370,7 @@ impl X11WindowStatePtr {
             if let Some(renderer) = &mut state.renderer {
                 renderer.update_drawable_size(gpu_size);
             }
-            let result = (is_resize, state.content_size(), state.scale_factor);
+            let result = (is_resize, state.content_size(), state.scale_factor, configure);
             if let Some(value) = state.last_sync_counter.take() {
                 check_reply(
                     || "X11 sync SetCounter failed.",
@@ -1342,6 +1387,10 @@ impl X11WindowStatePtr {
 
         if !is_resize && let Some(ref mut fun) = callbacks.moved {
             fun();
+        }
+
+        if let Some(ref mut fun) = callbacks.configure {
+            fun(configure);
         }
 
         Ok(())
@@ -1452,6 +1501,7 @@ impl PlatformWindow for X11Window {
     }
 
     fn resize(&mut self, size: Size<Pixels>) {
+        self.0.state.borrow_mut().requested = size;
         let state = self.0.state.borrow();
         let size = size.to_device_pixels(state.scale_factor);
         let width = size.width.0 as u32;
@@ -1736,6 +1786,10 @@ impl PlatformWindow for X11Window {
         self.0.callbacks.borrow_mut().resize = Some(callback);
     }
 
+    fn on_configure(&self, callback: Box<dyn FnMut(gpui::Configure)>) {
+        self.0.callbacks.borrow_mut().configure = Some(callback);
+    }
+
     fn on_moved(&self, callback: Box<dyn FnMut()>) {
         self.0.callbacks.borrow_mut().moved = Some(callback);
     }
@@ -1888,32 +1942,7 @@ impl PlatformWindow for X11Window {
     }
 
     fn window_decorations(&self) -> gpui::Decorations {
-        let state = self.0.state.borrow();
-
-        // Client window decorations require compositor support
-        if !state.client_side_decorations_supported {
-            return Decorations::Server;
-        }
-
-        match state.decorations {
-            WindowDecorations::Server => Decorations::Server,
-            WindowDecorations::Client => {
-                let tiling = if state.fullscreen {
-                    Tiling::tiled()
-                } else if let Some(edge_constraints) = &state.edge_constraints {
-                    edge_constraints.to_tiling()
-                } else {
-                    // https://source.chromium.org/chromium/chromium/src/+/main:ui/ozone/platform/x11/x11_window.cc;l=2519;drc=1f14cc876cc5bf899d13284a12c451498219bb2d
-                    Tiling {
-                        top: state.maximized_vertical,
-                        bottom: state.maximized_vertical,
-                        left: state.maximized_horizontal,
-                        right: state.maximized_horizontal,
-                    }
-                };
-                Decorations::Client { tiling }
-            }
-        }
+        self.0.state.borrow().decorations()
     }
 
     fn set_client_inset(&self, inset: Pixels) {

@@ -1,0 +1,164 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: FormalSnake <kyaniserni@gmail.com>
+Date: Thu, 12 Nov 2026 12:12:17 +0000
+Subject: [PATCH 28/30] gpui_linux: end a removed seat device's focus, held
+ keys and scroll
+
+---
+ crates/gpui_linux/src/linux/wayland/client.rs | 105 +++++++++++++++++-
+ 1 file changed, 103 insertions(+), 2 deletions(-)
+
+diff --git a/crates/gpui_linux/src/linux/wayland/client.rs b/crates/gpui_linux/src/linux/wayland/client.rs
+index f69cf40826..a2306c3660 100644
+--- a/crates/gpui_linux/src/linux/wayland/client.rs
++++ b/crates/gpui_linux/src/linux/wayland/client.rs
+@@ -563,6 +563,19 @@ pub(crate) struct KeyRepeat {
+     current_keycode: Option<xkb::Keycode>,
+ }
+ 
++impl KeyRepeat {
++    /// Whether the repeat scheduled as `id` still runs.
++    fn is_current(&self, id: u64) -> bool {
++        id == self.current_id && self.current_keycode.is_some()
++    }
++
++    /// Ends the held key's repeat: its scheduled timer drops on its next tick.
++    fn cancel(&mut self) {
++        self.current_id += 1;
++        self.current_keycode = None;
++    }
++}
++
+ pub(crate) enum PendingActivation {
+     /// URI to open in the web browser.
+     Uri(String),
+@@ -2036,6 +2049,8 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
+             // new wl_pointer whose enter some compositors send at -1,-1 while the cursor
+             // rests on the surface, so clicks miss until the pointer moves. Bind what was
+             // added, release what was removed, and keep the rest.
++            let mut keyboard_left = None;
++            let mut pointer_left = None;
+             let keyboard = seat_device(
+                 state.wl_keyboard.is_some(),
+                 capabilities.contains(wl_seat::Capability::Keyboard),
+@@ -2058,6 +2073,26 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
+                         state.ime_pre_edit = None;
+                         state.composing = false;
+                     }
++                    // No leave or key release follows a removed keyboard: what its
++                    // leave would have ended ends here, held keys and modifiers too.
++                    state.repeat.cancel();
++                    state.enter_token.take();
++                    state.restore_cursor_after_hide();
++                    if let Some(ref mut compose) = state.compose_state {
++                        compose.reset();
++                    }
++                    state.pre_edit_text.take();
++                    let had_modifiers = state.modifiers != Modifiers::default();
++                    state.modifiers = Modifiers::default();
++                    if let Some(window) = state.keyboard_focused_window.take() {
++                        let modifiers = had_modifiers.then(|| {
++                            PlatformInput::ModifiersChanged(ModifiersChangedEvent {
++                                modifiers: Modifiers::default(),
++                                capslock: state.capslock,
++                            })
++                        });
++                        keyboard_left = Some((window, modifiers));
++                    }
+                 }
+                 SeatDevice::Keep => {}
+             }
+@@ -2090,9 +2125,53 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
+                     if let Some(wl_pointer) = state.wl_pointer.take() {
+                         wl_pointer.release();
+                     }
++                    // Nor does a leave follow a removed pointer: a window left focused
++                    // by it would set its cursor through a pointer that is gone.
++                    let window = state.mouse_focused_window.take();
++                    let position = state.mouse_location.take();
++                    let pressed_button = state.button_pressed.take();
++                    let finger_scroll = std::mem::take(&mut state.finger_scroll);
++                    state.cursor_hidden_window = None;
++                    state.continuous_scroll_delta = None;
++                    state.discrete_scroll_delta = None;
++                    state.scroll_event_received = false;
++                    state.axis_stopped = false;
++                    if let (Some(window), Some(position)) = (window, position) {
++                        let modifiers = state.modifiers;
++                        let mut inputs = Vec::new();
++                        if finger_scroll {
++                            inputs.push(PlatformInput::Scroll(ScrollEvent {
++                                position,
++                                delta: ScrollDelta::Pixels(point(px(0.0), px(0.0))),
++                                modifiers,
++                                touch_phase: TouchPhase::Ended,
++                                source: ScrollSource::Pointer,
++                            }));
++                        }
++                        inputs.push(PlatformInput::MouseExited(MouseExitEvent {
++                            position,
++                            pressed_button,
++                            modifiers,
++                        }));
++                        pointer_left = Some((window, inputs));
++                    }
+                 }
+                 SeatDevice::Keep => {}
+             }
++            drop(state);
++            if let Some((window, modifiers)) = keyboard_left {
++                window.handle_ime(ImeInput::DeleteText);
++                if let Some(modifiers) = modifiers {
++                    window.handle_input(modifiers);
++                }
++                window.set_focused(false);
++            }
++            if let Some((window, inputs)) = pointer_left {
++                for input in inputs {
++                    window.handle_input(input);
++                }
++                window.set_hovered(false);
++            }
+         }
+     }
+ }
+@@ -2311,8 +2390,7 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
+                                         return TimeoutAction::Drop;
+                                     };
+                                     let state = client.borrow();
+-                                    let is_repeating = id == state.repeat.current_id
+-                                        && state.repeat.current_keycode.is_some()
++                                    let is_repeating = state.repeat.is_current(id)
+                                         && state.keyboard_focused_window.is_some();
+ 
+                                     if !is_repeating || rate == 0 {
+@@ -3409,6 +3487,29 @@ mod tests {
+         assert_eq!(seat_device(true, true), SeatDevice::Keep);
+     }
+ 
++    #[test]
++    fn a_removed_keyboard_stops_its_held_key() {
++        let mut repeat = KeyRepeat {
++            characters_per_second: 25,
++            delay: Duration::from_millis(600),
++            current_id: 0,
++            current_keycode: None,
++        };
++        // A key goes down and its repeat is scheduled under the new id.
++        repeat.current_id += 1;
++        repeat.current_keycode = Some(xkb::Keycode::new(38));
++        let held = repeat.current_id;
++        assert!(repeat.is_current(held));
++        // The keyboard goes away with the key still down: no release ever comes.
++        repeat.cancel();
++        assert!(!repeat.is_current(held));
++        // A key on the keyboard that replaces it repeats under an id of its own.
++        repeat.current_id += 1;
++        repeat.current_keycode = Some(xkb::Keycode::new(38));
++        assert!(!repeat.is_current(held));
++        assert!(repeat.is_current(repeat.current_id));
++    }
++
+     #[test]
+     fn rejects_required_globals_below_supported_versions() {
+         assert!(wl_seat_version(4).is_err());

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FormalSnake <kyaniserni@gmail.com>
 Date: Wed, 14 Oct 2026 12:00:00 +0100
-Subject: [PATCH 08/26] gpui_wgpu: keep the swapchain through an interactive
+Subject: [PATCH 08/30] gpui_wgpu: keep the swapchain through an interactive
  resize
 
 ---
@@ -10,7 +10,7 @@ Subject: [PATCH 08/26] gpui_wgpu: keep the swapchain through an interactive
  2 files changed, 454 insertions(+), 12 deletions(-)
 
 diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/src/linux/wayland/window.rs
-index 717712a..811fe2b 100644
+index 717712a916..811fe2b205 100644
 --- a/crates/gpui_linux/src/linux/wayland/window.rs
 +++ b/crates/gpui_linux/src/linux/wayland/window.rs
 @@ -47,6 +47,14 @@ use gpui::{
@@ -129,7 +129,7 @@ index 717712a..811fe2b 100644
              self.0.frame_loop.set(FrameLoop::PresentationFailed);
          }
 diff --git a/crates/gpui_wgpu/src/wgpu_renderer.rs b/crates/gpui_wgpu/src/wgpu_renderer.rs
-index 5d7f7bf..4b82c94 100644
+index 5d7f7bfb63..4b82c94198 100644
 --- a/crates/gpui_wgpu/src/wgpu_renderer.rs
 +++ b/crates/gpui_wgpu/src/wgpu_renderer.rs
 @@ -261,9 +261,280 @@ pub struct WgpuRenderer {

@@ -37,6 +37,7 @@ pub(crate) struct TestWindowState {
     visibility: WindowVisibility,
     visibility_callback: Option<Box<dyn FnMut(WindowVisibility)>>,
     hover_status_change_callback: Option<Box<dyn FnMut(bool)>>,
+    pointer_removed_callback: Option<Box<dyn FnMut()>>,
     resize_callback: Option<Box<dyn FnMut(Size<Pixels>, f32)>>,
     visual_viewport: Option<Bounds<Pixels>>,
     visual_viewport_callback: Option<Box<dyn FnMut()>>,
@@ -112,6 +113,7 @@ impl TestWindow {
             visibility: WindowVisibility::Visible,
             visibility_callback: None,
             hover_status_change_callback: None,
+            pointer_removed_callback: None,
             resize_callback: None,
             visual_viewport: None,
             visual_viewport_callback: None,
@@ -165,6 +167,15 @@ impl TestWindow {
 
     pub fn frame_scheduled(&self) -> bool {
         self.0.lock().frame_scheduled
+    }
+
+    /// Simulates the platform reporting that the pointer device went away.
+    pub fn simulate_pointer_removed(&self) {
+        let callback = self.0.lock().pointer_removed_callback.take();
+        if let Some(mut callback) = callback {
+            callback();
+            self.0.lock().pointer_removed_callback = Some(callback);
+        }
     }
 
     pub fn simulate_visibility_change(&self, visibility: WindowVisibility) {
@@ -525,6 +536,10 @@ impl PlatformWindow for TestWindow {
 
     fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool)>) {
         self.0.lock().hover_status_change_callback = Some(callback)
+    }
+
+    fn on_pointer_removed(&self, callback: Box<dyn FnMut()>) {
+        self.0.lock().pointer_removed_callback = Some(callback)
     }
 
     fn on_resize(&self, callback: Box<dyn FnMut(Size<Pixels>, f32)>) {

@@ -846,6 +846,27 @@ pub enum Decorations {
     },
 }
 
+/// A configure from the compositor (Wayland `xdg_surface.configure`, X11 `ConfigureNotify`),
+/// reported once per configure as it arrives, in order, before the window applies it. Sizes are
+/// window geometry: the window without its client inset.
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub struct Configure {
+    /// The configure's serial, 0 where the platform has none.
+    pub serial: u32,
+    /// The window geometry the compositor asked for; `None` leaves the size to the window.
+    pub size: Option<Size<Pixels>>,
+    /// The window geometry the window had last committed when the configure arrived.
+    pub geometry: Size<Pixels>,
+    /// The surface size the window had last committed when the configure arrived, the inset
+    /// included.
+    pub surface: Size<Pixels>,
+    /// The decorations in force for this configure, tiling included.
+    pub decorations: Decorations,
+    /// Whether this configure leaves the window maximized, or fullscreen.
+    pub maximized: bool,
+    pub fullscreen: bool,
+}
+
 /// A frame the compositor put on screen, as reported by the platform.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct PresentationTime {
@@ -1326,6 +1347,10 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     /// of any window update.
     fn on_visibility_change(&self, callback: Box<dyn FnMut(WindowVisibility)>);
     fn on_hover_status_change(&self, callback: Box<dyn FnMut(bool)>);
+    /// Registers the callback invoked when the pointer device itself goes away (a
+    /// seat losing its pointer) while the window has it: no release follows, so a
+    /// capture taken by a press ends here, before the platform cancels the press.
+    fn on_pointer_removed(&self, _callback: Box<dyn FnMut()>) {}
     fn on_resize(&self, callback: Box<dyn FnMut(Size<Pixels>, f32)>);
     fn on_moved(&self, callback: Box<dyn FnMut()>);
     /// Registers the callback invoked when the window moves to another
@@ -1426,6 +1451,7 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
         WindowControls::default()
     }
     fn set_client_inset(&self, _inset: Pixels) {}
+    fn on_configure(&self, _callback: Box<dyn FnMut(Configure)>) {}
     fn set_client_corner_radii(&self, _radii: Corners<Pixels>) {}
     fn gpu_specs(&self) -> Option<GpuSpecs>;
 

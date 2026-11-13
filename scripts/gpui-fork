@@ -8,7 +8,7 @@
 # through a generated [patch.crates-io] block.
 #
 #   apply            create the fork branch in the zed checkout: snapshot + queue (no-op if it exists)
-#   export           write the fork branch's commits back into the queue
+#   export           write the fork branch's commits back into the queue and push the branch to the fork, as itself and as main
 #   vendor           regenerate crates/nd-gpui/vendor and the [patch.crates-io] block from the queue
 #   bump <version> <fast version>
 #                    rebase the fork branch onto the snapshot of gpui-pre <version>, move the pins
@@ -86,25 +86,33 @@ scratch_fork() {
 }
 
 # The queue as gpui-fast <version> takes it, applied in a throwaway clone like scratch_fork's; prints
-# the clone's parent directory. gpui-fast rewrites some of what the queue changes (gpui-fast-windows
-# 0.1.13: the vsync loop 0006 changes), so a patch reaches the fast crates whole or not at all: one
-# whose change to some fast crate does not apply is left out of all of them. A patch that needs
-# another in a different crate goes in the same patch. nd-gpui/fast is opt-in and no app ships it.
+# the clone's parent directory. gpui-fast rewrites some of what the queue changes, so a patch across
+# crates reaches the fast crates whole or not at all: one whose change to some fast crate does not
+# apply is left out of all of them. A fast crate that a patch of its own does not reach stays
+# unpatched, as gpui-fast-windows 0.1.13 does with the vsync loop 0006 changes; its directory is
+# listed in <dir>/unpatched. nd-gpui/fast is opt-in and no app ships it.
 fast_fork() {
-  local version=$1 rev tmp patch dir pkg src
+  local version=$1 rev tmp patch dirs dir pkg src
   rev=$(get zed_rev)
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/nd-gpui-fast.XXXXXX")
+  : >"$tmp/unpatched"
   git clone -q --shared --no-checkout "$zed" "$tmp/zed"
   git -C "$tmp/zed" checkout -q --detach "$rev"
   while read -r patch; do
     git -C "$tmp/zed" apply --index --3way "$fork_dir/patches/$patch" >/dev/null 2>&1 || continue
-    for dir in $(sed -n 's#^diff --git a/crates/\([^/]*\)/.*#\1#p' "$fork_dir/patches/$patch" | sort -u); do
+    dirs=$(sed -n 's#^diff --git a/crates/\([^/]*\)/.*#\1#p' "$fork_dir/patches/$patch" | sort -u)
+    for dir in $dirs; do
       pkg=$(fast_package_for "$dir")
       src=$(ls -d "${CARGO_HOME:-$HOME/.cargo}"/registry/src/*/"$pkg-$version" 2>/dev/null | head -1)
       [ -n "$src" ] || continue
       git -C "$tmp/zed" diff --cached "$rev" -- "crates/$dir" | patch -s -p3 --dry-run -d "$src" >/dev/null 2>&1 && continue
       git -C "$tmp/zed" apply -R --index "$fork_dir/patches/$patch" >/dev/null 2>&1 || die "$patch does not come back out"
-      say "$patch does not apply to $pkg $version; nd-gpui/fast builds without it" >&2
+      if [ "$dirs" = "$dir" ]; then
+        echo "$dir" >>"$tmp/unpatched"
+        say "$patch does not apply to $pkg $version; nd-gpui/fast builds $pkg unpatched" >&2
+      else
+        say "$patch does not apply to $pkg $version; nd-gpui/fast builds without it" >&2
+      fi
       break
     done
   done < <(queue)
@@ -142,6 +150,7 @@ $pkg = { path = \"crates/nd-gpui/vendor/$pkg\" }"
       src=$(ls -d "${CARGO_HOME:-$HOME/.cargo}"/registry/src/*/"$pkg-$fast_version" 2>/dev/null | head -1)
       [ -n "$src" ] || continue
       [ -n "$(git -C "$fast/zed" diff --cached --name-only "$(get zed_rev)" -- "crates/$dir")" ] || continue
+      ! grep -qx "$dir" "$fast/unpatched" || continue
       cp -R "$src" "$out/crates/nd-gpui/vendor/$pkg"
       git -C "$fast/zed" diff --cached "$(get zed_rev)" -- "crates/$dir" |
         patch -s -p3 --no-backup-if-mismatch -d "$out/crates/nd-gpui/vendor/$pkg" || die "the queue's change to crates/$dir does not apply to $pkg $fast_version"
@@ -184,7 +193,8 @@ cmd_export() {
     git -C "$zed" format-patch --zero-commit --no-signature -o "$fork_dir/patches" "$rev..$branch" | xargs -n1 basename
   } >"$series.new"
   mv "$series.new" "$series"
-  say "exported $(queue | wc -l | tr -d ' ') patch(es)"
+  git -C "$zed" push -q --force "$(get fork)" "$branch" "$branch:main"
+  say "exported $(queue | wc -l | tr -d ' ') patch(es), pushed $branch and main to $(get fork)"
 }
 
 cmd_vendor() {
