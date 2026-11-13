@@ -1405,8 +1405,13 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn window_decorations(&self) -> Decorations {
         Decorations::Server
     }
+    /// The tiled sides; a platform that knows them only through client-side
+    /// decorations reports those.
     fn tiling(&self) -> Tiling {
-        Tiling::default()
+        match self.window_decorations() {
+            Decorations::Client { tiling } => tiling,
+            Decorations::Server => Tiling::default(),
+        }
     }
     fn set_app_id(&mut self, _app_id: &str) {}
     fn map_window(&mut self) -> anyhow::Result<()> {
