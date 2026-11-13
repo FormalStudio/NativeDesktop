@@ -2331,6 +2331,10 @@ impl PlatformWindow for WaylandWindow {
         }
     }
 
+    fn tiling(&self) -> Tiling {
+        self.borrow().tiling
+    }
+
     fn request_decorations(&self, decorations: WindowDecorations) {
         let mut state = self.borrow_mut();
         match state.surface_state.decoration().as_ref() {

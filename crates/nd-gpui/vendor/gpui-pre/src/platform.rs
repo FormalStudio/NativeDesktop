@@ -1405,6 +1405,9 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn window_decorations(&self) -> Decorations {
         Decorations::Server
     }
+    fn tiling(&self) -> Tiling {
+        Tiling::default()
+    }
     fn set_app_id(&mut self, _app_id: &str) {}
     fn map_window(&mut self) -> anyhow::Result<()> {
         Ok(())

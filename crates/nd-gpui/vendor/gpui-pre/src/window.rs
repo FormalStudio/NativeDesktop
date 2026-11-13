@@ -22,7 +22,7 @@ use crate::{
     SUBPIXEL_VARIANTS_X, SUBPIXEL_VARIANTS_Y, ScaledPixels, Scene, Shadow, SharedString, Size,
     StrikethroughStyle, Style, SubpixelSprite, Subscription, SystemWindowTab,
     SystemWindowTabController, TabStopMap, Task, TextInputConfiguration, TextInputStateChange,
-    TextRenderingMode, TextStyle, TextStyleRefinement, ThermalState, TransformationMatrix,
+    TextRenderingMode, TextStyle, TextStyleRefinement, ThermalState, Tiling, TransformationMatrix,
     Underline, UnderlineStyle, WindowAppearance, WindowBackgroundAppearance, WindowBounds,
     WindowControls, WindowDecorations, WindowInsets, WindowOptions, WindowParams, WindowTextSystem,
     WindowVisibility, point, prelude::*, px, rems, size, transparent_black,
@@ -3328,6 +3328,13 @@ impl Window {
     /// Returns whether the title bar window controls need to be rendered by the application (Wayland and X11)
     pub fn window_decorations(&self) -> Decorations {
         self.platform_window.window_decorations()
+    }
+
+    /// Returns the sides the compositor tiles, whichever side draws the decorations
+    /// (Wayland). A server-side `Decorations` carries no tiling, yet the window's size
+    /// is still the layout's on a tiled side.
+    pub fn tiling(&self) -> Tiling {
+        self.platform_window.tiling()
     }
 
     /// Returns whether this window is resizable.
