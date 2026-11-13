@@ -728,7 +728,8 @@ impl TableNative {
 
     fn set_columns(&self) {
         let mtm = self.shared.mtm;
-        for c in self.table.tableColumns().iter() {
+        // tableColumns is the table's own mutable array; removing while iterating it throws.
+        for c in self.table.tableColumns().to_vec() {
             self.table.removeTableColumn(&c);
         }
         match &self.props.kind {
