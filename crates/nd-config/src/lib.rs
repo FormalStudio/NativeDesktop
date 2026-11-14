@@ -220,8 +220,8 @@ pub struct Windows {
     pub azure: Option<AzureSigning>,
     /// The certificate `signing = "certificate"` signs with.
     pub certificate: Option<Certificate>,
-    /// Files copied beside the executable, relative to this file, for example a helper `.exe`
-    /// the app starts.
+    /// Files and directories copied beside the executable, relative to this file, for example a
+    /// helper `.exe` the app starts. A directory keeps its tree.
     pub files: Vec<String>,
 }
 
@@ -277,6 +277,9 @@ pub struct Certificate {
 #[serde(default, deny_unknown_fields)]
 pub struct Linux {
     pub formats: Vec<LinuxFormat>,
+    /// Files and directories copied beside the executable, relative to this file, for example
+    /// a library the app hands to other programs. A directory keeps its tree.
+    pub files: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

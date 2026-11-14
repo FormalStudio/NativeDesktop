@@ -1,5 +1,5 @@
-//! Linux: a staged `.AppDir` (binary, `.desktop` with MimeType, shared-mime XML, icons) that
-//! Velopack turns into a self-updating AppImage. A pre-built AppDir keeps our `.desktop`, which
+//! Linux: a staged `.AppDir` (binary, `files` beside it, `.desktop` with MimeType, shared-mime
+//! XML, icons) that Velopack turns into a self-updating AppImage. A pre-built AppDir keeps our `.desktop`, which
 //! is the only way to get file associations and URL schemes into it.
 //!
 //! The AppImage's `.desktop` and MIME XML reach the system menu when an integrator such as
@@ -11,7 +11,7 @@ use anyhow::{Context, Result, bail};
 use nd_config::LinuxFormat;
 
 use super::{Options, Packed, icon};
-use crate::project::{Project, fresh_dir, write, xml_escape};
+use crate::project::{Project, copy_files, fresh_dir, write, xml_escape};
 use crate::vpk;
 
 pub fn package(project: &Project, opts: &Options) -> Result<Packed> {
@@ -69,6 +69,7 @@ fn stage_appdir(project: &Project, exe: &Path, work: &Path) -> Result<PathBuf> {
     let bin = appdir.join("usr/bin");
     std::fs::create_dir_all(&bin)?;
     std::fs::copy(exe, bin.join(&project.bin)).with_context(|| format!("copying {}", exe.display()))?;
+    copy_files(project, "linux", &project.config.linux.files, &bin)?;
     // Web views render with Chromium: its runtime goes beside the executable.
     if super::cef::links_cef(exe, "libcef.so")? {
         let built = exe.parent().context("the executable has no directory")?;
@@ -188,7 +189,10 @@ ext = ["nte"]
 
     #[test]
     fn appdir_is_staged_for_velopack() {
-        let p = project(&format!("{NOTES}\n"));
+        let p = project(&format!("{NOTES}\n[linux]\nfiles = [\"libhelper.so\", \"i686\"]\n"));
+        std::fs::write(p.root.join("libhelper.so"), b"64").unwrap();
+        std::fs::create_dir_all(p.root.join("i686")).unwrap();
+        std::fs::write(p.root.join("i686/libhelper.so"), b"32").unwrap();
         let icon_dir = tempfile::tempdir().unwrap();
         let mut p = p;
         let png = icon_dir.path().join("icon.png");
@@ -201,6 +205,8 @@ ext = ["nte"]
         for file in [
             "AppRun",
             "usr/bin/demo",
+            "usr/bin/libhelper.so",
+            "usr/bin/i686/libhelper.so",
             "dev.formalsnake.notes.desktop",
             "dev.formalsnake.notes.png",
             "usr/share/applications/dev.formalsnake.notes.desktop",

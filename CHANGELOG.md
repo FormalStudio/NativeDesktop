@@ -5,6 +5,9 @@ and the one it moves to.
 
 ## Unreleased
 
+- `[linux] files`: files and directories copied beside the executable in the AppImage, as
+  `[windows] files` does for `Setup.exe`. A `files` entry on either OS can now name a directory,
+  which is copied with its tree.
 - On AppKit, a row or grid item with a pointer gesture (`.on_tap`, `.on_double_tap`) no longer
   keeps the press from its list: the table or grid still selects, drags and activates, and the
   gesture still fires. Before, such rows could not be selected or opened with the mouse.

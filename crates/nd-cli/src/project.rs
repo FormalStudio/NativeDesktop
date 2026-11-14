@@ -128,6 +128,36 @@ pub fn write(path: &Path, text: impl AsRef<[u8]>) -> Result<()> {
     std::fs::write(path, text).with_context(|| format!("writing {}", path.display()))
 }
 
+pub fn copy_dir(from: &Path, to: &Path) -> Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let path = entry?.path();
+        let dest = to.join(path.file_name().unwrap_or_default());
+        if path.is_dir() {
+            copy_dir(&path, &dest)?;
+        } else {
+            std::fs::copy(&path, &dest).with_context(|| format!("copying {}", path.display()))?;
+        }
+    }
+    Ok(())
+}
+
+/// Copies an `[os] files` list into `dir`, each entry under its own name. A directory keeps its
+/// tree, so files that share a name (a 32-bit build beside the 64-bit one) can ship together.
+pub fn copy_files(project: &Project, section: &str, files: &[String], dir: &Path) -> Result<()> {
+    for file in files {
+        let source = project.resolve(file);
+        let name = source.file_name().with_context(|| format!("{section}.files: `{file}` names no file"))?;
+        if source.is_dir() {
+            copy_dir(&source, &dir.join(name))
+        } else {
+            std::fs::copy(&source, dir.join(name)).map(drop).map_err(Into::into)
+        }
+        .with_context(|| format!("{section}.files: copying {}", source.display()))?;
+    }
+    Ok(())
+}
+
 /// Removes and recreates a directory nd owns under `target/nd`.
 pub fn fresh_dir(path: &Path) -> Result<()> {
     if path.exists() {

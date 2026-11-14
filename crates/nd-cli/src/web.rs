@@ -195,7 +195,7 @@ pub fn build_web(project: &WebProject, out: &Path, debug: bool) -> Result<()> {
     crate::project::write(&out.join("index.html"), index_html(&project.title(), &project.bin, project.base_path()))?;
     let assets = project.root.join("assets");
     if assets.is_dir() {
-        copy_dir(&assets, &out.join("assets"))?;
+        crate::project::copy_dir(&assets, &out.join("assets"))?;
     }
     Ok(())
 }
@@ -294,20 +294,6 @@ html, body {{ margin: 0; height: 100%; overflow: hidden; background: #ffffff; }}
 "#,
         title = html_escape(title),
     )
-}
-
-fn copy_dir(from: &Path, to: &Path) -> Result<()> {
-    std::fs::create_dir_all(to)?;
-    for entry in std::fs::read_dir(from)? {
-        let path = entry?.path();
-        let dest = to.join(path.file_name().unwrap_or_default());
-        if path.is_dir() {
-            copy_dir(&path, &dest)?;
-        } else {
-            std::fs::copy(&path, &dest).with_context(|| format!("copying {}", path.display()))?;
-        }
-    }
-    Ok(())
 }
 
 pub fn content_type(path: &Path) -> &'static str {

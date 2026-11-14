@@ -70,7 +70,11 @@ Chromium for `engine = "cef"` is bundled on macOS, Linux and Windows (see
 The packager stages an AppDir with the binary, a `.desktop` file that carries `MimeType=` and the
 URL schemes, the shared-mime XML, and icons. Velopack turns it into an AppImage. A bare AppImage
 registers nothing with the desktop. An integrator such as AppImageLauncher installs the `.desktop`
-file and the MIME types. `formats` accepts only `appimage` for now. `deb` and `flatpak` are in the
+file and the MIME types. `files` lists paths, relative to `nativedesktop.toml`, that are copied
+beside the executable in `usr/bin`. A directory keeps its tree, so a 32-bit library can sit in an
+`i686` directory beside a 64-bit one of the same name. The AppImage mounts at a new path on every
+start and unmounts when the app quits, so copy anything another program loads (a Vulkan layer,
+an `LD_PRELOAD` library) out to the user's data directory first. `formats` accepts only `appimage` for now. `deb` and `flatpak` are in the
 schema, but the packager fails on them. An app with web views also gets the Chromium runtime
 beside its executable; see [webview](webview.md#linux) for the system libraries it needs.
 
@@ -84,7 +88,7 @@ certificate store, `timestamp_url`). Both run only on a Windows host. A cross pa
 Linux signs with `ND_WINDOWS_SIGN_TEMPLATE`, a command that contains `{{file}}`. Without it, the
 pack fails instead of shipping unsigned by accident. `Setup.exe` doesn't register file associations or URL
 schemes yet. `files` lists paths, relative to `nativedesktop.toml`, that are copied beside the
-executable, such as a helper `.exe` the app starts. An executable that links `libcef.dll` gets
+executable, such as a helper `.exe` the app starts. A directory keeps its tree. An executable that links `libcef.dll` gets
 the Chromium runtime beside it.
 
 ## Releases and updates

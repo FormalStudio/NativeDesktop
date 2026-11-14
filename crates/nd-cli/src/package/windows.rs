@@ -15,7 +15,7 @@ use anyhow::{Context, Result, bail};
 use nd_config::{Shortcut, WindowsSigning};
 
 use super::{Options, Packed, icon};
-use crate::project::{Project, fresh_dir};
+use crate::project::{Project, copy_files, fresh_dir};
 use crate::vpk;
 
 pub fn package(project: &Project, opts: &Options) -> Result<Packed> {
@@ -30,7 +30,7 @@ pub fn package(project: &Project, opts: &Options) -> Result<Packed> {
     std::fs::create_dir_all(&dir)?;
     std::fs::copy(&exe, dir.join(format!("{}.exe", project.bin)))
         .with_context(|| format!("copying {}", exe.display()))?;
-    copy_files(project, &dir)?;
+    copy_files(project, "windows", &project.config.windows.files, &dir)?;
     stage_cef(project, &exe, &dir)?;
     let ico = match &project.config.app.icon {
         Some(source) => {
@@ -46,16 +46,6 @@ pub fn package(project: &Project, opts: &Options) -> Result<Packed> {
     vpk::run(&vpk, &pack_args(project, opts, &dir, ico.as_deref(), &signing, cfg!(windows)))?;
     let setup = opts.releases.join(format!("{}-{}-Setup.exe", project.id(), opts.channel));
     Ok(Packed { app: dir, installer: setup.exists().then_some(setup), releases: opts.releases.clone() })
-}
-
-fn copy_files(project: &Project, dir: &Path) -> Result<()> {
-    for file in &project.config.windows.files {
-        let source = project.resolve(file);
-        let name = source.file_name().with_context(|| format!("windows.files: `{file}` names no file"))?;
-        std::fs::copy(&source, dir.join(name))
-            .with_context(|| format!("windows.files: copying {}", source.display()))?;
-    }
-    Ok(())
 }
 
 /// Chromium's runtime, from beside the built executable, when the executable links it.
@@ -239,11 +229,12 @@ azure = { endpoint = "https://weu.codesigning.azure.net", account = "formalsnake
         std::fs::write(p.root.join("bin/helper.exe"), b"helper").unwrap();
         let dir = p.root.join("app");
         std::fs::create_dir_all(&dir).unwrap();
-        copy_files(&p, &dir).unwrap();
+        copy_files(&p, "windows", &p.config.windows.files, &dir).unwrap();
         assert_eq!(std::fs::read(dir.join("helper.exe")).unwrap(), b"helper");
 
         let missing = project("[app]\nid = \"a.b\"\n[windows]\nfiles = [\"gone.exe\"]\n");
-        assert!(copy_files(&missing, &missing.root).unwrap_err().to_string().contains("gone.exe"));
+        let err = copy_files(&missing, "windows", &missing.config.windows.files, &missing.root).unwrap_err();
+        assert!(format!("{err:#}").contains("gone.exe"));
     }
 
     #[test]
