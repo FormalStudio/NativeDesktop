@@ -1447,6 +1447,11 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     }
     fn set_client_inset(&self, _inset: Pixels) {}
     fn on_configure(&self, _callback: Box<dyn FnMut(Configure)>) {}
+    /// Whether the compositor has placed the window on an output: it entered one or was told
+    /// its scale (Wayland). Elsewhere a window is on its screen once created.
+    fn is_on_output(&self) -> bool {
+        true
+    }
     fn set_client_corner_radii(&self, _radii: Corners<Pixels>) {}
     fn gpu_specs(&self) -> Option<GpuSpecs>;
 

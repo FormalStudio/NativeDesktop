@@ -275,6 +275,8 @@ pub struct WaylandWindowState {
     /// window's exact size.
     viewport_source: Option<Size<DevicePixels>>,
     last_presentation: Option<gpui::PresentationTime>,
+    /// Set by the first `enter` or scale event: the scale is the output's from then on.
+    on_output: bool,
     in_progress_window_controls: Option<WindowControls>,
     window_controls: WindowControls,
     client_inset: Option<Pixels>,
@@ -824,6 +826,7 @@ impl WaylandWindowState {
             live_resize: false,
             viewport_source: None,
             last_presentation: None,
+            on_output: false,
             client,
             appearance,
             handle,
@@ -1441,6 +1444,7 @@ impl WaylandWindowStatePtr {
 
     pub fn handle_fractional_scale_event(&self, event: wp_fractional_scale_v1::Event) {
         if let wp_fractional_scale_v1::Event::PreferredScale { scale } = event {
+            self.state.borrow_mut().on_output = true;
             self.rescale(scale as f32 / 120.0);
             self.request_redraw();
         }
@@ -1645,6 +1649,7 @@ impl WaylandWindowStatePtr {
                 };
 
                 state.outputs.insert(id, output.clone());
+                state.on_output = true;
 
                 let previous_display = state.display.as_ref().map(|(id, _)| id.clone());
                 let scale = state.primary_output_scale();
@@ -1688,6 +1693,7 @@ impl WaylandWindowStatePtr {
                 self.request_redraw();
             }
             wl_surface::Event::PreferredBufferScale { factor } => {
+                state.on_output = true;
                 // We use `WpFractionalScale` instead to set the scale if it's available
                 if state.globals.fractional_scale_manager.is_none() {
                     state.surface.set_buffer_scale(factor);
@@ -2536,6 +2542,10 @@ impl PlatformWindow for WaylandWindow {
 
     fn last_presentation(&self) -> Option<gpui::PresentationTime> {
         self.borrow().last_presentation
+    }
+
+    fn is_on_output(&self) -> bool {
+        self.borrow().on_output
     }
 
     fn gpu_specs(&self) -> Option<GpuSpecs> {
