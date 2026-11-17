@@ -1,0 +1,351 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: FormalSnake <kyaniserni@gmail.com>
+Date: Tue, 17 Nov 2026 17:03:50 +0000
+Subject: [PATCH] gpui: mix a share of a backdrop's unblurred region into its
+ blur
+
+macOS's Liquid Glass keeps what lies behind it sharp under a wide blur:
+over 30 pt colour bands its small glass reads about a third of the
+unblurred bands plus a 15 pt blur. BackdropFilter::sharp sets that
+share. The composite binds the region as copied out of the frame next
+to the blurred one and mixes the two before the tone or saturation.
+---
+ crates/gpui/src/scene.rs                |   3 +
+ crates/gpui/src/style.rs                |  10 +++
+ crates/gpui/src/window.rs               |   1 +
+ crates/gpui_apple/src/metal_renderer.rs |   1 +
+ crates/gpui_wgpu/src/backdrop.rs        | 106 +++++++++++++++++++++---
+ crates/gpui_wgpu/src/wgpu_renderer.rs   |   1 +
+ 6 files changed, 110 insertions(+), 12 deletions(-)
+
+diff --git a/crates/gpui/src/scene.rs b/crates/gpui/src/scene.rs
+index c7c6855..611dba8 100644
+--- a/crates/gpui/src/scene.rs
++++ b/crates/gpui/src/scene.rs
+@@ -706,6 +706,8 @@ pub struct Backdrop {
+     pub tone: Option<[f32; 5]>,
+     /// From [`BackdropFilter::edge`], its lengths scaled; Metal and Direct3D leave the edge plain.
+     pub edge: Option<[f32; 5]>,
++    /// From [`BackdropFilter::sharp`]; Metal and Direct3D blur all of it.
++    pub sharp: f32,
+ }
+ 
+ /// Coverage a backdrop is multiplied by, for a clip a content mask cannot hold (a circle, a
+@@ -1188,6 +1190,7 @@ mod tests {
+             clamp: None,
+             tone: None,
+             edge: None,
++            sharp: 0.,
+         }
+     }
+ 
+diff --git a/crates/gpui/src/style.rs b/crates/gpui/src/style.rs
+index f01c13e..1fea0f5 100644
+--- a/crates/gpui/src/style.rs
++++ b/crates/gpui/src/style.rs
+@@ -387,6 +387,9 @@ pub struct BackdropFilter {
+     /// edge faces down. The blur is read `bend · exp(-depth / bend_width)` further out along the
+     /// normal, so the backdrop bends in at the edge. Widths and `bend` in pixels.
+     pub edge: Option<[f32; 5]>,
++    /// The share of the unblurred backdrop mixed into the blur before the tone or saturation:
++    /// macOS's Liquid Glass keeps what lies behind it sharp under a wide blur.
++    pub sharp: f32,
+ }
+ 
+ impl Default for BackdropFilter {
+@@ -404,6 +407,7 @@ impl Default for BackdropFilter {
+             clamp: None,
+             tone: None,
+             edge: None,
++            sharp: 0.,
+         }
+     }
+ }
+@@ -477,6 +481,12 @@ impl BackdropFilter {
+         self.edge = Some(edge);
+         self
+     }
++
++    /// Mixes [`Self::sharp`] of the unblurred backdrop into the blur.
++    pub fn sharpened(mut self, sharp: f32) -> Self {
++        self.sharp = sharp;
++        self
++    }
+ }
+ 
+ /// The possible values of the box-shadow property
+diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
+index ce994e7..d381bc2 100644
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -5097,6 +5097,7 @@ impl Window {
+             edge: filter.edge.map(|[light, bottom, light_width, bend, bend_width]| {
+                 [light, bottom, light_width * scale_factor, bend * scale_factor, bend_width * scale_factor]
+             }),
++            sharp: filter.sharp,
+         });
+     }
+ 
+diff --git a/crates/gpui_apple/src/metal_renderer.rs b/crates/gpui_apple/src/metal_renderer.rs
+index f1384ff..fdb4d06 100644
+--- a/crates/gpui_apple/src/metal_renderer.rs
++++ b/crates/gpui_apple/src/metal_renderer.rs
+@@ -1994,6 +1994,7 @@ mod tests {
+             clamp: None,
+             tone: None,
+             edge: None,
++            sharp: 0.,
+         }
+     }
+ 
+diff --git a/crates/gpui_wgpu/src/backdrop.rs b/crates/gpui_wgpu/src/backdrop.rs
+index fbb58c7..71400ec 100644
+--- a/crates/gpui_wgpu/src/backdrop.rs
++++ b/crates/gpui_wgpu/src/backdrop.rs
+@@ -62,7 +62,8 @@ struct Params {
+     edge_light_width: f32,
+     edge_bend: f32,
+     edge_bend_width: f32,
+-    pad0: u32,
++    // Composite: the share of the unblurred region (`sharp_source`) mixed into the blur.
++    sharp: f32,
+     pad1: u32,
+     pad2: u32,
+ }
+@@ -70,6 +71,8 @@ struct Params {
+ @group(0) @binding(0) var<uniform> params: Params;
+ @group(0) @binding(1) var source: texture_2d<f32>;
+ @group(0) @binding(2) var source_sampler: sampler;
++// The regions as copied out of the frame, before the downsample.
++@group(0) @binding(3) var sharp_source: texture_2d<f32>;
+ @group(1) @binding(0) var clip: texture_2d<f32>;
+ 
+ struct Varyings {
+@@ -101,8 +104,7 @@ fn vs_composite(@builtin(vertex_index) index: u32) -> Varyings {
+     return out;
+ }
+ 
+-fn sample_clamped(p: vec2<f32>, lo: vec2<f32>, hi: vec2<f32>) -> vec4<f32> {
+-    let size = vec2<f32>(textureDimensions(source));
++fn fold(p: vec2<f32>, lo: vec2<f32>, hi: vec2<f32>) -> vec2<f32> {
+     var q = p;
+     if (params.mirror != 0u) {
+         // Reflected however far past the edge the blur reaches, so a region narrower than
+@@ -112,8 +114,12 @@ fn sample_clamped(p: vec2<f32>, lo: vec2<f32>, hi: vec2<f32>) -> vec4<f32> {
+         let m = d - 2.0 * span * floor(d / (2.0 * span));
+         q = lo + span - abs(span - m);
+     }
+-    q = clamp(q, lo + 0.5, hi - 0.5);
+-    return textureSampleLevel(source, source_sampler, q / size, 0.0);
++    return clamp(q, lo + 0.5, hi - 0.5);
++}
++
++fn sample_clamped(p: vec2<f32>, lo: vec2<f32>, hi: vec2<f32>) -> vec4<f32> {
++    let size = vec2<f32>(textureDimensions(source));
++    return textureSampleLevel(source, source_sampler, fold(p, lo, hi) / size, 0.0);
+ }
+ 
+ @fragment
+@@ -205,6 +211,11 @@ fn fs_composite(in: Varyings) -> @location(0) vec4<f32> {
+         }
+         let blurred = params.dst_origin + (at - params.src_origin) / params.factor;
+         color = sample_clamped(blurred, params.dst_origin, params.dst_origin + params.dst_size);
++        if (params.sharp > 0.0) {
++            let size = vec2<f32>(textureDimensions(sharp_source));
++            let q = fold(at, params.src_origin, params.src_origin + params.src_size);
++            color = mix(color, textureSampleLevel(sharp_source, source_sampler, q / size, 0.0), params.sharp);
++        }
+         let luma = dot(color.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+         if (params.has_tone != 0u) {
+             // The curve is not linear, so it takes the straight colour.
+@@ -281,7 +292,8 @@ struct Params {
+     tone: [f32; 5],
+     has_edge: u32,
+     edge: [f32; 5],
+-    pad: [u32; 3],
++    sharp: f32,
++    pad: [u32; 2],
+ }
+ 
+ const _: () = assert!(std::mem::offset_of!(Params, radii) == 96 && std::mem::size_of::<Params>() == 240);
+@@ -383,6 +395,16 @@ impl Backdrops {
+                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                     count: None,
+                 },
++                wgpu::BindGroupLayoutEntry {
++                    binding: 3,
++                    visibility: wgpu::ShaderStages::FRAGMENT,
++                    ty: wgpu::BindingType::Texture {
++                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
++                        view_dimension: wgpu::TextureViewDimension::D2,
++                        multisampled: false,
++                    },
++                    count: None,
++                },
+             ],
+         });
+         let clip_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+@@ -491,7 +513,7 @@ impl Backdrops {
+                 view_formats: &[],
+             })
+             .create_view(&wgpu::TextureViewDescriptor::default());
+-        let placeholder = bind_group(device, &layout, &params, &sampler, &placeholder_view);
++        let placeholder = bind_group(device, &layout, &params, &sampler, &placeholder_view, &placeholder_view);
+         let no_clip = clip_bind_group(device, &clip_layout, &clip_texture(device, 1, 1));
+         Self {
+             format,
+@@ -527,6 +549,7 @@ impl Backdrops {
+                 &self.params,
+                 &self.sampler,
+                 &self.placeholder_view,
++                &self.placeholder_view,
+             );
+             self.scratch = None;
+         }
+@@ -569,9 +592,9 @@ impl Backdrops {
+             let view = |t: &wgpu::Texture| t.create_view(&wgpu::TextureViewDescriptor::default());
+             let (copy_view, a_view, b_view) = (view(&copy), view(&a), view(&b));
+             self.scratch = Some(Scratch {
+-                from_copy: self.bind_group(device, &copy_view),
+-                from_a: self.bind_group(device, &a_view),
+-                from_b: self.bind_group(device, &b_view),
++                from_copy: self.bind_group(device, &copy_view, &copy_view),
++                from_a: self.bind_group(device, &a_view, &copy_view),
++                from_b: self.bind_group(device, &b_view, &copy_view),
+                 copy,
+                 a_view,
+                 b_view,
+@@ -579,8 +602,9 @@ impl Backdrops {
+         }
+     }
+ 
+-    fn bind_group(&self, device: &wgpu::Device, view: &wgpu::TextureView) -> wgpu::BindGroup {
+-        bind_group(device, &self.layout, &self.params, &self.sampler, view)
++    /// Reading `view`, with the copy out of the frame as the composite's unblurred source.
++    fn bind_group(&self, device: &wgpu::Device, view: &wgpu::TextureView, copy: &wgpu::TextureView) -> wgpu::BindGroup {
++        bind_group(device, &self.layout, &self.params, &self.sampler, view, copy)
+     }
+ 
+     /// Blurs the regions of `backdrops` out of `frame` into the scratch textures, ready for
+@@ -692,6 +716,8 @@ impl Backdrops {
+             if let Some(r) = region {
+                 let (rw, rh) = r.reduced();
+                 p.src_origin = [r.x as f32, r.y as f32];
++                p.src_size = [r.width as f32, r.height as f32];
++                p.sharp = backdrop.sharp.clamp(0., 1.);
+                 p.dst_origin = p.src_origin;
+                 p.dst_size = [rw as f32, rh as f32];
+                 p.factor = r.factor as f32;
+@@ -822,6 +848,7 @@ fn bind_group(
+     params: &wgpu::Buffer,
+     sampler: &wgpu::Sampler,
+     view: &wgpu::TextureView,
++    sharp: &wgpu::TextureView,
+ ) -> wgpu::BindGroup {
+     device.create_bind_group(&wgpu::BindGroupDescriptor {
+         label: Some("backdrop_bind_group"),
+@@ -843,6 +870,10 @@ fn bind_group(
+                 binding: 2,
+                 resource: wgpu::BindingResource::Sampler(sampler),
+             },
++            wgpu::BindGroupEntry {
++                binding: 3,
++                resource: wgpu::BindingResource::TextureView(sharp),
++            },
+         ],
+     })
+ }
+@@ -983,11 +1014,45 @@ mod tests {
+             clamp: None,
+             tone: None,
+             edge: None,
++            sharp: 0.,
+         };
+         let out = draw(w, h, &pixels, backdrop)?;
+         Some((4..4 + width).map(|x| out[((3 * w + x) * 4) as usize]).collect())
+     }
+ 
++    /// A 32 x 8 frame white left of x = 16 and black right of it under a backdrop over all of
++    /// it, blurred with sigma 60 and reflected at its edges, `sharp` of it unblurred; the red
++    /// of row 4.
++    fn sharpened(sharp: f32) -> Option<Vec<u8>> {
++        let (w, h) = (32, 8);
++        let pixels: Vec<u8> =
++            (0..h).flat_map(|_| (0..w).flat_map(|x| if x < 16 { [255; 4] } else { [0, 0, 0, 255] })).collect();
++        let all = Bounds { origin: point(px(0.), px(0.)), size: size(px(w as f32), px(h as f32)) }.scale(1.);
++        let backdrop = Backdrop {
++            order: 0,
++            source: BackdropSource::Window,
++            bounds: all,
++            content_mask: ContentMask { bounds: all },
++            corner_radii: Corners::default(),
++            blur_radius: ScaledPixels(60.),
++            saturation: 1.,
++            tint: Hsla::transparent_black(),
++            highlight: 0.,
++            highlight_width: ScaledPixels(0.),
++            sample_limit: Some(all),
++            opacity: 1.,
++            fallback: Hsla::transparent_black(),
++            mask: 0,
++            mirror: true,
++            clamp: None,
++            tone: None,
++            edge: None,
++            sharp,
++        };
++        let out = draw(w, h, &pixels, backdrop)?;
++        Some((0..w).map(|x| out[((4 * w + x) * 4) as usize]).collect())
++    }
++
+     /// Opaque red under dark regular glass (saturation 1.5, tint (75, 73, 68) at 0.58), 8 x 8.
+     fn glass_over_red(tone: Option<[f32; 5]>) -> Option<[u8; 4]> {
+         let pixels: Vec<u8> = (0..64).flat_map(|_| [255, 0, 0, 255]).collect();
+@@ -1015,6 +1080,7 @@ mod tests {
+             clamp: None,
+             tone,
+             edge: None,
++            sharp: 0.,
+         };
+         let out = draw(8, 8, &pixels, backdrop)?;
+         let i = (4 * 8 + 4) * 4;
+@@ -1091,6 +1157,7 @@ mod tests {
+             clamp: None,
+             tone: None,
+             edge: Some(edge),
++            sharp: 0.,
+         };
+         let out = draw(16, 16, &pixels, backdrop)?;
+         Some(out.chunks(4).map(|p| p[0]).collect())
+@@ -1114,4 +1181,19 @@ mod tests {
+         assert!((at(&bent, 8, 4) - 250).abs() <= 1, "{}", at(&bent, 8, 4));
+         assert_eq!(at(&bent, 8, 7), 128);
+     }
++
++    // The capture compositor asserts the same values.
++    #[test]
++    fn a_sharpened_backdrop_keeps_its_share_of_what_lies_behind_unblurred() {
++        let Some(half) = sharpened(0.5) else {
++            eprintln!("no wgpu adapter, skipped");
++            return;
++        };
++        // The blur all but averages the two halves to 128; half of each pixel stays as it was.
++        for (x, want) in [(2, 191), (13, 191), (18, 64), (29, 64)] {
++            assert!((half[x] as i32 - want).abs() <= 2, "x {x}: {}, want {want}", half[x]);
++        }
++        let Some(none) = sharpened(0.) else { return };
++        assert!(none.iter().all(|&v| (v as i32 - 128).abs() <= 2), "{none:?}");
++    }
+ }
+diff --git a/crates/gpui_wgpu/src/wgpu_renderer.rs b/crates/gpui_wgpu/src/wgpu_renderer.rs
+index 47768e8..6f4c120 100644
+--- a/crates/gpui_wgpu/src/wgpu_renderer.rs
++++ b/crates/gpui_wgpu/src/wgpu_renderer.rs
+@@ -3405,6 +3405,7 @@ mod tests {
+             clamp: None,
+             tone: None,
+             edge: None,
++            sharp: 0.,
+         }
+     }
+ 

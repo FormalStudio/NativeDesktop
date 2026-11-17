@@ -387,6 +387,9 @@ pub struct BackdropFilter {
     /// edge faces down. The blur is read `bend · exp(-depth / bend_width)` further out along the
     /// normal, so the backdrop bends in at the edge. Widths and `bend` in pixels.
     pub edge: Option<[f32; 5]>,
+    /// The share of the unblurred backdrop mixed into the blur before the tone or saturation:
+    /// macOS's Liquid Glass keeps what lies behind it sharp under a wide blur.
+    pub sharp: f32,
 }
 
 impl Default for BackdropFilter {
@@ -404,6 +407,7 @@ impl Default for BackdropFilter {
             clamp: None,
             tone: None,
             edge: None,
+            sharp: 0.,
         }
     }
 }
@@ -475,6 +479,12 @@ impl BackdropFilter {
     /// Lights and bends the edge as [`Self::edge`] describes.
     pub fn edged(mut self, edge: [f32; 5]) -> Self {
         self.edge = Some(edge);
+        self
+    }
+
+    /// Mixes [`Self::sharp`] of the unblurred backdrop into the blur.
+    pub fn sharpened(mut self, sharp: f32) -> Self {
+        self.sharp = sharp;
         self
     }
 }

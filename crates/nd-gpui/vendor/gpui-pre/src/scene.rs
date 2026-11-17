@@ -706,6 +706,8 @@ pub struct Backdrop {
     pub tone: Option<[f32; 5]>,
     /// From [`BackdropFilter::edge`], its lengths scaled; Metal and Direct3D leave the edge plain.
     pub edge: Option<[f32; 5]>,
+    /// From [`BackdropFilter::sharp`]; Metal and Direct3D blur all of it.
+    pub sharp: f32,
 }
 
 /// Coverage a backdrop is multiplied by, for a clip a content mask cannot hold (a circle, a
@@ -1188,6 +1190,7 @@ mod tests {
             clamp: None,
             tone: None,
             edge: None,
+            sharp: 0.,
         }
     }
 

@@ -1994,6 +1994,7 @@ mod tests {
             clamp: None,
             tone: None,
             edge: None,
+            sharp: 0.,
         }
     }
 

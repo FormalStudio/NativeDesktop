@@ -5097,6 +5097,7 @@ impl Window {
             edge: filter.edge.map(|[light, bottom, light_width, bend, bend_width]| {
                 [light, bottom, light_width * scale_factor, bend * scale_factor, bend_width * scale_factor]
             }),
+            sharp: filter.sharp,
         });
     }
 
