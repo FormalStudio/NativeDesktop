@@ -576,7 +576,7 @@ impl Walk<'_> {
             }
         }
         if let Some(text) = view.downcast_ref::<NdTextView>() {
-            let look = text.look();
+            let look = text.drawn_look();
             let base = look.as_ref().map_or(crate::look::Color::Label, |l| l.color);
             for run in look.iter().flat_map(|l| &l.runs).filter(|r| !r.text.trim().is_empty()) {
                 if let Some(color) = resolve(&run.color.unwrap_or(base).ns_color(), &appearance) {

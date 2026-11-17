@@ -76,6 +76,12 @@ pub enum Feature {
     /// (`List::drag_out_files`). Linux sessions under Wayland only: GPUI starts no outbound drag
     /// on X11, and the AppKit and Windows lists have no row drags yet.
     DragFilesOut,
+    /// The window's toolbar shows the window's title itself (macOS's unified toolbar), so an
+    /// app leaves its own title or location out of the toolbar there.
+    ToolbarTitle,
+    /// The OS draws the icon of a file or folder (`Shell::file_icon`): the app's own icon for a
+    /// bundle, a folder's custom one, the document icon of the file's type.
+    FileIcons,
 }
 
 /// Whether `feature` works on the running target.
@@ -83,6 +89,7 @@ pub const fn has(feature: Feature) -> bool {
     match target() {
         Target::Web => matches!(feature, Feature::Clipboard),
         Target::MacOs => !matches!(feature, Feature::DragFilesOut),
+        _ if matches!(feature, Feature::ToolbarTitle | Feature::FileIcons) => false,
         Target::Linux => !matches!(feature, Feature::MenuBar | Feature::NativeOnlyWidgets),
         // nd-system has no Windows audio player yet.
         Target::Windows => {
