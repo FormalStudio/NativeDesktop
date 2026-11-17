@@ -55,7 +55,16 @@ struct Params {
     tone_g2: f32,
     tone_k0: f32,
     tone_k1: f32,
+    // Light added at the edge and the blur read further out there (BackdropFilter::edge).
+    has_edge: u32,
+    edge_light: f32,
+    edge_bottom: f32,
+    edge_light_width: f32,
+    edge_bend: f32,
+    edge_bend_width: f32,
     pad0: u32,
+    pad1: u32,
+    pad2: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -178,9 +187,23 @@ fn fs_composite(in: Varyings) -> @location(0) vec4<f32> {
         return vec4<f32>(0.0, 0.0, 0.0, coverage * params.opacity);
     }
 
+    var normal = vec2<f32>(0.0);
+    if (params.has_edge != 0u || params.highlight > 0.0) {
+        let e = 0.5;
+        normal = normalize(vec2<f32>(
+            rounded_rect_sdf(p + vec2<f32>(e, 0.0)) - rounded_rect_sdf(p - vec2<f32>(e, 0.0)),
+            rounded_rect_sdf(p + vec2<f32>(0.0, e)) - rounded_rect_sdf(p - vec2<f32>(0.0, e))
+        ) + vec2<f32>(1e-6));
+    }
+    let depth = max(-sdf, 0.0);
+
     var color = vec4<f32>(0.0);
     if (params.mode == 0u && params.has_source != 0u) {
-        let blurred = params.dst_origin + (p - params.src_origin) / params.factor;
+        var at = p;
+        if (params.has_edge != 0u && params.edge_bend != 0.0) {
+            at += normal * params.edge_bend * exp(-depth / max(params.edge_bend_width, 1e-3));
+        }
+        let blurred = params.dst_origin + (at - params.src_origin) / params.factor;
         color = sample_clamped(blurred, params.dst_origin, params.dst_origin + params.dst_size);
         let luma = dot(color.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
         if (params.has_tone != 0u) {
@@ -205,12 +228,15 @@ fn fs_composite(in: Varyings) -> @location(0) vec4<f32> {
         color = vec4<f32>(min(color.rgb, vec3<f32>(color.a)), color.a);
     }
 
+    if (params.has_edge != 0u && params.edge_light > 0.0) {
+        // Added, not laid over: the Mac's edge brightens dark and light glass by the same levels.
+        let ny2 = normal.y * normal.y;
+        let facing = ny2 * ny2 * select(1.0, params.edge_bottom, normal.y > 0.0);
+        let add = params.edge_light * facing * exp(-depth / max(params.edge_light_width, 1e-3));
+        color = vec4<f32>(min(color.rgb + vec3<f32>(add * color.a), vec3<f32>(color.a)), color.a);
+    }
+
     if (params.highlight > 0.0 && params.highlight_width > 0.0) {
-        let e = 0.5;
-        let normal = normalize(vec2<f32>(
-            rounded_rect_sdf(p + vec2<f32>(e, 0.0)) - rounded_rect_sdf(p - vec2<f32>(e, 0.0)),
-            rounded_rect_sdf(p + vec2<f32>(0.0, e)) - rounded_rect_sdf(p - vec2<f32>(0.0, e))
-        ) + vec2<f32>(1e-6));
         let rim = 1.0 - smoothstep(0.0, params.highlight_width, -sdf);
         let facing = dot(normal, vec2<f32>(0.25881905, -0.96592583));
         let light = select(0.35, 1.0, facing > 0.0) * facing * facing;
@@ -253,10 +279,12 @@ struct Params {
     clamp_high: f32,
     has_tone: u32,
     tone: [f32; 5],
-    pad: u32,
+    has_edge: u32,
+    edge: [f32; 5],
+    pad: [u32; 3],
 }
 
-const _: () = assert!(std::mem::offset_of!(Params, radii) == 96 && std::mem::size_of::<Params>() == 208);
+const _: () = assert!(std::mem::offset_of!(Params, radii) == 96 && std::mem::size_of::<Params>() == 240);
 
 /// A backdrop's sample region in whole frame pixels and the factor it is downsampled by.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -657,6 +685,8 @@ impl Backdrops {
                 clamp_high: backdrop.clamp.map_or(1., |c| c[1]),
                 has_tone: backdrop.tone.is_some() as u32,
                 tone: backdrop.tone.unwrap_or_default(),
+                has_edge: backdrop.edge.is_some() as u32,
+                edge: backdrop.edge.unwrap_or_default(),
                 ..base
             };
             if let Some(r) = region {
@@ -952,6 +982,7 @@ mod tests {
             mirror: true,
             clamp: None,
             tone: None,
+            edge: None,
         };
         let out = draw(w, h, &pixels, backdrop)?;
         Some((4..4 + width).map(|x| out[((3 * w + x) * 4) as usize]).collect())
@@ -983,6 +1014,7 @@ mod tests {
             mirror: false,
             clamp: None,
             tone,
+            edge: None,
         };
         let out = draw(8, 8, &pixels, backdrop)?;
         let i = (4 * 8 + 4) * 4;
@@ -1030,5 +1062,56 @@ mod tests {
         for (v, want) in got.into_iter().zip([255, 15, 15, 255]) {
             assert!((v as i32 - want).abs() <= 1, "{got:?}, want [255, 15, 15, 255]");
         }
+    }
+
+    /// An unblurred 8 x 8 backdrop with 4 px corners at (4, 4) in a 16 x 16 frame whose rows
+    /// above `white_above` are white and the rest grey 128, its edge `edge`; the red of each pixel.
+    fn edged(white_above: u32, edge: [f32; 5]) -> Option<Vec<u8>> {
+        let pixels: Vec<u8> = (0..16)
+            .flat_map(|y| (0..16).flat_map(move |_| if y < white_above { [255; 4] } else { [128, 128, 128, 255] }))
+            .collect();
+        let bounds = Bounds { origin: point(px(4.), px(4.)), size: size(px(8.), px(8.)) }.scale(1.);
+        let frame = Bounds { origin: point(px(0.), px(0.)), size: size(px(16.), px(16.)) }.scale(1.);
+        let backdrop = Backdrop {
+            order: 0,
+            source: BackdropSource::Window,
+            bounds,
+            content_mask: ContentMask { bounds: frame },
+            corner_radii: Corners::all(ScaledPixels(4.)),
+            blur_radius: ScaledPixels(0.),
+            saturation: 1.,
+            tint: Hsla::transparent_black(),
+            highlight: 0.,
+            highlight_width: ScaledPixels(0.),
+            sample_limit: None,
+            opacity: 1.,
+            fallback: Hsla::transparent_black(),
+            mask: 0,
+            mirror: false,
+            clamp: None,
+            tone: None,
+            edge: Some(edge),
+        };
+        let out = draw(16, 16, &pixels, backdrop)?;
+        Some(out.chunks(4).map(|p| p[0]).collect())
+    }
+
+    // The capture compositor asserts the same values.
+    #[test]
+    fn an_edged_backdrop_lights_its_top_and_bottom_and_bends_in_what_lies_outside() {
+        let Some(lit) = edged(0, [0.25, 0.5, 1., 0., 1.]) else {
+            eprintln!("no wgpu adapter, skipped");
+            return;
+        };
+        let at = |v: &[u8], x: usize, y: usize| v[y * 16 + x] as i32;
+        // Half a pixel in (96% covered): 0.25 e^-0.46 of white added at the top, half that at
+        // the bottom, nothing at the sides or three pixels in.
+        for (x, y, want) in [(8, 4, 165), (8, 11, 147), (4, 8, 128), (8, 8, 128)] {
+            assert!((at(&lit, x, y) - want).abs() <= 1, "({x}, {y}): {}, want {want}", at(&lit, x, y));
+        }
+        // The top row reads 1.3 px further up, in the white; three rows in it reads grey.
+        let Some(bent) = edged(4, [0., 1., 1., 2., 1.]) else { return };
+        assert!((at(&bent, 8, 4) - 250).abs() <= 1, "{}", at(&bent, 8, 4));
+        assert_eq!(at(&bent, 8, 7), 128);
     }
 }

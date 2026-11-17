@@ -1993,6 +1993,7 @@ mod tests {
             mirror: false,
             clamp: None,
             tone: None,
+            edge: None,
         }
     }
 

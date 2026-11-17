@@ -381,6 +381,12 @@ pub struct BackdropFilter {
     /// sRGB values), `[g0, g1, g2, k0, k1]` lays each channel c at
     /// `g0 + g1 L + g2 L² + (k0 + k1 L)(c - L)`, clamped to 0..1.
     pub tone: Option<[f32; 5]>,
+    /// The edge of macOS's Liquid Glass: `[light, bottom, light_width, bend, bend_width]`. White
+    /// `light` is added at the edge, falling off as `exp(-depth / light_width)` inward and
+    /// weighted by the edge normal's vertical part to the fourth power, by `bottom` where the
+    /// edge faces down. The blur is read `bend · exp(-depth / bend_width)` further out along the
+    /// normal, so the backdrop bends in at the edge. Widths and `bend` in pixels.
+    pub edge: Option<[f32; 5]>,
 }
 
 impl Default for BackdropFilter {
@@ -397,6 +403,7 @@ impl Default for BackdropFilter {
             mirror: false,
             clamp: None,
             tone: None,
+            edge: None,
         }
     }
 }
@@ -462,6 +469,12 @@ impl BackdropFilter {
     /// Tones the blur by its luma instead of saturating it, as [`Self::tone`] describes.
     pub fn toned(mut self, tone: [f32; 5]) -> Self {
         self.tone = Some(tone);
+        self
+    }
+
+    /// Lights and bends the edge as [`Self::edge`] describes.
+    pub fn edged(mut self, edge: [f32; 5]) -> Self {
+        self.edge = Some(edge);
         self
     }
 }
