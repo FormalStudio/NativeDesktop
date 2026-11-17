@@ -8,7 +8,7 @@ use crate::subscription::SingleSubscriberSet;
 use crate::taffy::TaffyLayoutEngine;
 use crate::{
     Action, AnyDrag, AnyElement, AnyImageCache, AnyTooltip, AnyView, App, AppContext, Arena, Asset,
-    AsyncWindowContext, AtlasTile, AvailableSpace, Backdrop, BackdropFilter, BackdropSource,
+    AsyncWindowContext, AtlasTile, AvailableSpace, Backdrop, BackdropFilter, BackdropMask, BackdropSource,
     Background, BorderStyle, Bounds, BoxShadow,
     Capslock, Context, Corners, CursorHideMode, CursorStyle, Decorations, DevicePixels,
     DispatchActionListener, DispatchNodeId, DispatchTree, DisplayId, Edges, Effect, Entity,
@@ -2315,6 +2315,20 @@ impl Window {
                     .log_err();
             }
         }));
+        platform_window.on_pointer_removed(Box::new({
+            let mut cx = cx.to_async();
+            move || {
+                handle
+                    .update(&mut cx, |_, window, _| window.captured_hitbox = None)
+                    .with_context(|| {
+                        format!(
+                            "handling pointer removal for window {:?}",
+                            handle.window_id()
+                        )
+                    })
+                    .log_err();
+            }
+        }));
         platform_window.on_input({
             let mut cx = cx.to_async();
             Box::new(move |event| {
@@ -3313,6 +3327,12 @@ impl Window {
     pub fn set_client_inset(&mut self, inset: Pixels) {
         self.client_inset = Some(inset);
         self.platform_window.set_client_inset(inset);
+    }
+
+    /// Called once per compositor configure, in order, as it arrives (Wayland and X11). A later
+    /// registration replaces an earlier one.
+    pub fn on_configure(&self, callback: impl FnMut(crate::Configure) + 'static) {
+        self.platform_window.on_configure(Box::new(callback));
     }
 
     /// Sets the client-drawn corner radii so platform effects can match the window's shape.
@@ -4555,7 +4575,10 @@ impl Window {
         result
     }
 
-    pub(crate) fn with_element_opacity<R>(
+    /// Fades everything `f` paints by `opacity`, on top of any opacity already in effect.
+    /// Elements take theirs from [`crate::Style::opacity`]; a painter drawing on its own (a
+    /// compositor laying out surfaces) passes it here.
+    pub fn with_element_opacity<R>(
         &mut self,
         opacity: Option<f32>,
         f: impl FnOnce(&mut Self) -> R,
@@ -4948,6 +4971,28 @@ impl Window {
         corner_radii: Corners<Pixels>,
         shadows: &[BoxShadow],
     ) {
+        self.insert_drop_shadows(bounds, corner_radii, shadows, 0);
+    }
+
+    /// Like [`Self::paint_drop_shadows`], but keeps the shadows outside the element's shape,
+    /// for an element whose backdrop must not blur its own shadow. Paint them after
+    /// [`Self::paint_backdrop`].
+    pub fn paint_drop_shadows_outside(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        corner_radii: Corners<Pixels>,
+        shadows: &[BoxShadow],
+    ) {
+        self.insert_drop_shadows(bounds, corner_radii, shadows, 2);
+    }
+
+    fn insert_drop_shadows(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        corner_radii: Corners<Pixels>,
+        shadows: &[BoxShadow],
+        kind: u32,
+    ) {
         self.invalidator.debug_assert_paint();
 
         let scale_factor = self.length_scale();
@@ -4969,7 +5014,7 @@ impl Window {
                 color: shadow.color.opacity(opacity),
                 element_bounds,
                 element_corner_radii,
-                inset: 0,
+                inset: kind,
                 pad: 0,
             });
         }
@@ -4983,6 +5028,18 @@ impl Window {
         bounds: Bounds<Pixels>,
         corner_radii: Corners<Pixels>,
         filter: &BackdropFilter,
+    ) {
+        self.paint_backdrop_masked(bounds, corner_radii, filter, None);
+    }
+
+    /// [`Self::paint_backdrop`] multiplied by `mask` as well as clipped by the content mask.
+    /// The fallback colour a desktop backdrop paints instead ignores it.
+    pub fn paint_backdrop_masked(
+        &mut self,
+        bounds: Bounds<Pixels>,
+        corner_radii: Corners<Pixels>,
+        filter: &BackdropFilter,
+        mask: Option<BackdropMask<Pixels>>,
     ) {
         self.invalidator.debug_assert_paint();
 
@@ -5005,6 +5062,20 @@ impl Window {
 
         let scale_factor = self.length_scale();
         let opacity = self.element_opacity();
+        if opacity <= 0. {
+            return;
+        }
+        let mask = mask.map_or(0, |mask| {
+            let bounds = self.element_transform.apply_bounds(mask.bounds).scale(self.scale_factor());
+            let masks = &mut self.next_frame.scene.backdrop_masks;
+            masks.push(BackdropMask {
+                bounds,
+                width: mask.width,
+                height: mask.height,
+                coverage: mask.coverage,
+            });
+            masks.len() as u32
+        });
         self.next_frame.scene.insert_primitive(Backdrop {
             order: 0,
             source: filter.source,
@@ -5013,9 +5084,15 @@ impl Window {
             corner_radii: corner_radii.scale(scale_factor),
             blur_radius: filter.blur_radius.scale(scale_factor),
             saturation: filter.saturation,
-            tint: filter.tint.opacity(opacity),
-            highlight: filter.highlight * opacity,
+            tint: filter.tint,
+            highlight: filter.highlight,
             highlight_width: filter.highlight_width.scale(scale_factor),
+            sample_limit: filter.within.map(|within| self.snap_bounds(within)),
+            opacity,
+            fallback: filter.fallback,
+            mask,
+            mirror: filter.mirror,
+            clamp: filter.clamp,
         });
     }
 
@@ -8472,6 +8549,60 @@ mod tests {
             assert_eq!(handles.handles.len(), 0);
             assert!(handles.dropped_handles.is_empty());
         });
+    }
+
+    #[gpui::test]
+    fn test_a_backdrop_blurs_before_its_shadow_paints_outside_it(cx: &mut TestAppContext) {
+        struct Glass;
+
+        impl Render for Glass {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                let shadow = crate::BoxShadow::new(px(0.), px(3.), hsla(0., 0., 0., 0.1));
+                div()
+                    .size(px(100.))
+                    .shadow(vec![shadow.blur_radius(px(12.))])
+                    .backdrop(crate::BackdropFilter::blur(px(10.)))
+            }
+        }
+
+        let window = cx.add_window(|_, _| Glass);
+        cx.update_window(window.into(), |_, window, cx| {
+            window.draw(cx).clear(cx);
+            let scene = &window.rendered_frame.scene;
+            let [shadow] = scene.shadows.as_slice() else {
+                panic!("expected one shadow, got {}", scene.shadows.len());
+            };
+            assert_eq!(shadow.inset, 2);
+            assert!(scene.backdrops[0].order < shadow.order);
+        })
+        .unwrap();
+    }
+
+    #[gpui::test]
+    fn test_a_painter_fades_a_backdrop_with_the_element_opacity(cx: &mut TestAppContext) {
+        struct Faded;
+
+        impl Render for Faded {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                canvas(
+                    |_, _, _| (),
+                    |bounds, (), window, _| {
+                        window.with_element_opacity(Some(0.5), |window| {
+                            let filter = crate::BackdropFilter::blur(px(10.));
+                            window.paint_backdrop(bounds, Default::default(), &filter);
+                        })
+                    },
+                )
+                .size(px(100.))
+            }
+        }
+
+        let window = cx.add_window(|_, _| Faded);
+        cx.update_window(window.into(), |_, window, cx| {
+            window.draw(cx).clear(cx);
+            assert_eq!(window.rendered_frame.scene.backdrops[0].opacity, 0.5);
+        })
+        .unwrap();
     }
 
     #[gpui::test]

@@ -5,6 +5,37 @@ and the one it moves to.
 
 ## Unreleased
 
+- `[linux] files`: files and directories copied beside the executable in the AppImage, as
+  `[windows] files` does for `Setup.exe`. A `files` entry on either OS can now name a directory,
+  which is copied with its tree.
+- On AppKit, a row or grid item with a pointer gesture (`.on_tap`, `.on_double_tap`) no longer
+  keeps the press from its list: the table or grid still selects, drags and activates, and the
+  gesture still fires. Before, such rows could not be selected or opened with the mouse.
+- On AppKit, a double click on a grid item reports `ActivateEvent`, as a table's row does.
+- On AppKit, a table's first row sits under its header again. From macOS 26 the header floats
+  over the rows and AppKit rests the clip view at minus its height; nd counted that height as
+  room for rows and scrolled to zero, so the first row hid behind the header.
+- On AppKit, an `.inset()` table or list in a content pane takes the inset style: alternating
+  row backgrounds that carry on under the last row, and a rounded, inset selection. In a sidebar
+  it stays a source list. Its columns give up the padding the style adds, so widths the app
+  sized to the pane fit it; `ColumnResized` reports the whole width, as before.
+- On AppKit, text in a selected row turns to the selected text colour while the row draws the
+  emphasized selection, as a label in an `NSTableCellView` does. Label tones (the text tokens,
+  any grey) change; a colour with a hue is the app's and stays.
+- On AppKit, source list rows line their titles up: each symbol is centred in a box of one
+  width instead of taking its own. A row with a `meter` draws it under its caption, and rows
+  with a caption are as tall as their two lines need.
+- `slider(..).small()`: the small slider a status bar holds (AppKit's mini control size; the
+  other backends ignore it).
+- `Feature::ToolbarTitle` (the toolbar shows the window's title beside its items) and
+  `Feature::FileIcons` with `Shell::file_icon(path, side)`: the icon the OS shows for a file, as
+  PNG bytes. macOS only for now; call it off the main thread.
+- On AppKit, a `TabStyle::Strip` tab strip marks its selected tab with the control colour, as
+  a window's tab bar does, instead of the accent.
+
+- On AppKit, a right click on a list row with a menu of its own no longer selects the row: the
+  menu acts on its row, and the selection (in a browser, the tab on show) stays where it was, as
+  on GPUI. A menu around the list still selects the row alone first, which it did not on AppKit.
 - GPUI toolbar tabs show which one is selected, in each platform's selector: libadwaita's view
   switcher (icon and label, the selected one on a flat 10% tint) and a macOS preferences toolbar
   (icon over label, the selected icon in the accent) sit in the middle of the row in place of the

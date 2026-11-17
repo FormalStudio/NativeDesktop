@@ -35,7 +35,7 @@ cbuffer Params : register(b2) {
     float highlight_width;
     uint mode;
     uint has_source;
-    uint pad;
+    float opacity;
 };
 
 Texture2D<float4> source : register(t0);
@@ -116,7 +116,7 @@ float4 fs_composite(float4 position : SV_Position) : SV_Target {
         discard;
     }
     if (mode == 1u) {
-        return float4(0.0, 0.0, 0.0, coverage);
+        return float4(0.0, 0.0, 0.0, coverage * opacity);
     }
 
     float4 color = float4(0.0, 0.0, 0.0, 0.0);
@@ -140,7 +140,7 @@ float4 fs_composite(float4 position : SV_Position) : SV_Target {
         float add = saturate(highlight * rim * light);
         color = float4(color.rgb + add * (1.0 - color.rgb), color.a + add * (1.0 - color.a));
     }
-    return color * coverage;
+    return color * coverage * opacity;
 }
 "#;
 
@@ -166,7 +166,7 @@ struct Params {
     highlight_width: f32,
     mode: u32,
     has_source: u32,
-    pad: u32,
+    opacity: f32,
 }
 
 const _: () = assert!(std::mem::offset_of!(Params, radii) == 96 && std::mem::size_of::<Params>() == 144);
@@ -485,6 +485,7 @@ impl Backdrops {
                 saturation: backdrop.saturation,
                 highlight: backdrop.highlight,
                 highlight_width: backdrop.highlight_width.0,
+                opacity: backdrop.opacity,
                 ..base
             };
             if let Some(r) = region {

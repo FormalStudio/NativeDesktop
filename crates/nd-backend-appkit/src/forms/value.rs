@@ -12,7 +12,7 @@ use nd_ui::prelude::Hsla;
 use nd_ui::semantics::{ActionError, Probe, SemanticAction};
 use objc2::rc::Retained;
 use objc2::{DefinedClass, MainThreadOnly, define_class, msg_send};
-use objc2_app_kit::{NSColor, NSEvent, NSResponder, NSSlider, NSView, NSViewLayerContentsRedrawPolicy};
+use objc2_app_kit::{NSColor, NSControlSize, NSEvent, NSResponder, NSSlider, NSView, NSViewLayerContentsRedrawPolicy};
 use objc2_foundation::{MainThreadMarker, NSRect};
 use objc2_quartz_core::CALayer;
 
@@ -217,8 +217,13 @@ impl SliderControl {
                 // Tick marks as asked; with a step and no ticks, one per step (up to a count that
                 // stays legible) so the knob snaps to them. Other steps snap in the action.
                 let steps = props.step.filter(|s| *s > 0.).map(|s| ((props.max - props.min) / s).round() as isize + 1);
+                if old.is_none_or(|o| o.small != props.small) {
+                    slider.setControlSize(if props.small { NSControlSize::Mini } else { NSControlSize::Regular });
+                }
                 let ticks = match steps {
                     _ if props.ticks > 0 => props.ticks as isize,
+                    // A bar's slider has no room under its track; it snaps in the action instead.
+                    Some(_) if props.small => 0,
                     Some(n) if n <= 64 => n,
                     _ => 0,
                 };

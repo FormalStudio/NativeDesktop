@@ -469,7 +469,7 @@ vertex ShadowVertexOutput shadow_vertex(
   Shadow shadow = shadows[shadow_id];
 
   Bounds_ScaledPixels bounds;
-  if (shadow.inset != 0u) {
+  if (shadow.inset == 1u) {
     bounds = shadow.element_bounds;
   } else {
     // Leave room for the gaussian tail outside the shadow rect.
@@ -542,13 +542,17 @@ fragment float4 shadow_fragment(ShadowFragmentInput input [[stage_in]],
     }
   }
 
-  if (shadow.inset != 0u) {
+  if (shadow.inset == 1u) {
     // The inset shadow is the complement of the (blurred) hole rect, clipped to the element.
     // `saturate(0.5 - d)` gives a 1-pixel antialiased edge: d <= -0.5 -> 1, d >= 0.5 -> 0.
     alpha = 1. - alpha;
     float element_distance = quad_sdf(input.position.xy, shadow.element_bounds,
                                       shadow.element_corner_radii);
     alpha *= saturate(0.5 - element_distance);
+  } else if (shadow.inset == 2u) {
+    float element_distance = quad_sdf(input.position.xy, shadow.element_bounds,
+                                      shadow.element_corner_radii);
+    alpha *= saturate(0.5 + element_distance);
   }
 
   return input.color * float4(1., 1., 1., alpha);

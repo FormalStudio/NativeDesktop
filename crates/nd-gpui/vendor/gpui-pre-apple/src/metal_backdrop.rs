@@ -40,7 +40,7 @@ struct Params {
     float highlight_width;
     uint mode;
     uint has_source;
-    uint pad;
+    float opacity;
 };
 
 struct Varyings {
@@ -134,7 +134,7 @@ fragment float4 backdrop_fs_composite(Varyings in [[stage_in]], constant Params 
         discard_fragment();
     }
     if (params.mode == 1u) {
-        return float4(0.0, 0.0, 0.0, coverage);
+        return float4(0.0, 0.0, 0.0, coverage * params.opacity);
     }
 
     float4 color = float4(0.0);
@@ -160,7 +160,7 @@ fragment float4 backdrop_fs_composite(Varyings in [[stage_in]], constant Params 
         float add = saturate(params.highlight * rim * light);
         color = float4(color.rgb + add * (1.0 - color.rgb), color.a + add * (1.0 - color.a));
     }
-    return color * coverage;
+    return color * coverage * params.opacity;
 }
 "#;
 
@@ -186,7 +186,7 @@ struct Params {
     highlight_width: f32,
     mode: u32,
     has_source: u32,
-    pad: u32,
+    opacity: f32,
 }
 
 const _: () = assert!(std::mem::offset_of!(Params, radii) == 96 && std::mem::size_of::<Params>() == 144);
@@ -234,6 +234,8 @@ pub(crate) struct Backdrops {
     erase: Pipeline,
     /// The copy of the frame, and the two textures the blur ping-pongs between.
     scratch: Option<[Texture; 3]>,
+    /// Bound where a batch blurs nothing, for the texture the composite function declares.
+    placeholder: Texture,
 }
 
 enum Blend {
@@ -280,6 +282,18 @@ impl Backdrops {
                 .newRenderPipelineStateWithDescriptor_error(&descriptor)
                 .with_context(|| format!("creating {label} render pipeline"))
         };
+        let descriptor = MTLTextureDescriptor::new();
+        // SAFETY: A 1x1 2D texture.
+        unsafe {
+            descriptor.setWidth(1);
+            descriptor.setHeight(1);
+        }
+        descriptor.setPixelFormat(MTLPixelFormat::BGRA8Unorm);
+        descriptor.setStorageMode(MTLStorageMode::Private);
+        descriptor.setUsage(MTLTextureUsage::ShaderRead);
+        let placeholder = device
+            .newTextureWithDescriptor(&descriptor)
+            .context("allocating the backdrop placeholder texture")?;
         Ok(Self {
             region: pipeline(
                 "backdrop_downsample",
@@ -301,6 +315,7 @@ impl Backdrops {
                 Blend::Erase,
             )?,
             scratch: None,
+            placeholder,
         })
     }
 
@@ -379,6 +394,7 @@ impl Backdrops {
                 saturation: backdrop.saturation,
                 highlight: backdrop.highlight,
                 highlight_width: backdrop.highlight_width.0,
+                opacity: backdrop.opacity,
                 ..base
             };
             if let Some(r) = region {
@@ -480,7 +496,7 @@ impl Backdrops {
                     width: rw,
                     height: rh,
                 });
-                draw(&encoder, &params, Some(source));
+                draw(&encoder, &params, source);
             }
             encoder.endEncoding();
         }
@@ -497,13 +513,14 @@ impl Backdrops {
         prepared: &Prepared,
         encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>,
     ) {
+        let source = prepared.blurred.as_ref().unwrap_or(&self.placeholder);
         for (params, desktop) in &prepared.composites {
             if *desktop {
                 encoder.setRenderPipelineState(&self.erase);
-                draw(encoder, &Params { mode: 1, ..*params }, prepared.blurred.as_ref());
+                draw(encoder, &Params { mode: 1, ..*params }, source);
             }
             encoder.setRenderPipelineState(&self.composite);
-            draw(encoder, params, prepared.blurred.as_ref());
+            draw(encoder, params, source);
         }
     }
 }
@@ -511,7 +528,7 @@ impl Backdrops {
 fn draw(
     encoder: &ProtocolObject<dyn MTLRenderCommandEncoder>,
     params: &Params,
-    source: Option<&Texture>,
+    source: &Texture,
 ) {
     // SAFETY: The bytes are a live `Params`, which matches the shader's packed `Params`, copied
     // into slot 0 of both stages; the texture is retained by the encoder.
@@ -526,7 +543,7 @@ fn draw(
             mem::size_of::<Params>(),
             0,
         );
-        encoder.setFragmentTexture_atIndex(source.map(|t| t.as_ref()), 0);
+        encoder.setFragmentTexture_atIndex(Some(source.as_ref()), 0);
         encoder.drawPrimitives_vertexStart_vertexCount(MTLPrimitiveType::TriangleStrip, 0, 4);
     }
 }

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     AtlasTextureId, AtlasTile, Background, Bounds, ContentMask, Corners, Edges, Hsla, Pixels,
-    Point, Radians, ScaledPixels, Size, bounds_tree::BoundsTree, point,
+    Point, Radians, Rgba, ScaledPixels, Size, bounds_tree::BoundsTree, point,
 };
 use std::{
     fmt::Debug,
@@ -51,6 +51,8 @@ pub struct Scene {
     pub polychrome_sprites: Vec<PolychromeSprite>,
     pub surfaces: Vec<PaintSurface>,
     pub backdrops: Vec<Backdrop>,
+    /// The masks backdrops index with [`Backdrop::mask`].
+    pub backdrop_masks: Vec<BackdropMask<ScaledPixels>>,
 }
 
 #[expect(missing_docs)]
@@ -68,6 +70,7 @@ impl Scene {
         self.polychrome_sprites.clear();
         self.surfaces.clear();
         self.backdrops.clear();
+        self.backdrop_masks.clear();
     }
 
     pub fn len(&self) -> usize {
@@ -157,6 +160,19 @@ impl Scene {
     pub fn replay(&mut self, range: Range<usize>, prev_scene: &Scene) {
         for operation in &prev_scene.paint_operations[range] {
             match operation {
+                // A mask index is local to the scene that painted it, so the mask comes along
+                // and the backdrop takes its index here.
+                PaintOperation::Primitive(Primitive::Backdrop(backdrop)) if backdrop.mask != 0 => {
+                    let mut backdrop = *backdrop;
+                    backdrop.mask = prev_scene
+                        .backdrop_masks
+                        .get(backdrop.mask as usize - 1)
+                        .map_or(0, |mask| {
+                            self.backdrop_masks.push(mask.clone());
+                            self.backdrop_masks.len() as u32
+                        });
+                    self.insert_primitive(Primitive::Backdrop(backdrop));
+                }
                 PaintOperation::Primitive(primitive) => self.insert_primitive(primitive.clone()),
                 PaintOperation::StartLayer(bounds) => self.push_layer(*bounds),
                 PaintOperation::EndLayer => self.pop_layer(),
@@ -493,10 +509,12 @@ impl<'a> Iterator for BatchIterator<'a> {
             PrimitiveKind::Backdrop => {
                 let backdrops_start = self.backdrops_start;
                 let mut backdrops_end = backdrops_start + 1;
-                self.backdrops_iter.next();
+                let first_order = self.backdrops_iter.next().map(|backdrop| backdrop.order);
+                // Only backdrops of one order have disjoint sample regions (BoundsTree), so
+                // only they may read one copy of the frame and share the scratch textures.
                 while self
                     .backdrops_iter
-                    .next_if(|backdrop| (backdrop.order, batch_kind) < max_order_and_kind)
+                    .next_if(|backdrop| Some(backdrop.order) == first_order)
                     .is_some()
                 {
                     backdrops_end += 1;
@@ -627,7 +645,8 @@ pub struct Shadow {
     pub color: Hsla,
     pub element_bounds: Bounds<ScaledPixels>,
     pub element_corner_radii: Corners<ScaledPixels>,
-    /// 0 = drop shadow (rendered outside the element), 1 = inset shadow (rendered inside).
+    /// 0 = drop shadow, 1 = inset shadow (rendered inside the element), 2 = drop shadow
+    /// rendered outside the element only.
     pub inset: u32,
     pub pad: u32, // align to 8 bytes
 }
@@ -671,14 +690,56 @@ pub struct Backdrop {
     pub highlight: f32,
     /// Width of the rim light.
     pub highlight_width: ScaledPixels,
+    /// The most the blur may read, from [`BackdropFilter::within`].
+    pub sample_limit: Option<Bounds<ScaledPixels>>,
+    /// The element's opacity, scaling the whole composite: blur, tint and rim.
+    pub opacity: f32,
+    /// Laid under the tint instead of the blur where the renderer cannot read the window.
+    pub fallback: Hsla,
+    /// One more than the index of its mask in [`Scene::backdrop_masks`], 0 for none.
+    pub mask: u32,
+    /// From [`BackdropFilter::mirror`]; Metal and Direct3D repeat the edge.
+    pub mirror: bool,
+    /// From [`BackdropFilter::clamp`]; Metal and Direct3D clamp the saturated blur to 0.
+    pub clamp: Option<[f32; 2]>,
+}
+
+/// Coverage a backdrop is multiplied by, for a clip a content mask cannot hold (a circle, a
+/// path): one byte per texel, row by row, stretched over `bounds`, and nothing outside them.
+/// The wgpu renderer applies it; Metal and Direct3D draw the backdrop without it.
+#[derive(Clone, Debug)]
+#[expect(missing_docs)]
+pub struct BackdropMask<P: Clone + Debug + Default + PartialEq> {
+    pub bounds: Bounds<P>,
+    pub width: u32,
+    pub height: u32,
+    pub coverage: std::sync::Arc<[u8]>,
 }
 
 impl Backdrop {
-    /// The region the blur reads: the clipped bounds grown by three standard deviations.
+    /// The region the blur reads: the clipped bounds grown by three standard deviations, within
+    /// the sample limit.
     pub fn sample_bounds(&self) -> Bounds<ScaledPixels> {
-        self.bounds
+        let sample = self
+            .bounds
             .intersect(&self.content_mask.bounds)
-            .dilate(self.blur_radius * 3.)
+            .dilate(self.blur_radius * 3.);
+        match self.sample_limit {
+            Some(limit) => sample.intersect(&limit),
+            None => sample,
+        }
+    }
+
+    /// The tint over the fallback, as one colour: what a renderer lays instead of the blur where
+    /// it cannot read the window.
+    pub fn unblurred_tint(&self) -> Rgba {
+        let (tint, under) = (Rgba::from(self.tint), Rgba::from(self.fallback));
+        let a = tint.a + under.a * (1. - tint.a);
+        if a <= 0. {
+            return tint;
+        }
+        let mix = |t: f32, u: f32| (t * tint.a + u * under.a * (1. - tint.a)) / a;
+        Rgba { r: mix(tint.r, under.r), g: mix(tint.g, under.g), b: mix(tint.b, under.b), a }
     }
 
     /// How far renderers shrink the sample region before the blur, a power of two that brings
@@ -1115,7 +1176,65 @@ mod tests {
             tint: Hsla::default(),
             highlight: 0.,
             highlight_width: ScaledPixels(1.),
+            sample_limit: None,
+            opacity: 1.,
+            fallback: Hsla::default(),
+            mask: 0,
+            mirror: false,
+            clamp: None,
         }
+    }
+
+    fn masked(scene: &mut Scene, x: f32, coverage: u8) {
+        scene.backdrop_masks.push(BackdropMask {
+            bounds: bounds(x, 10.),
+            width: 1,
+            height: 1,
+            coverage: [coverage].into(),
+        });
+        let mut b = backdrop(x, 10., 4.);
+        b.mask = scene.backdrop_masks.len() as u32;
+        scene.insert_primitive(b);
+    }
+
+    fn own_masks(scene: &Scene) -> Vec<(ScaledPixels, u8)> {
+        let mut out: Vec<_> = scene
+            .backdrops
+            .iter()
+            .map(|b| (b.bounds.origin.x, scene.backdrop_masks[b.mask as usize - 1].coverage[0]))
+            .collect();
+        out.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        out
+    }
+
+    #[test]
+    fn a_replayed_backdrop_keeps_its_own_mask() {
+        let mut prev = Scene::default();
+        masked(&mut prev, 100., 7);
+        let mut next = Scene::default();
+        masked(&mut next, 0., 200);
+        next.replay(0..prev.len(), &prev);
+        assert_eq!(own_masks(&next), vec![(ScaledPixels(0.), 200), (ScaledPixels(100.), 7)]);
+    }
+
+    #[test]
+    fn without_the_window_a_backdrop_lays_its_tint_over_its_fallback() {
+        let mut backdrop = backdrop(0., 10., 4.);
+        backdrop.tint = Hsla { a: 0.5, ..crate::white() };
+        backdrop.fallback = crate::black();
+        let c = backdrop.unblurred_tint();
+        assert!((c.r - 0.5).abs() < 1e-3 && (c.a - 1.).abs() < 1e-3, "{c:?}");
+        backdrop.fallback = Hsla::transparent_black();
+        assert_eq!(backdrop.unblurred_tint(), Rgba::from(backdrop.tint));
+    }
+
+    #[test]
+    fn a_sample_limit_bounds_what_a_backdrop_reads() {
+        let mut backdrop = backdrop(0., 100., 4.);
+        assert_eq!(backdrop.sample_bounds().origin.x, ScaledPixels(-12.));
+        backdrop.sample_limit = Some(bounds(0., 1000.));
+        assert_eq!(backdrop.sample_bounds().origin.x, ScaledPixels(0.));
+        assert_eq!(backdrop.sample_bounds().size.width, ScaledPixels(112.));
     }
 
     fn kinds(scene: &Scene) -> Vec<&'static str> {
@@ -1162,6 +1281,17 @@ mod tests {
         scene.insert_primitive(backdrop(500., 50., 4.));
         scene.finish();
         assert_eq!(kinds(&scene), ["quads", "backdrops"]);
+    }
+
+    #[test]
+    fn overlapping_backdrops_with_nothing_between_take_a_batch_each() {
+        let mut scene = Scene::default();
+        scene.insert_primitive(quad(0., 1000.));
+        scene.insert_primitive(backdrop(0., 100., 4.));
+        scene.insert_primitive(backdrop(20., 40., 4.));
+        scene.finish();
+        assert!(scene.backdrops[0].order < scene.backdrops[1].order);
+        assert_eq!(kinds(&scene), ["quads", "backdrops", "backdrops"]);
     }
 
     #[test]

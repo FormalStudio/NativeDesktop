@@ -567,6 +567,19 @@ pub(crate) struct KeyRepeat {
     current_keycode: Option<xkb::Keycode>,
 }
 
+impl KeyRepeat {
+    /// Whether the repeat scheduled as `id` still runs.
+    fn is_current(&self, id: u64) -> bool {
+        id == self.current_id && self.current_keycode.is_some()
+    }
+
+    /// Ends the held key's repeat: its scheduled timer drops on its next tick.
+    fn cancel(&mut self) {
+        self.current_id += 1;
+        self.current_keycode = None;
+    }
+}
+
 pub(crate) enum PendingActivation {
     /// URI to open in the web browser.
     Uri(String),
@@ -2007,6 +2020,64 @@ impl Dispatch<xdg_activation_token_v1::XdgActivationTokenV1, PendingActivation>
     }
 }
 
+/// What a seat's capabilities event does to the device the client binds for one capability.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SeatDevice {
+    Bind,
+    Release,
+    Keep,
+}
+
+fn seat_device(bound: bool, advertised: bool) -> SeatDevice {
+    match (bound, advertised) {
+        (false, true) => SeatDevice::Bind,
+        (true, false) => SeatDevice::Release,
+        _ => SeatDevice::Keep,
+    }
+}
+
+// Events already queued for a device the seat has released, or replaced since, arrive
+// after it: they must not touch the state of the device bound now.
+fn is_bound<P: PartialEq>(bound: Option<&P>, proxy: &P) -> bool {
+    bound == Some(proxy)
+}
+
+// A pointer removed mid-press never sends its release. Once the window has heard of the
+// removal (which ends any pointer capture), the pointer leaves and a release outside the
+// window reaches no element: elements drop the pending press, active style and drag
+// without a click or a drop.
+fn removed_pointer_inputs(
+    position: Point<Pixels>,
+    pressed_button: Option<MouseButton>,
+    finger_scroll: bool,
+    modifiers: Modifiers,
+) -> Vec<PlatformInput> {
+    let mut inputs = Vec::new();
+    if finger_scroll {
+        inputs.push(PlatformInput::Scroll(ScrollEvent {
+            position,
+            delta: ScrollDelta::Pixels(point(px(0.0), px(0.0))),
+            modifiers,
+            touch_phase: TouchPhase::Ended,
+            source: ScrollSource::Pointer,
+        }));
+    }
+    inputs.push(PlatformInput::MouseExited(MouseExitEvent {
+        position,
+        pressed_button: None,
+        modifiers,
+    }));
+    if let Some(button) = pressed_button {
+        inputs.push(PlatformInput::MouseUp(MouseUpEvent {
+            button,
+            position: point(px(-1.0), px(-1.0)),
+            modifiers,
+            click_count: 1,
+        }));
+    }
+    inputs
+}
+
 impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
     fn event(
         state: &mut Self,
@@ -2022,51 +2093,127 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
         {
             let client = state.get_client();
             let mut state = client.borrow_mut();
-            if capabilities.contains(wl_seat::Capability::Keyboard) {
-                let keyboard = seat.get_keyboard(qh, ());
-
-                if let Some(text_input) = state.text_input.take() {
-                    text_input.destroy();
-                    state.ime_pre_edit = None;
-                    state.composing = false;
+            // A seat resends its capabilities whenever a device comes or goes (a virtual
+            // keyboard, a mouse waking up). Rebinding a device that is still there makes a
+            // new wl_pointer whose enter some compositors send at -1,-1 while the cursor
+            // rests on the surface, so clicks miss until the pointer moves. Bind what was
+            // added, release what was removed, and keep the rest.
+            let mut keyboard_left = None;
+            let mut pointer_left = None;
+            let keyboard = seat_device(
+                state.wl_keyboard.is_some(),
+                capabilities.contains(wl_seat::Capability::Keyboard),
+            );
+            match keyboard {
+                SeatDevice::Bind => {
+                    state.text_input = state
+                        .globals
+                        .text_input_manager
+                        .as_ref()
+                        .map(|text_input_manager| text_input_manager.get_text_input(seat, qh, ()));
+                    state.wl_keyboard = Some(seat.get_keyboard(qh, ()));
                 }
-
-                state.text_input = state
-                    .globals
-                    .text_input_manager
-                    .as_ref()
-                    .map(|text_input_manager| text_input_manager.get_text_input(seat, qh, ()));
-
-                if let Some(wl_keyboard) = &state.wl_keyboard {
-                    wl_keyboard.release();
+                SeatDevice::Release => {
+                    if let Some(wl_keyboard) = state.wl_keyboard.take() {
+                        wl_keyboard.release();
+                    }
+                    if let Some(text_input) = state.text_input.take() {
+                        text_input.destroy();
+                        state.ime_pre_edit = None;
+                        state.composing = false;
+                    }
+                    // No leave or key release follows a removed keyboard: what its
+                    // leave would have ended ends here, held keys and modifiers too.
+                    state.repeat.cancel();
+                    state.enter_token.take();
+                    state.restore_cursor_after_hide();
+                    if let Some(ref mut compose) = state.compose_state {
+                        compose.reset();
+                    }
+                    state.pre_edit_text.take();
+                    let had_modifiers = state.modifiers != Modifiers::default();
+                    state.modifiers = Modifiers::default();
+                    if let Some(window) = state.keyboard_focused_window.take() {
+                        let modifiers = had_modifiers.then(|| {
+                            PlatformInput::ModifiersChanged(ModifiersChangedEvent {
+                                modifiers: Modifiers::default(),
+                                capslock: state.capslock,
+                            })
+                        });
+                        keyboard_left = Some((window, modifiers));
+                    }
                 }
-
-                state.wl_keyboard = Some(keyboard);
+                SeatDevice::Keep => {}
             }
-            if capabilities.contains(wl_seat::Capability::Pointer) {
-                let pointer = seat.get_pointer(qh, ());
-
-                if let Some(cursor_shape_device) = state.cursor_shape_device.take() {
-                    cursor_shape_device.destroy();
+            let pointer = seat_device(
+                state.wl_pointer.is_some(),
+                capabilities.contains(wl_seat::Capability::Pointer),
+            );
+            match pointer {
+                SeatDevice::Bind => {
+                    let pointer = seat.get_pointer(qh, ());
+                    state.cursor_shape_device =
+                        state
+                            .globals
+                            .cursor_shape_manager
+                            .as_ref()
+                            .map(|cursor_shape_manager| {
+                                cursor_shape_manager.get_pointer(&pointer, qh, ())
+                            });
+                    state.pinch_gesture = state.globals.gesture_manager.as_ref().map(
+                        |gesture_manager: &zwp_pointer_gestures_v1::ZwpPointerGesturesV1| {
+                            gesture_manager.get_pinch_gesture(&pointer, qh, ())
+                        },
+                    );
+                    state.wl_pointer = Some(pointer);
                 }
-
-                state.cursor_shape_device = state
-                    .globals
-                    .cursor_shape_manager
-                    .as_ref()
-                    .map(|cursor_shape_manager| cursor_shape_manager.get_pointer(&pointer, qh, ()));
-
-                state.pinch_gesture = state.globals.gesture_manager.as_ref().map(
-                    |gesture_manager: &zwp_pointer_gestures_v1::ZwpPointerGesturesV1| {
-                        gesture_manager.get_pinch_gesture(&pointer, qh, ())
-                    },
-                );
-
-                if let Some(wl_pointer) = &state.wl_pointer {
-                    wl_pointer.release();
+                SeatDevice::Release => {
+                    if let Some(cursor_shape_device) = state.cursor_shape_device.take() {
+                        cursor_shape_device.destroy();
+                    }
+                    if let Some(pinch_gesture) = state.pinch_gesture.take() {
+                        pinch_gesture.destroy();
+                    }
+                    if let Some(wl_pointer) = state.wl_pointer.take() {
+                        wl_pointer.release();
+                    }
+                    // Nor does a leave follow a removed pointer: a window left focused
+                    // by it would set its cursor through a pointer that is gone.
+                    let window = state.mouse_focused_window.take();
+                    let position = state.mouse_location.take();
+                    let pressed_button = state.button_pressed.take();
+                    let finger_scroll = std::mem::take(&mut state.finger_scroll);
+                    state.cursor_hidden_window = None;
+                    state.continuous_scroll_delta = None;
+                    state.discrete_scroll_delta = None;
+                    state.scroll_event_received = false;
+                    state.axis_stopped = false;
+                    if let (Some(window), Some(position)) = (window, position) {
+                        let inputs = removed_pointer_inputs(
+                            position,
+                            pressed_button,
+                            finger_scroll,
+                            state.modifiers,
+                        );
+                        pointer_left = Some((window, inputs));
+                    }
                 }
-
-                state.wl_pointer = Some(pointer);
+                SeatDevice::Keep => {}
+            }
+            drop(state);
+            if let Some((window, modifiers)) = keyboard_left {
+                window.handle_ime(ImeInput::DeleteText);
+                if let Some(modifiers) = modifiers {
+                    window.handle_input(modifiers);
+                }
+                window.set_focused(false);
+            }
+            if let Some((window, inputs)) = pointer_left {
+                window.pointer_removed();
+                for input in inputs {
+                    window.handle_input(input);
+                }
+                window.set_hovered(false);
             }
         }
     }
@@ -2075,7 +2222,7 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
 impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
     fn event(
         this: &mut Self,
-        _: &wl_keyboard::WlKeyboard,
+        keyboard: &wl_keyboard::WlKeyboard,
         event: wl_keyboard::Event,
         _: &(),
         _: &Connection,
@@ -2083,6 +2230,9 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
     ) {
         let client = this.get_client();
         let mut state = client.borrow_mut();
+        if !is_bound(state.wl_keyboard.as_ref(), keyboard) {
+            return;
+        }
         match event {
             wl_keyboard::Event::RepeatInfo { rate, delay } => {
                 state.repeat.characters_per_second = rate as u32;
@@ -2286,8 +2436,7 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                                         return TimeoutAction::Drop;
                                     };
                                     let state = client.borrow();
-                                    let is_repeating = id == state.repeat.current_id
-                                        && state.repeat.current_keycode.is_some()
+                                    let is_repeating = state.repeat.is_current(id)
                                         && state.keyboard_focused_window.is_some();
 
                                     if !is_repeating || rate == 0 {
@@ -2340,6 +2489,9 @@ impl Dispatch<zwp_text_input_v3::ZwpTextInputV3, ()> for WaylandClientStatePtr {
     ) {
         let client = this.get_client();
         let mut state = client.borrow_mut();
+        if !is_bound(state.text_input.as_ref(), text_input) {
+            return;
+        }
         match event {
             zwp_text_input_v3::Event::Enter { .. } => {
                 drop(state);
@@ -2439,6 +2591,9 @@ impl Dispatch<wl_pointer::WlPointer, ()> for WaylandClientStatePtr {
     ) {
         let client = this.get_client();
         let mut state = client.borrow_mut();
+        if !is_bound(state.wl_pointer.as_ref(), wl_pointer) {
+            return;
+        }
 
         match event {
             wl_pointer::Event::Enter {
@@ -2851,7 +3006,7 @@ impl Dispatch<zwp_pointer_gesture_pinch_v1::ZwpPointerGesturePinchV1, ()>
 {
     fn event(
         this: &mut Self,
-        _: &zwp_pointer_gesture_pinch_v1::ZwpPointerGesturePinchV1,
+        pinch_gesture: &zwp_pointer_gesture_pinch_v1::ZwpPointerGesturePinchV1,
         event: <zwp_pointer_gesture_pinch_v1::ZwpPointerGesturePinchV1 as Proxy>::Event,
         _: &(),
         _: &Connection,
@@ -2861,6 +3016,9 @@ impl Dispatch<zwp_pointer_gesture_pinch_v1::ZwpPointerGesturePinchV1, ()>
 
         let client = this.get_client();
         let mut state = client.borrow_mut();
+        if !is_bound(state.pinch_gesture.as_ref(), pinch_gesture) {
+            return;
+        }
 
         let Some(window) = state.mouse_focused_window.clone() else {
             return;
@@ -3375,6 +3533,56 @@ mod tests {
     use super::*;
 
     #[test]
+    fn seat_devices_survive_capability_changes() {
+        // Pointer and keyboard, then a virtual keyboard leaving, coming back, the pointer
+        // going away and both returning: each device is bound once per stretch it is there.
+        let mut keyboard = false;
+        let mut pointer = false;
+        let mut binds = (0, 0);
+        for caps in [3u32, 1, 3, 3, 2, 0, 3] {
+            for (bound, bit, count) in [
+                (&mut keyboard, 2, &mut binds.0),
+                (&mut pointer, 1, &mut binds.1),
+            ] {
+                match seat_device(*bound, caps & bit != 0) {
+                    SeatDevice::Bind => {
+                        *bound = true;
+                        *count += 1;
+                    }
+                    SeatDevice::Release => *bound = false,
+                    SeatDevice::Keep => {}
+                }
+                assert_eq!(*bound, caps & bit != 0);
+            }
+        }
+        assert_eq!(binds, (3, 2));
+        assert_eq!(seat_device(true, true), SeatDevice::Keep);
+    }
+
+    #[test]
+    fn a_removed_keyboard_stops_its_held_key() {
+        let mut repeat = KeyRepeat {
+            characters_per_second: 25,
+            delay: Duration::from_millis(600),
+            current_id: 0,
+            current_keycode: None,
+        };
+        // A key goes down and its repeat is scheduled under the new id.
+        repeat.current_id += 1;
+        repeat.current_keycode = Some(xkb::Keycode::new(38));
+        let held = repeat.current_id;
+        assert!(repeat.is_current(held));
+        // The keyboard goes away with the key still down: no release ever comes.
+        repeat.cancel();
+        assert!(!repeat.is_current(held));
+        // A key on the keyboard that replaces it repeats under an id of its own.
+        repeat.current_id += 1;
+        repeat.current_keycode = Some(xkb::Keycode::new(38));
+        assert!(!repeat.is_current(held));
+        assert!(repeat.is_current(repeat.current_id));
+    }
+
+    #[test]
     fn rejects_required_globals_below_supported_versions() {
         assert!(wl_seat_version(4).is_err());
         assert!(wl_output_version(1).is_err());
@@ -3658,5 +3866,382 @@ mod tests {
             text_input.cursor_rectangles.borrow().as_slice(),
             &[(10, 20, 1, 18)]
         );
+    }
+
+    #[derive(Default)]
+    struct StaleSeat {
+        keyboard: Option<wl_keyboard::WlKeyboard>,
+        pointer: Option<wl_pointer::WlPointer>,
+        keyboard_enters: usize,
+        modifiers: usize,
+        pointer_enters: usize,
+    }
+
+    impl StaleSeat {
+        fn counts(&self) -> (usize, usize, usize) {
+            (self.keyboard_enters, self.modifiers, self.pointer_enters)
+        }
+    }
+
+    delegate_noop!(StaleSeat: ignore wl_registry::WlRegistry);
+    delegate_noop!(StaleSeat: ignore wl_seat::WlSeat);
+    delegate_noop!(StaleSeat: ignore wl_compositor::WlCompositor);
+    delegate_noop!(StaleSeat: ignore wl_surface::WlSurface);
+
+    impl Dispatch<wl_keyboard::WlKeyboard, ()> for StaleSeat {
+        fn event(
+            state: &mut Self,
+            keyboard: &wl_keyboard::WlKeyboard,
+            event: wl_keyboard::Event,
+            _: &(),
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+            if !is_bound(state.keyboard.as_ref(), keyboard) {
+                return;
+            }
+            match event {
+                wl_keyboard::Event::Enter { .. } => state.keyboard_enters += 1,
+                wl_keyboard::Event::Modifiers { .. } => state.modifiers += 1,
+                _ => {}
+            }
+        }
+    }
+
+    impl Dispatch<wl_pointer::WlPointer, ()> for StaleSeat {
+        fn event(
+            state: &mut Self,
+            pointer: &wl_pointer::WlPointer,
+            event: wl_pointer::Event,
+            _: &(),
+            _: &Connection,
+            _: &QueueHandle<Self>,
+        ) {
+            if !is_bound(state.pointer.as_ref(), pointer) {
+                return;
+            }
+            if let wl_pointer::Event::Enter { .. } = event {
+                state.pointer_enters += 1;
+            }
+        }
+    }
+
+    fn wire(object: &impl Proxy, opcode: u32, args: &[u32]) -> Vec<u8> {
+        let size = 8 + 4 * args.len() as u32;
+        [object.id().protocol_id(), size << 16 | opcode]
+            .iter()
+            .chain(args)
+            .flat_map(|word| word.to_ne_bytes())
+            .collect()
+    }
+
+    // Enter and modifiers for the keyboard and pointer passed in, as a compositor
+    // that has not yet seen their release would still send them.
+    fn send_enter_and_modifiers(
+        server: &mut UnixStream,
+        surface: &wl_surface::WlSurface,
+        keyboard: &wl_keyboard::WlKeyboard,
+        pointer: &wl_pointer::WlPointer,
+    ) {
+        use std::io::Write as _;
+        let surface = surface.id().protocol_id();
+        let mut bytes = wire(keyboard, 1, &[1, surface, 0]);
+        bytes.extend(wire(keyboard, 4, &[2, 1, 0, 0, 0]));
+        bytes.extend(wire(pointer, 0, &[3, surface, 10 << 8, 10 << 8]));
+        server.write_all(&bytes).unwrap();
+    }
+
+    #[test]
+    fn events_for_a_replaced_seat_device_change_nothing() {
+        let (client, mut server) = UnixStream::pair().unwrap();
+        let connection = Connection::from_socket(client).unwrap();
+        let mut queue = connection.new_event_queue::<StaleSeat>();
+        let qh = queue.handle();
+        let registry = connection.display().get_registry(&qh, ());
+        let seat = registry.bind::<wl_seat::WlSeat, _, _>(1, 5, &qh, ());
+        let compositor = registry.bind::<wl_compositor::WlCompositor, _, _>(2, 4, &qh, ());
+        let surface = compositor.create_surface(&qh, ());
+        let old_keyboard = seat.get_keyboard(&qh, ());
+        let old_pointer = seat.get_pointer(&qh, ());
+        let mut state = StaleSeat::default();
+
+        // Removed: nothing is bound, the old proxies are still alive.
+        send_enter_and_modifiers(&mut server, &surface, &old_keyboard, &old_pointer);
+        queue.blocking_dispatch(&mut state).unwrap();
+        assert_eq!(state.counts(), (0, 0, 0));
+
+        // Replaced: new devices are bound, the old ones still get events.
+        state.keyboard = Some(seat.get_keyboard(&qh, ()));
+        state.pointer = Some(seat.get_pointer(&qh, ()));
+        send_enter_and_modifiers(&mut server, &surface, &old_keyboard, &old_pointer);
+        queue.blocking_dispatch(&mut state).unwrap();
+        assert_eq!(state.counts(), (0, 0, 0));
+
+        let keyboard = state.keyboard.clone().unwrap();
+        let pointer = state.pointer.clone().unwrap();
+        send_enter_and_modifiers(&mut server, &surface, &keyboard, &pointer);
+        queue.blocking_dispatch(&mut state).unwrap();
+        assert_eq!(state.counts(), (1, 1, 1));
+    }
+
+    struct Pressable {
+        clicks: Rc<Cell<usize>>,
+        color: Rc<Cell<gpui::Hsla>>,
+    }
+
+    struct Dragged;
+
+    impl gpui::Render for Dragged {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            _: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            gpui::Empty
+        }
+    }
+
+    impl gpui::Render for Pressable {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            _: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            use gpui::{
+                AppContext as _, InteractiveElement as _, ParentElement as _,
+                StatefulInteractiveElement as _, Styled as _,
+            };
+            let clicks = self.clicks.clone();
+            let color = self.color.clone();
+            gpui::div().size_full().child(
+                gpui::div()
+                    .id("pressable")
+                    .size(px(50.))
+                    .text_color(gpui::black())
+                    .active(|style| style.text_color(gpui::red()))
+                    .on_click(move |_, _, _| clicks.set(clicks.get() + 1))
+                    .on_drag(Dragged, |_, _, _, cx| cx.new(|_| Dragged))
+                    .child(gpui::canvas(
+                        |_, _, _| {},
+                        move |_, _, window, _| color.set(window.text_style().color),
+                    )),
+            )
+        }
+    }
+
+    #[gpui::test]
+    fn a_pointer_removed_mid_press_cancels_it(cx: &mut gpui::TestAppContext) {
+        let clicks = Rc::new(Cell::new(0));
+        let color = Rc::new(Cell::new(gpui::Hsla::default()));
+        let (_, cx) = cx.add_window_view({
+            let clicks = clicks.clone();
+            let color = color.clone();
+            move |_, _| Pressable { clicks, color }
+        });
+        let remove_pointer = |cx: &mut gpui::VisualTestContext, at| {
+            let pressed = Some(MouseButton::Left);
+            for input in removed_pointer_inputs(at, pressed, false, Modifiers::none()) {
+                match input {
+                    PlatformInput::MouseUp(event) => cx.simulate_event(event),
+                    PlatformInput::MouseExited(event) => cx.simulate_event(event),
+                    other => panic!("unexpected {other:?}"),
+                }
+            }
+            cx.update(|window, cx| window.draw(cx).clear(cx));
+        };
+        let inside = point(px(10.), px(10.));
+
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.simulate_mouse_down(inside, MouseButton::Left, Modifiers::none());
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        assert_eq!(color.get(), gpui::red(), "pressed element is active");
+        remove_pointer(cx, inside);
+        assert_eq!(clicks.get(), 0);
+        assert_eq!(color.get(), gpui::black(), "no element stays active");
+
+        let beyond = point(px(40.), px(40.));
+        cx.simulate_mouse_down(inside, MouseButton::Left, Modifiers::none());
+        cx.simulate_mouse_move(beyond, MouseButton::Left, Modifiers::none());
+        assert!(cx.update(|_, cx| cx.has_active_drag()), "a drag started");
+        remove_pointer(cx, beyond);
+        assert!(!cx.update(|_, cx| cx.has_active_drag()));
+        assert_eq!(clicks.get(), 0);
+    }
+
+    // An element that captures the pointer on press and counts a release over it as a
+    // click, and a drop target that captures the pointer while a drag is over it. Hitbox
+    // ids change every frame, so each takes its new hitbox while it holds the capture.
+    struct Capturing {
+        clicks: Rc<Cell<usize>>,
+        drops: Rc<Cell<usize>>,
+        holds: [Rc<Cell<bool>>; 2],
+    }
+
+    fn capturing_canvas(
+        on_down: bool,
+        hits: Rc<Cell<usize>>,
+        holds: Rc<Cell<bool>>,
+    ) -> gpui::Canvas<gpui::Hitbox> {
+        gpui::canvas(
+            |bounds, window, _| window.insert_hitbox(bounds, gpui::HitboxBehavior::Normal),
+            move |_, hitbox, window, _| {
+                let id = hitbox.id;
+                if holds.get() {
+                    if window.captured_hitbox().is_some() {
+                        window.capture_pointer(id);
+                    } else {
+                        holds.set(false);
+                    }
+                }
+                let take = {
+                    let holds = holds.clone();
+                    move |window: &mut gpui::Window| {
+                        window.capture_pointer(id);
+                        holds.set(true);
+                    }
+                };
+                window.on_mouse_event({
+                    let take = take.clone();
+                    move |_: &gpui::MouseDownEvent, phase, window, _| {
+                        if on_down && phase == gpui::DispatchPhase::Bubble && id.is_hovered(window)
+                        {
+                            take(window);
+                        }
+                    }
+                });
+                window.on_mouse_event(move |_: &MouseMoveEvent, phase, window, cx| {
+                    let dragging = cx.has_active_drag();
+                    if !on_down
+                        && dragging
+                        && phase == gpui::DispatchPhase::Bubble
+                        && id.is_hovered(window)
+                    {
+                        take(window);
+                    }
+                });
+                window.on_mouse_event(move |_: &MouseUpEvent, phase, window, cx| {
+                    let wanted = on_down || cx.has_active_drag();
+                    if wanted && phase == gpui::DispatchPhase::Bubble && id.is_hovered(window) {
+                        hits.set(hits.get() + 1);
+                    }
+                    if phase == gpui::DispatchPhase::Bubble {
+                        holds.set(false);
+                    }
+                });
+            },
+        )
+    }
+
+    impl gpui::Render for Capturing {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            _: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            use gpui::{
+                AppContext as _, InteractiveElement as _, ParentElement as _,
+                StatefulInteractiveElement as _, Styled as _,
+            };
+            gpui::div()
+                .size_full()
+                .flex()
+                .child(gpui::div().size(px(50.)).child(
+                    capturing_canvas(true, self.clicks.clone(), self.holds[0].clone()).size_full(),
+                ))
+                .child(
+                    gpui::div()
+                        .id("source")
+                        .size(px(50.))
+                        .on_drag(Dragged, |_, _, _, cx| cx.new(|_| Dragged)),
+                )
+                .child(gpui::div().size(px(50.)).child(
+                    capturing_canvas(false, self.drops.clone(), self.holds[1].clone()).size_full(),
+                ))
+        }
+    }
+
+    fn capturing_window(
+        cx: &mut gpui::TestAppContext,
+    ) -> (
+        &mut gpui::VisualTestContext,
+        Rc<Cell<usize>>,
+        Rc<Cell<usize>>,
+    ) {
+        let clicks = Rc::new(Cell::new(0));
+        let drops = Rc::new(Cell::new(0));
+        let (_, cx) = cx.add_window_view({
+            let (clicks, drops) = (clicks.clone(), drops.clone());
+            move |_, _| Capturing {
+                clicks,
+                drops,
+                holds: Default::default(),
+            }
+        });
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        (cx, clicks, drops)
+    }
+
+    fn remove_pointer_mid_press(cx: &mut gpui::VisualTestContext, at: Point<Pixels>) {
+        cx.simulate_pointer_removed();
+        let pressed = Some(MouseButton::Left);
+        for input in removed_pointer_inputs(at, pressed, false, Modifiers::none()) {
+            match input {
+                PlatformInput::MouseUp(event) => cx.simulate_event(event),
+                PlatformInput::MouseExited(event) => cx.simulate_event(event),
+                other => panic!("unexpected {other:?}"),
+            }
+        }
+    }
+
+    #[gpui::test]
+    fn a_pointer_removed_mid_press_clicks_no_captured_element(cx: &mut gpui::TestAppContext) {
+        let (cx, clicks, _) = capturing_window(cx);
+        let (button, none) = (point(px(10.), px(10.)), Modifiers::none());
+        // Released over the element, a captured press counts.
+        cx.simulate_mouse_down(button, MouseButton::Left, none);
+        cx.simulate_mouse_up(button, MouseButton::Left, none);
+        assert_eq!(clicks.get(), 1);
+
+        cx.simulate_mouse_down(button, MouseButton::Left, none);
+        assert!(cx.update(|window, _| window.captured_hitbox().is_some()));
+        remove_pointer_mid_press(cx, button);
+        assert_eq!(clicks.get(), 1, "no click from the removed pointer");
+        assert!(cx.update(|window, _| window.captured_hitbox().is_none()));
+    }
+
+    #[gpui::test]
+    fn a_pointer_removed_mid_drag_drops_on_no_captured_target(cx: &mut gpui::TestAppContext) {
+        let (cx, _, drops) = capturing_window(cx);
+        let none = Modifiers::none();
+        let (source, target) = (point(px(60.), px(10.)), point(px(110.), px(10.)));
+        cx.simulate_mouse_down(source, MouseButton::Left, none);
+        cx.simulate_mouse_move(target, MouseButton::Left, none);
+        cx.update(|window, cx| window.draw(cx).clear(cx));
+        cx.simulate_mouse_move(target + point(px(1.), px(0.)), MouseButton::Left, none);
+        assert!(cx.update(|_, cx| cx.has_active_drag()), "a drag started");
+        assert!(cx.update(|window, _| window.captured_hitbox().is_some()));
+        remove_pointer_mid_press(cx, target);
+        assert_eq!(drops.get(), 0, "no drop from the removed pointer");
+        assert!(!cx.update(|_, cx| cx.has_active_drag()));
+        assert!(cx.update(|window, _| window.captured_hitbox().is_none()));
+    }
+
+    #[gpui::test]
+    fn a_captured_press_outlives_an_exit_without_a_removal(cx: &mut gpui::TestAppContext) {
+        let (cx, clicks, _) = capturing_window(cx);
+        let none = Modifiers::none();
+        let (button, outside) = (point(px(10.), px(10.)), point(px(-20.), px(300.)));
+        cx.simulate_mouse_down(button, MouseButton::Left, none);
+        cx.simulate_mouse_move(outside, MouseButton::Left, none);
+        // As macOS reports a drag leaving the window.
+        cx.simulate_event(MouseExitEvent {
+            position: outside,
+            pressed_button: None,
+            modifiers: none,
+        });
+        assert!(cx.update(|window, _| window.captured_hitbox().is_some()));
+        cx.simulate_mouse_up(outside, MouseButton::Left, none);
+        assert_eq!(clicks.get(), 1, "the captured element hears the release");
+        assert!(cx.update(|window, _| window.captured_hitbox().is_none()));
     }
 }

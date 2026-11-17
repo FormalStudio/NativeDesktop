@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FormalSnake <kyaniserni@gmail.com>
 Date: Wed, 21 Oct 2026 10:00:43 +0100
-Subject: [PATCH 12/26] gpui_wgpu: set emoji-presentation text in the colour
+Subject: [PATCH 12/30] gpui_wgpu: set emoji-presentation text in the colour
  emoji face
 
 ---
@@ -9,7 +9,7 @@ Subject: [PATCH 12/26] gpui_wgpu: set emoji-presentation text in the colour
  1 file changed, 128 insertions(+), 2 deletions(-)
 
 diff --git a/crates/gpui_wgpu/src/cosmic_text_system.rs b/crates/gpui_wgpu/src/cosmic_text_system.rs
-index 7750675..a5dc9d0 100644
+index 775067518c..a5dc9d0a8f 100644
 --- a/crates/gpui_wgpu/src/cosmic_text_system.rs
 +++ b/crates/gpui_wgpu/src/cosmic_text_system.rs
 @@ -59,6 +59,10 @@ struct CosmicTextSystemState {

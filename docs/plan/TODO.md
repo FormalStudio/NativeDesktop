@@ -162,6 +162,7 @@ Each runs in its own worktree on a branch named after the lane. Every FormalMusi
 - [ ] Messages: bump to each new nd main when asked. Remaining parity: colour emoji stills, drag-to-attach by hand, rustls, Linux CSD and app id.
 - [ ] windows-hig: check on the Windows PC that a lone Alt reaches GPUI, and the window menu when title-bar setup fails.
 - [ ] FormalMusic automation tree: on g815 `getTree` lists 2 nodes before the library loads, and the installed build lacks the `capture` feature.
+- [ ] Backdrop scratch textures (patch 0026, wgpu `backdrop.rs`, Metal `metal_backdrop.rs`, DirectX `directx_backdrop.rs`): they are reallocated whenever the frame size changes, so a live resize reallocates them every frame; grow them in steps and keep them.
 
 ## Queue
 

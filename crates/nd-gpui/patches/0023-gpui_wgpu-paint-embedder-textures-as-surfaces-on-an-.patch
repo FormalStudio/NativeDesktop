@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FormalSnake <kyaniserni@gmail.com>
 Date: Tue, 10 Nov 2026 19:42:41 +0000
-Subject: [PATCH 23/26] gpui_wgpu: paint embedder textures as surfaces on an
+Subject: [PATCH 23/30] gpui_wgpu: paint embedder textures as surfaces on an
  adopted device
 
 ---
@@ -13,7 +13,7 @@ Subject: [PATCH 23/26] gpui_wgpu: paint embedder textures as surfaces on an
  5 files changed, 277 insertions(+), 10 deletions(-)
 
 diff --git a/crates/gpui/src/scene.rs b/crates/gpui/src/scene.rs
-index a4116aa..6992dc0 100644
+index a4116aa525..6992dc036e 100644
 --- a/crates/gpui/src/scene.rs
 +++ b/crates/gpui/src/scene.rs
 @@ -771,6 +771,34 @@ pub struct PaintSurface {
@@ -52,7 +52,7 @@ index a4116aa..6992dc0 100644
  
  impl From<PaintSurface> for Primitive {
 diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
-index be42eb4..20fdcb0 100644
+index be42eb43f0..20fdcb0d0c 100644
 --- a/crates/gpui/src/window.rs
 +++ b/crates/gpui/src/window.rs
 @@ -5578,6 +5578,35 @@ impl Window {
@@ -92,7 +92,7 @@ index be42eb4..20fdcb0 100644
      pub fn drop_image(&mut self, data: Arc<RenderImage>) -> Result<()> {
          for frame_index in 0..data.frame_count() {
 diff --git a/crates/gpui_wgpu/src/shaders.wgsl b/crates/gpui_wgpu/src/shaders.wgsl
-index 9be210b..dec2bdc 100644
+index 9be210bf22..dec2bdcfbd 100644
 --- a/crates/gpui_wgpu/src/shaders.wgsl
 +++ b/crates/gpui_wgpu/src/shaders.wgsl
 @@ -1310,6 +1310,36 @@ fn fs_poly_sprite(input: PolySpriteVarying) -> @location(0) vec4<f32> {
@@ -133,7 +133,7 @@ index 9be210b..dec2bdc 100644
  
  struct SurfaceParams {
 diff --git a/crates/gpui_wgpu/src/wgpu_context.rs b/crates/gpui_wgpu/src/wgpu_context.rs
-index 8e03552..8f79f6e 100644
+index 8e03552afb..8f79f6e964 100644
 --- a/crates/gpui_wgpu/src/wgpu_context.rs
 +++ b/crates/gpui_wgpu/src/wgpu_context.rs
 @@ -133,6 +133,38 @@ const BACKEND_ATTEMPTS: [(wgpu::Backends, bool); 2] = [
@@ -233,7 +233,7 @@ index 8e03552..8f79f6e 100644
          let caps = surface.get_capabilities(&self.adapter);
          if caps.formats.is_empty() {
 diff --git a/crates/gpui_wgpu/src/wgpu_renderer.rs b/crates/gpui_wgpu/src/wgpu_renderer.rs
-index 6eae346..e8aed26 100644
+index 6eae3469d6..e8aed262c7 100644
 --- a/crates/gpui_wgpu/src/wgpu_renderer.rs
 +++ b/crates/gpui_wgpu/src/wgpu_renderer.rs
 @@ -134,6 +134,8 @@ struct WgpuPipelines {

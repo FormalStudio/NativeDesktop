@@ -366,6 +366,17 @@ pub struct BackdropFilter {
     /// Painted instead where the source cannot be blurred: a desktop backdrop in an opaque
     /// window or on a compositor without a blur protocol.
     pub fallback: Hsla,
+    /// The area the blur may read, its edge repeated beyond it; `None` reads the whole frame.
+    /// In the coordinates of the bounds given to `paint_backdrop`, so an element scale applies
+    /// to it as to them. Set it to the content's bounds when a frame draws a shadow or nothing
+    /// around them, so an element at the content's edge does not blur that in.
+    #[serde(skip)]
+    pub within: Option<Bounds<Pixels>>,
+    /// Reflects `within` at its edge instead of repeating the edge.
+    pub mirror: bool,
+    /// Leaves the saturated blur unclamped and clamps each channel of the tinted result to
+    /// this range (sRGB) instead, as macOS's materials do.
+    pub clamp: Option<[f32; 2]>,
 }
 
 impl Default for BackdropFilter {
@@ -378,6 +389,9 @@ impl Default for BackdropFilter {
             highlight: 0.,
             highlight_width: px(1.),
             fallback: Hsla::transparent_black(),
+            within: None,
+            mirror: false,
+            clamp: None,
         }
     }
 }
@@ -419,6 +433,24 @@ impl BackdropFilter {
     /// Sets the colour painted where the source cannot be blurred.
     pub fn fallback(mut self, fallback: impl Into<Hsla>) -> Self {
         self.fallback = fallback.into();
+        self
+    }
+
+    /// Limits what the blur reads to `bounds`, in the coordinates of the element's bounds.
+    pub fn within(mut self, bounds: Bounds<Pixels>) -> Self {
+        self.within = Some(bounds);
+        self
+    }
+
+    /// Reflects the area set by [`Self::within`] at its edge instead of repeating the edge.
+    pub fn mirrored(mut self) -> Self {
+        self.mirror = true;
+        self
+    }
+
+    /// Clamps the tinted result to `low..=high` instead of the saturated blur to 0.
+    pub fn clamped(mut self, low: f32, high: f32) -> Self {
+        self.clamp = Some([low, high]);
         self
     }
 }
@@ -787,10 +819,13 @@ impl Style {
             .to_pixels(rem_size)
             .clamp_radii_for_quad_size(bounds.size);
 
-        window.paint_drop_shadows(bounds, corner_radii, &self.box_shadow);
-
+        // A backdrop must not blur its own element's shadow (macOS glass does not), so the
+        // shadow goes on after it, outside the shape the backdrop shows through.
         if let Some(backdrop) = &self.backdrop {
             window.paint_backdrop(bounds, corner_radii, backdrop);
+            window.paint_drop_shadows_outside(bounds, corner_radii, &self.box_shadow);
+        } else {
+            window.paint_drop_shadows(bounds, corner_radii, &self.box_shadow);
         }
 
         let background_color = self.background.as_ref().and_then(Fill::color);

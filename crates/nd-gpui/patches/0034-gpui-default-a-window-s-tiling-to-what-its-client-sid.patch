@@ -1,0 +1,32 @@
+From d02b790286138bac4d9b16be1082f05a35f653d0 Mon Sep 17 00:00:00 2001
+From: FormalSnake <kyaniserni@gmail.com>
+Date: Fri, 13 Nov 2026 05:59:43 +0000
+Subject: [PATCH 34/34] gpui: default a window's tiling to what its
+ client-side decorations report
+
+---
+ crates/gpui/src/platform.rs | 7 ++++++-
+ 1 file changed, 6 insertions(+), 1 deletion(-)
+
+diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
+index b037e354..1a2518e8 100644
+--- a/crates/gpui/src/platform.rs
++++ b/crates/gpui/src/platform.rs
+@@ -1405,8 +1405,13 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
+     fn window_decorations(&self) -> Decorations {
+         Decorations::Server
+     }
++    /// The tiled sides; a platform that knows them only through client-side
++    /// decorations reports those.
+     fn tiling(&self) -> Tiling {
+-        Tiling::default()
++        match self.window_decorations() {
++            Decorations::Client { tiling } => tiling,
++            Decorations::Server => Tiling::default(),
++        }
+     }
+     fn set_app_id(&mut self, _app_id: &str) {}
+     fn map_window(&mut self) -> anyhow::Result<()> {
+-- 
+2.56.0
+

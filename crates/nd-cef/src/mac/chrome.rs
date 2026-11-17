@@ -237,6 +237,11 @@ impl Chrome {
                 // Chromium sizes the widget's view to its window's content once more after the lift,
                 // to nothing, and hides the web contents in a widget of no size.
                 if lifted.frame() != frame {
+                    tracing::debug!(
+                        page = self.page,
+                        home,
+                        "nd-cef: the lifted page view was resized; putting it back"
+                    );
                     lifted.setFrame(frame);
                 }
             }
@@ -244,8 +249,10 @@ impl Chrome {
                 let Some(content) = anchor.contentView() else { return };
                 let empty = NSView::initWithFrame(NSView::alloc(view.mtm()), content.frame());
                 anchor.setContentView(Some(&empty));
-                content.setFrame(frame);
+                // Moving in sizes Chromium's view to nothing, so the frame goes on after it. At no
+                // size it takes no clicks (hit testing stops at its bounds) until the next relift.
                 view.addSubview(&content);
+                content.setFrame(frame);
                 *self.lifted.borrow_mut() = Some(content);
             }
         }

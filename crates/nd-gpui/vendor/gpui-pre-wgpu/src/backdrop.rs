@@ -10,7 +10,7 @@
 use std::num::NonZeroU64;
 
 use bytemuck::{Pod, Zeroable};
-use gpui::{Backdrop, BackdropSource, Rgba};
+use gpui::{Backdrop, BackdropMask, BackdropSource, Rgba, ScaledPixels};
 
 pub(crate) const SHADER: &str = r#"
 // Every vec4 on a 16-byte boundary, so the layout is the same under WGSL's, HLSL's and C's rules.
@@ -37,12 +37,26 @@ struct Params {
     // 0 composites the blur, 1 clears the shape, 2 lays the tint alone.
     mode: u32,
     has_source: u32,
-    pad: u32,
+    opacity: f32,
+    // Composite: the coverage texture's bounds in frame pixels, if it has one.
+    clip_origin: vec2<f32>,
+    clip_size: vec2<f32>,
+    has_clip: u32,
+    // Reflect the sample region at its edge rather than repeat the edge.
+    mirror: u32,
+    // Clamp the tinted result to [clamp_low, clamp_high] instead of the saturated blur to 0.
+    has_clamp: u32,
+    clamp_low: f32,
+    clamp_high: f32,
+    pad0: u32,
+    pad1: u32,
+    pad2: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var source: texture_2d<f32>;
 @group(0) @binding(2) var source_sampler: sampler;
+@group(1) @binding(0) var clip: texture_2d<f32>;
 
 struct Varyings {
     @builtin(position) position: vec4<f32>,
@@ -75,7 +89,16 @@ fn vs_composite(@builtin(vertex_index) index: u32) -> Varyings {
 
 fn sample_clamped(p: vec2<f32>, lo: vec2<f32>, hi: vec2<f32>) -> vec4<f32> {
     let size = vec2<f32>(textureDimensions(source));
-    let q = clamp(p, lo + 0.5, hi - 0.5);
+    var q = p;
+    if (params.mirror != 0u) {
+        // Reflected however far past the edge the blur reaches, so a region narrower than
+        // the blur folds back on itself instead of repeating its edge.
+        let span = hi - lo;
+        let d = p - lo;
+        let m = d - 2.0 * span * floor(d / (2.0 * span));
+        q = lo + span - abs(span - m);
+    }
+    q = clamp(q, lo + 0.5, hi - 0.5);
     return textureSampleLevel(source, source_sampler, q / size, 0.0);
 }
 
@@ -134,12 +157,20 @@ fn rounded_rect_sdf(p: vec2<f32>) -> f32 {
 fn fs_composite(in: Varyings) -> @location(0) vec4<f32> {
     let p = in.position.xy;
     let sdf = rounded_rect_sdf(p);
-    let coverage = saturate(0.5 - sdf);
+    var coverage = saturate(0.5 - sdf);
+    if (params.has_clip != 0u) {
+        let uv = (p - params.clip_origin) / params.clip_size;
+        if (any(uv < vec2<f32>(0.0)) || any(uv >= vec2<f32>(1.0))) {
+            discard;
+        }
+        let texel = vec2<i32>(uv * vec2<f32>(textureDimensions(clip)));
+        coverage *= textureLoad(clip, texel, 0).r;
+    }
     if (coverage <= 0.0) {
         discard;
     }
     if (params.mode == 1u) {
-        return vec4<f32>(0.0, 0.0, 0.0, coverage);
+        return vec4<f32>(0.0, 0.0, 0.0, coverage * params.opacity);
     }
 
     var color = vec4<f32>(0.0);
@@ -147,10 +178,18 @@ fn fs_composite(in: Varyings) -> @location(0) vec4<f32> {
         let blurred = params.dst_origin + (p - params.src_origin) / params.factor;
         color = sample_clamped(blurred, params.dst_origin, params.dst_origin + params.dst_size);
         let luma = dot(color.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
-        color = vec4<f32>(max(mix(vec3<f32>(luma), color.rgb, params.saturation), vec3<f32>(0.0)), color.a);
+        let saturated = mix(vec3<f32>(luma), color.rgb, params.saturation);
+        color = vec4<f32>(select(max(saturated, vec3<f32>(0.0)), saturated, params.has_clamp != 0u), color.a);
     }
     let tint = params.tint;
     color = vec4<f32>(tint.rgb * tint.a + color.rgb * (1.0 - tint.a), tint.a + color.a * (1.0 - tint.a));
+    if (params.has_clamp != 0u) {
+        color = vec4<f32>(clamp(color.rgb, vec3<f32>(params.clamp_low * color.a), vec3<f32>(params.clamp_high * color.a)), color.a);
+    } else {
+        // Premultiplied, so no channel may pass the alpha it is under; bounded after the tint,
+        // so a channel the saturation pushes past one still lifts it.
+        color = vec4<f32>(min(color.rgb, vec3<f32>(color.a)), color.a);
+    }
 
     if (params.highlight > 0.0 && params.highlight_width > 0.0) {
         let e = 0.5;
@@ -164,7 +203,7 @@ fn fs_composite(in: Varyings) -> @location(0) vec4<f32> {
         let add = saturate(params.highlight * rim * light);
         color = vec4<f32>(color.rgb + add * (1.0 - color.rgb), color.a + add * (1.0 - color.a));
     }
-    return color * coverage;
+    return color * coverage * params.opacity;
 }
 "#;
 
@@ -190,10 +229,18 @@ struct Params {
     highlight_width: f32,
     mode: u32,
     has_source: u32,
-    pad: u32,
+    opacity: f32,
+    clip_origin: [f32; 2],
+    clip_size: [f32; 2],
+    has_clip: u32,
+    mirror: u32,
+    has_clamp: u32,
+    clamp_low: f32,
+    clamp_high: f32,
+    pad: [u32; 3],
 }
 
-const _: () = assert!(std::mem::offset_of!(Params, radii) == 96 && std::mem::size_of::<Params>() == 144);
+const _: () = assert!(std::mem::offset_of!(Params, radii) == 96 && std::mem::size_of::<Params>() == 192);
 
 /// A backdrop's sample region in whole frame pixels and the factor it is downsampled by.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -256,6 +303,9 @@ pub(crate) struct Backdrops {
     /// Bound where a batch blurs nothing, so no scratch texture is needed.
     placeholder_view: wgpu::TextureView,
     placeholder: wgpu::BindGroup,
+    clip_layout: wgpu::BindGroupLayout,
+    /// Bound for a backdrop without a mask, which the shader then does not read.
+    no_clip: wgpu::BindGroup,
 }
 
 impl Backdrops {
@@ -291,9 +341,27 @@ impl Backdrops {
                 },
             ],
         });
+        let clip_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("backdrop_clip_layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            }],
+        });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("backdrop_pipeline_layout"),
             bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
+        });
+        let composite_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("backdrop_composite_layout"),
+            bind_group_layouts: &[Some(&layout), Some(&clip_layout)],
             immediate_size: 0,
         });
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -301,9 +369,10 @@ impl Backdrops {
             source: wgpu::ShaderSource::Wgsl(SHADER.into()),
         });
         let pipeline = |label: &str, vs: &str, fs: &str, blend: Option<wgpu::BlendState>| {
+            let layout = if fs == "fs_composite" { &composite_layout } else { &pipeline_layout };
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
-                layout: Some(&pipeline_layout),
+                layout: Some(layout),
                 vertex: wgpu::VertexState {
                     module: &module,
                     entry_point: Some(vs),
@@ -379,6 +448,7 @@ impl Backdrops {
             })
             .create_view(&wgpu::TextureViewDescriptor::default());
         let placeholder = bind_group(device, &layout, &params, &sampler, &placeholder_view);
+        let no_clip = clip_bind_group(device, &clip_layout, &clip_texture(device, 1, 1));
         Self {
             format,
             layout,
@@ -394,6 +464,8 @@ impl Backdrops {
             scratch: None,
             placeholder_view,
             placeholder,
+            clip_layout,
+            no_clip,
         }
     }
 
@@ -476,6 +548,7 @@ impl Backdrops {
         encoder: &mut wgpu::CommandEncoder,
         frame: &wgpu::Texture,
         backdrops: &[Backdrop],
+        masks: &[BackdropMask<ScaledPixels>],
     ) -> Prepared {
         let size = (frame.width(), frame.height());
         let has_source = frame.usage().contains(wgpu::TextureUsages::COPY_SRC);
@@ -510,6 +583,10 @@ impl Backdrops {
             let src_origin = [r.x as f32, r.y as f32];
             let reduced = [rw as f32, rh as f32];
             let sigma = backdrop.blur_radius.0 / r.factor as f32;
+            let base = Params {
+                mirror: backdrop.mirror as u32,
+                ..base
+            };
             let down = push(Params {
                 src_origin,
                 src_size: [r.width as f32, r.height as f32],
@@ -534,7 +611,12 @@ impl Backdrops {
 
         let mut composites = Vec::with_capacity(backdrops.len());
         for (backdrop, region) in backdrops.iter().zip(&regions) {
-            let tint = Rgba::from(backdrop.tint);
+            // A surface without COPY_SRC (wgpu's GL backend offers none) cannot be blurred.
+            let tint = if backdrop.source == BackdropSource::Window && !has_source {
+                backdrop.unblurred_tint()
+            } else {
+                Rgba::from(backdrop.tint)
+            };
             let mask = backdrop.content_mask.bounds;
             let radii = backdrop.corner_radii;
             let mut p = Params {
@@ -552,6 +634,11 @@ impl Backdrops {
                 saturation: backdrop.saturation,
                 highlight: backdrop.highlight,
                 highlight_width: backdrop.highlight_width.0,
+                opacity: backdrop.opacity,
+                mirror: backdrop.mirror as u32,
+                has_clamp: backdrop.clamp.is_some() as u32,
+                clamp_low: backdrop.clamp.map_or(0., |c| c[0]),
+                clamp_high: backdrop.clamp.map_or(1., |c| c[1]),
                 ..base
             };
             if let Some(r) = region {
@@ -562,11 +649,31 @@ impl Backdrops {
                 p.factor = r.factor as f32;
                 p.has_source = 1;
             }
+            let clip = (backdrop.mask as usize).checked_sub(1).and_then(|i| masks.get(i)).and_then(|mask| {
+                let texture = (mask.width > 0
+                    && mask.height > 0
+                    && mask.coverage.len() >= (mask.width * mask.height) as usize)
+                    .then(|| clip_texture(device, mask.width, mask.height))?;
+                queue.write_texture(
+                    texture.as_image_copy(),
+                    &mask.coverage[..(mask.width * mask.height) as usize],
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(mask.width),
+                        rows_per_image: Some(mask.height),
+                    },
+                    texture.size(),
+                );
+                p.clip_origin = [mask.bounds.origin.x.0, mask.bounds.origin.y.0];
+                p.clip_size = [mask.bounds.size.width.0, mask.bounds.size.height.0];
+                p.has_clip = 1;
+                Some(clip_bind_group(device, &self.clip_layout, &texture))
+            });
             let erase = (backdrop.source == BackdropSource::Desktop).then(|| push(Params { mode: 1, ..p }));
             if backdrop.source == BackdropSource::Desktop {
                 p.mode = 2;
             }
-            composites.push((push(p), erase));
+            composites.push((push(p), erase, clip));
         }
         queue.write_buffer(&self.params, start, &params);
         self.params_cursor += params.len() as u64;
@@ -647,7 +754,8 @@ impl Backdrops {
             Some(scratch) if prepared.blurred => &scratch.from_a,
             _ => &self.placeholder,
         };
-        for (offset, erase) in &prepared.composites {
+        for (offset, erase, clip) in &prepared.composites {
+            pass.set_bind_group(1, clip.as_ref().unwrap_or(&self.no_clip), &[]);
             if let Some(erase) = erase {
                 pass.set_pipeline(&self.erase);
                 pass.set_bind_group(0, blurred, &[*erase]);
@@ -693,6 +801,196 @@ fn bind_group(
 
 pub(crate) struct Prepared {
     blurred: bool,
-    /// The params offsets of each backdrop's composite and, for a desktop backdrop, its erase.
-    composites: Vec<(u32, Option<u32>)>,
+    /// The params offsets of each backdrop's composite and, for a desktop backdrop, its erase,
+    /// and its mask.
+    composites: Vec<(u32, Option<u32>, Option<wgpu::BindGroup>)>,
+}
+
+fn clip_texture(device: &wgpu::Device, width: u32, height: u32) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("backdrop_clip"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::R8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    })
+}
+
+fn clip_bind_group(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, texture: &wgpu::Texture) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("backdrop_clip_bind_group"),
+        layout,
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: wgpu::BindingResource::TextureView(&texture.create_view(&wgpu::TextureViewDescriptor::default())),
+        }],
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::{Bounds, ContentMask, Corners, Hsla, point, px, size};
+
+    const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+
+    /// `pixels` (RGBA, `width` x `height`) with `backdrop` drawn over it on the first adapter
+    /// there is, or None without one.
+    fn draw(width: u32, height: u32, pixels: &[u8], backdrop: Backdrop) -> Option<Vec<u8>> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = gpui::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
+        let (device, queue) = gpui::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()?;
+        let frame = device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            frame.as_image_copy(),
+            pixels,
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(width * 4), rows_per_image: Some(height) },
+            frame.size(),
+        );
+        let mut backdrops = Backdrops::new(&device, FORMAT);
+        backdrops.begin_frame(&device, &[backdrop]);
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        let prepared = backdrops.prepare(&device, &queue, &mut encoder, &frame, &[backdrop], &[]);
+        {
+            let view = frame.create_view(&wgpu::TextureViewDescriptor::default());
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: None,
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                    depth_slice: None,
+                })],
+                depth_stencil_attachment: None,
+                ..Default::default()
+            });
+            backdrops.composite(&prepared, &mut pass);
+        }
+        let row = (width * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: (row * height) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        encoder.copy_texture_to_buffer(
+            frame.as_image_copy(),
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(height) },
+            },
+            frame.size(),
+        );
+        queue.submit([encoder.finish()]);
+        buffer.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+        device.poll(wgpu::PollType::wait_indefinitely()).ok()?;
+        let mapped = buffer.slice(..).get_mapped_range().ok()?;
+        Some(mapped.chunks(row as usize).flat_map(|r| r[..(width * 4) as usize].to_vec()).collect())
+    }
+
+    /// Black with the region's last column white: a 4 px tall region `width` px wide at (4, 2)
+    /// in a 48 x 8 frame, blurred with sigma 60 and reflected at its own edges.
+    fn narrow(width: u32) -> Option<Vec<u8>> {
+        let (w, h) = (48, 8);
+        let pixels: Vec<u8> = (0..h)
+            .flat_map(|_| (0..w).flat_map(move |x| if x == 3 + width { [255; 4] } else { [0, 0, 0, 255] }))
+            .collect();
+        let bounds = Bounds { origin: point(px(4.), px(2.)), size: size(px(width as f32), px(4.)) }.scale(1.);
+        let frame = Bounds { origin: point(px(0.), px(0.)), size: size(px(w as f32), px(h as f32)) }.scale(1.);
+        let backdrop = Backdrop {
+            order: 0,
+            source: BackdropSource::Window,
+            bounds,
+            content_mask: ContentMask { bounds: frame },
+            corner_radii: Corners::default(),
+            blur_radius: ScaledPixels(60.),
+            saturation: 1.,
+            tint: Hsla::transparent_black(),
+            highlight: 0.,
+            highlight_width: ScaledPixels(0.),
+            sample_limit: Some(bounds),
+            opacity: 1.,
+            fallback: Hsla::transparent_black(),
+            mask: 0,
+            mirror: true,
+            clamp: None,
+        };
+        let out = draw(w, h, &pixels, backdrop)?;
+        Some((4..4 + width).map(|x| out[((3 * w + x) * 4) as usize]).collect())
+    }
+
+    /// Opaque red under dark regular glass (saturation 1.5, tint (75, 73, 68) at 0.58), 8 x 8.
+    fn glass_over_red() -> Option<[u8; 4]> {
+        let pixels: Vec<u8> = (0..64).flat_map(|_| [255, 0, 0, 255]).collect();
+        let all = Bounds { origin: point(px(0.), px(0.)), size: size(px(8.), px(8.)) }.scale(1.);
+        let tint = Rgba { r: 75. / 255., g: 73. / 255., b: 68. / 255., a: 0.58 };
+        let backdrop = Backdrop {
+            order: 0,
+            source: BackdropSource::Window,
+            bounds: all,
+            content_mask: ContentMask { bounds: all },
+            corner_radii: Corners::default(),
+            blur_radius: ScaledPixels(2.),
+            saturation: 1.5,
+            tint: tint.into(),
+            highlight: 0.,
+            highlight_width: ScaledPixels(0.),
+            sample_limit: None,
+            opacity: 1.,
+            fallback: Hsla::transparent_black(),
+            mask: 0,
+            mirror: false,
+            clamp: None,
+        };
+        let out = draw(8, 8, &pixels, backdrop)?;
+        let i = (4 * 8 + 4) * 4;
+        Some([out[i], out[i + 1], out[i + 2], out[i + 3]])
+    }
+
+    // The capture compositor asserts the same value: the red the saturation pushes past one
+    // lifts the tinted result, and only then is it bounded by alpha.
+    #[test]
+    fn a_saturated_backdrop_is_bounded_by_alpha_after_its_tint() {
+        let Some(got) = glass_over_red() else {
+            eprintln!("no wgpu adapter, skipped");
+            return;
+        };
+        for (v, want) in got.into_iter().zip([193, 42, 39, 255]) {
+            assert!((v as i32 - want).abs() <= 1, "{got:?}, want [193, 42, 39, 255]");
+        }
+    }
+
+    // atoll's capture compositor (`atoll-compositor/src/backdrop.rs`) asserts the same values
+    // for the same cases, so the two blurs agree to a level.
+    #[test]
+    fn a_narrow_mirrored_backdrop_blurs_as_the_capture_path_does() {
+        for (width, want) in [(17, 16), (3, 96), (1, 255)] {
+            let Some(got) = narrow(width) else {
+                eprintln!("no wgpu adapter, skipped");
+                return;
+            };
+            for v in got {
+                assert!((v as i32 - want).abs() <= 1, "{width} px: {v}, want {want}");
+            }
+        }
+    }
 }

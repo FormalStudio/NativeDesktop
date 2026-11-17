@@ -22,6 +22,8 @@ pub struct SliderProps {
     pub vertical: bool,
     /// The framework-drawn slider instead of the native control.
     pub drawn: bool,
+    /// The platform's small control size, for a slider in a bar.
+    pub small: bool,
     pub label: Option<SharedString>,
     pub enabled: bool,
     pub tooltip: Option<SharedString>,
@@ -93,6 +95,7 @@ pub fn slider(id: impl Into<SharedString>, value: f32) -> Slider {
         ticks: 0,
         vertical: false,
         drawn: false,
+        small: false,
         label: None,
         enabled: true,
         tooltip: None,
@@ -102,6 +105,13 @@ pub fn slider(id: impl Into<SharedString>, value: f32) -> Slider {
 }
 
 impl Slider {
+    /// The platform's small control, for a slider in a status bar or a toolbar (Finder's icon
+    /// size slider). On macOS a small slider snaps to its steps without drawing tick marks.
+    pub fn small(mut self) -> Self {
+        self.0.props_mut().small = true;
+        self
+    }
+
     pub fn range(mut self, range: RangeInclusive<f32>) -> Self {
         let props = self.0.props_mut();
         props.min = *range.start();

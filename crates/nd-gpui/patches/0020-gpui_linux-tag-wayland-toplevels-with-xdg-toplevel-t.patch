@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FormalSnake <kyaniserni@gmail.com>
 Date: Wed, 4 Nov 2026 15:22:06 +0000
-Subject: [PATCH 20/26] gpui_linux: tag wayland toplevels with xdg-toplevel-tag
+Subject: [PATCH 20/30] gpui_linux: tag wayland toplevels with xdg-toplevel-tag
 
 ---
  crates/gpui_linux/src/gpui_linux.rs           |  2 ++
@@ -12,7 +12,7 @@ Subject: [PATCH 20/26] gpui_linux: tag wayland toplevels with xdg-toplevel-tag
  5 files changed, 22 insertions(+)
 
 diff --git a/crates/gpui_linux/src/gpui_linux.rs b/crates/gpui_linux/src/gpui_linux.rs
-index a5390e7..23d735e 100644
+index a5390e77f8..23d735e3ef 100644
 --- a/crates/gpui_linux/src/gpui_linux.rs
 +++ b/crates/gpui_linux/src/gpui_linux.rs
 @@ -2,3 +2,5 @@
@@ -22,7 +22,7 @@ index a5390e7..23d735e 100644
 +#[cfg(feature = "wayland")]
 +pub use linux::set_toplevel_tag;
 diff --git a/crates/gpui_linux/src/linux.rs b/crates/gpui_linux/src/linux.rs
-index c5afc4a..8e4036f 100644
+index c5afc4a0f5..8e4036fd02 100644
 --- a/crates/gpui_linux/src/linux.rs
 +++ b/crates/gpui_linux/src/linux.rs
 @@ -25,6 +25,8 @@ pub(crate) use platform::*;
@@ -35,7 +35,7 @@ index c5afc4a..8e4036f 100644
  pub(crate) use x11::*;
  
 diff --git a/crates/gpui_linux/src/linux/wayland.rs b/crates/gpui_linux/src/linux/wayland.rs
-index cbc962b..6d929e0 100644
+index cbc962bcff..6d929e0fdd 100644
 --- a/crates/gpui_linux/src/linux/wayland.rs
 +++ b/crates/gpui_linux/src/linux/wayland.rs
 @@ -10,6 +10,7 @@ mod window;
@@ -47,7 +47,7 @@ index cbc962b..6d929e0 100644
  use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape;
  
 diff --git a/crates/gpui_linux/src/linux/wayland/client.rs b/crates/gpui_linux/src/linux/wayland/client.rs
-index 321c004..daeb923 100644
+index 321c0047c6..daeb9231ce 100644
 --- a/crates/gpui_linux/src/linux/wayland/client.rs
 +++ b/crates/gpui_linux/src/linux/wayland/client.rs
 @@ -71,6 +71,7 @@ use wayland_protocols::xdg::shell::client::{
@@ -83,7 +83,7 @@ index 321c004..daeb923 100644
  delegate_noop!(WaylandClientStatePtr: ignore wp_cursor_shape_device_v1::WpCursorShapeDeviceV1);
  delegate_noop!(WaylandClientStatePtr: ignore wp_cursor_shape_manager_v1::WpCursorShapeManagerV1);
 diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/src/linux/wayland/window.rs
-index 8926e64..9beebea 100644
+index 8926e6424d..9beebea311 100644
 --- a/crates/gpui_linux/src/linux/wayland/window.rs
 +++ b/crates/gpui_linux/src/linux/wayland/window.rs
 @@ -282,6 +282,11 @@ impl WaylandSurfaceState {

@@ -1,7 +1,7 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FormalSnake <kyaniserni@gmail.com>
 Date: Wed, 14 Oct 2026 19:42:57 +0100
-Subject: [PATCH 07/26] gpui_windows: render grayscale text symmetric and
+Subject: [PATCH 07/30] gpui_windows: render grayscale text symmetric and
  without grid fitting, as Windows does
 
 ---
@@ -9,7 +9,7 @@ Subject: [PATCH 07/26] gpui_windows: render grayscale text symmetric and
  1 file changed, 8 insertions(+)
 
 diff --git a/crates/gpui_windows/src/direct_write.rs b/crates/gpui_windows/src/direct_write.rs
-index 018b7e7..498fb5d 100644
+index 018b7e7346..498fb5d87e 100644
 --- a/crates/gpui_windows/src/direct_write.rs
 +++ b/crates/gpui_windows/src/direct_write.rs
 @@ -795,6 +795,14 @@ impl DirectWriteState {

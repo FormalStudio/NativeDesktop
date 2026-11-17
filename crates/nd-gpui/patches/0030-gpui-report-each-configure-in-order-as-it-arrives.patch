@@ -1,0 +1,614 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: FormalSnake <kyaniserni@gmail.com>
+Date: Thu, 12 Nov 2026 22:42:17 +0000
+Subject: [PATCH 30/30] gpui: report each configure, in order, as it arrives
+
+---
+ crates/gpui/src/platform.rs                   |  22 ++
+ crates/gpui/src/window.rs                     |   6 +
+ crates/gpui_linux/src/linux/wayland/window.rs | 303 +++++++++++++-----
+ crates/gpui_linux/src/linux/x11/window.rs     |  85 +++--
+ 4 files changed, 304 insertions(+), 112 deletions(-)
+
+diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
+index f1809356eb..db4f07e8e4 100644
+--- a/crates/gpui/src/platform.rs
++++ b/crates/gpui/src/platform.rs
+@@ -845,6 +845,27 @@ pub enum Decorations {
+     },
+ }
+ 
++/// A configure from the compositor (Wayland `xdg_surface.configure`, X11 `ConfigureNotify`),
++/// reported once per configure as it arrives, in order, before the window applies it. Sizes are
++/// window geometry: the window without its client inset.
++#[derive(Debug, Copy, Clone, PartialEq)]
++pub struct Configure {
++    /// The configure's serial, 0 where the platform has none.
++    pub serial: u32,
++    /// The window geometry the compositor asked for; `None` leaves the size to the window.
++    pub size: Option<Size<Pixels>>,
++    /// The window geometry the window had last committed when the configure arrived.
++    pub geometry: Size<Pixels>,
++    /// The surface size the window had last committed when the configure arrived, the inset
++    /// included.
++    pub surface: Size<Pixels>,
++    /// The decorations in force for this configure, tiling included.
++    pub decorations: Decorations,
++    /// Whether this configure leaves the window maximized, or fullscreen.
++    pub maximized: bool,
++    pub fullscreen: bool,
++}
++
+ /// A frame the compositor put on screen, as reported by the platform.
+ #[derive(Debug, Copy, Clone, PartialEq, Eq)]
+ pub struct PresentationTime {
+@@ -1417,6 +1438,7 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
+         WindowControls::default()
+     }
+     fn set_client_inset(&self, _inset: Pixels) {}
++    fn on_configure(&self, _callback: Box<dyn FnMut(Configure)>) {}
+     fn set_client_corner_radii(&self, _radii: Corners<Pixels>) {}
+     fn gpu_specs(&self) -> Option<GpuSpecs>;
+ 
+diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
+index b350398eb6..5a8b3bf691 100644
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -3329,6 +3329,12 @@ impl Window {
+         self.platform_window.set_client_inset(inset);
+     }
+ 
++    /// Called once per compositor configure, in order, as it arrives (Wayland and X11). A later
++    /// registration replaces an earlier one.
++    pub fn on_configure(&self, callback: impl FnMut(crate::Configure) + 'static) {
++        self.platform_window.on_configure(Box::new(callback));
++    }
++
+     /// Sets the client-drawn corner radii so platform effects can match the window's shape.
+     pub fn set_client_corner_radii(&mut self, radii: Corners<Pixels>) {
+         self.platform_window.set_client_corner_radii(radii);
+diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/src/linux/wayland/window.rs
+index 4ec4a6c780..3683cae499 100644
+--- a/crates/gpui_linux/src/linux/wayland/window.rs
++++ b/crates/gpui_linux/src/linux/wayland/window.rs
+@@ -71,6 +71,7 @@ pub(crate) struct Callbacks {
+     close: Option<Box<dyn FnOnce()>>,
+     appearance_changed: Option<Box<dyn FnMut()>>,
+     button_layout_changed: Option<Box<dyn FnMut()>>,
++    configure: Option<Box<dyn FnMut(gpui::Configure)>>,
+ }
+ 
+ #[derive(Debug, Clone, Copy)]
+@@ -100,6 +101,119 @@ impl rwh::HasDisplayHandle for RawWindow {
+     }
+ }
+ 
++/// Configures in arrival order. Each one's `gpui::Configure` is made when it arrives, against
++/// what the window had committed then, so its place among the window's own resizes is fixed
++/// there. Throttling interactive resizes to one per frame holds back only applying it; a newer
++/// configure replaces a held one, whether it is held too or applies at once.
++#[derive(Default)]
++struct Configures {
++    held: Option<(u32, InProgressConfigure)>,
++    throttled: bool,
++}
++
++impl Configures {
++    /// The configure's record, and the configure to apply now unless it is held.
++    fn arrive(
++        &mut self,
++        serial: u32,
++        configure: InProgressConfigure,
++        (geometry, surface): (Size<Pixels>, Size<Pixels>),
++        decorations: WindowDecorations,
++    ) -> (gpui::Configure, Option<(u32, InProgressConfigure)>) {
++        let record = gpui::Configure {
++            serial,
++            size: configure.size,
++            geometry,
++            surface,
++            decorations: match decorations {
++                WindowDecorations::Server => Decorations::Server,
++                WindowDecorations::Client => Decorations::Client { tiling: configure.tiling },
++            },
++            maximized: configure.maximized,
++            fullscreen: configure.fullscreen,
++        };
++        if configure.resizing && self.throttled {
++            self.held = Some((serial, configure));
++            return (record, None);
++        }
++        // Applied now, it is newer than anything held, which must not replay after it.
++        self.held = None;
++        self.throttled = configure.resizing;
++        (record, Some((serial, configure)))
++    }
++
++    /// At a frame: the held configure to apply now.
++    fn frame(&mut self) -> Option<(u32, InProgressConfigure)> {
++        let held = self.held.take();
++        self.throttled = held.as_ref().is_some_and(|(_, c)| c.resizing);
++        held
++    }
++}
++
++#[cfg(test)]
++mod configures_tests {
++    use super::*;
++
++    fn resizing(width: f32) -> InProgressConfigure {
++        InProgressConfigure {
++            size: Some(size(px(width), px(300.0))),
++            fullscreen: false,
++            maximized: false,
++            resizing: true,
++            visibility: WindowVisibility::Visible,
++            tiling: Tiling::default(),
++        }
++    }
++
++    #[test]
++    fn every_configure_in_a_throttled_frame_is_recorded_in_order() {
++        let mut configures = Configures::default();
++        let committed = (size(px(400.0), px(300.0)), size(px(440.0), px(340.0)));
++        let mut records = Vec::new();
++        let mut applied = Vec::new();
++        for (serial, width) in [(1, 500.0), (2, 600.0), (3, 700.0)] {
++            let (record, now) = configures.arrive(serial, resizing(width), committed, WindowDecorations::Client);
++            records.push((record.serial, record.size.map(|s| s.width)));
++            applied.extend(now.map(|(serial, _)| serial));
++        }
++        assert_eq!(
++            records,
++            [(1, Some(px(500.0))), (2, Some(px(600.0))), (3, Some(px(700.0)))]
++        );
++        // The first applies at once; the newest of the rest waits for the frame.
++        assert_eq!(applied, [1]);
++        assert_eq!(configures.frame().map(|(serial, _)| serial), Some(3));
++        assert_eq!(configures.frame().map(|(serial, _)| serial), None);
++    }
++
++    #[test]
++    fn a_configure_applied_at_once_drops_the_held_ones() {
++        let mut configures = Configures::default();
++        let committed = (size(px(400.0), px(300.0)), size(px(440.0), px(340.0)));
++        let mut applied = Vec::new();
++        let mut done = resizing(700.0);
++        done.resizing = false;
++        for (serial, configure) in [(1, resizing(500.0)), (2, resizing(600.0)), (3, done)] {
++            let (_, now) = configures.arrive(serial, configure, committed, WindowDecorations::Client);
++            applied.extend(now.map(|(serial, _)| serial));
++        }
++        applied.extend(configures.frame().map(|(serial, _)| serial));
++        assert_eq!(applied, [1, 3]);
++    }
++
++    #[test]
++    fn a_held_configure_keeps_what_was_committed_when_it_arrived() {
++        let mut configures = Configures::default();
++        let before = (size(px(400.0), px(300.0)), size(px(440.0), px(340.0)));
++        configures.arrive(1, resizing(500.0), before, WindowDecorations::Client);
++        let (record, now) = configures.arrive(2, resizing(600.0), before, WindowDecorations::Client);
++        assert!(now.is_none());
++        // The window resizes itself before the frame applies configure 2; its record still
++        // names the geometry committed when it arrived.
++        assert_eq!((record.geometry, record.surface), before);
++    }
++}
++
+ #[derive(Debug)]
+ struct InProgressConfigure {
+     size: Option<Size<Pixels>>,
+@@ -149,12 +263,11 @@ pub struct WaylandWindowState {
+     presentation: PresentationState,
+     pending_frame_callback: Option<wl_callback::WlCallback>,
+     in_progress_configure: Option<InProgressConfigure>,
+-    resize_throttle: bool,
+-    /// An interactive-resize configure that arrived before the frame for the previous one. It is
+-    /// acked when the next frame applies it, so the ack always goes out with a buffer of the
+-    /// acked size: acking it right away let the compositor draw the new window geometry around
+-    /// the old buffer for a frame.
+-    deferred_configure: Option<(u32, InProgressConfigure)>,
++    /// Configures as they arrive. An interactive-resize configure that arrives before the frame
++    /// for the previous one is held and acked when the next frame applies it, so the ack always
++    /// goes out with a buffer of the acked size: acking it right away let the compositor draw the
++    /// new window geometry around the old buffer for a frame.
++    configures: Configures,
+     /// The compositor's last configure had the `resizing` state: the renderer keeps an oversized
+     /// surface and the viewport crops it, instead of a new swapchain per resize step.
+     live_resize: bool,
+@@ -165,6 +278,8 @@ pub struct WaylandWindowState {
+     in_progress_window_controls: Option<WindowControls>,
+     window_controls: WindowControls,
+     client_inset: Option<Pixels>,
++    /// The window geometry and the surface size last committed, for `Configure`.
++    committed: (Size<Pixels>, Size<Pixels>),
+     client_corner_radii: Corners<Pixels>,
+     accesskit_adapter: Option<accesskit_unix::Adapter>,
+ }
+@@ -705,8 +820,7 @@ impl WaylandWindowState {
+             tiling: Tiling::default(),
+             window_bounds: options.bounds,
+             in_progress_configure: None,
+-            resize_throttle: false,
+-            deferred_configure: None,
++            configures: Configures::default(),
+             live_resize: false,
+             viewport_source: None,
+             last_presentation: None,
+@@ -721,6 +835,7 @@ impl WaylandWindowState {
+             in_progress_window_controls: None,
+             window_controls: WindowControls::default(),
+             client_inset: None,
++            committed: (Size::default(), Size::default()),
+             client_corner_radii: Corners::default(),
+             accesskit_adapter: None,
+         })
+@@ -1026,11 +1141,9 @@ impl WaylandWindowStatePtr {
+     pub fn frame(&self, signal_at: Option<Instant>, signal_source: FrameRequestSource) {
+         self.frame_loop.set(FrameLoop::Ticking);
+         let mut state = self.state.borrow_mut();
+-        state.resize_throttle = false;
+-        if let Some((serial, configure)) = state.deferred_configure.take() {
+-            state.in_progress_configure = Some(configure);
++        if let Some((serial, configure)) = state.configures.frame() {
+             drop(state);
+-            self.handle_xdg_surface_event(xdg_surface::Event::Configure { serial });
++            self.apply_configure(serial, configure);
+             state = self.state.borrow_mut();
+         }
+         // GPUI may throttle this tick without calling draw, so leave the request
+@@ -1193,84 +1306,98 @@ impl WaylandWindowStatePtr {
+                     }
+                 }
+             }
+-            {
++            let (record, now) = {
+                 let mut state = self.state.borrow_mut();
++                let configure = state.in_progress_configure.take().unwrap_or(InProgressConfigure {
++                    size: None,
++                    fullscreen: state.fullscreen,
++                    maximized: state.maximized,
++                    resizing: false,
++                    visibility: state.visibility,
++                    tiling: state.tiling,
++                });
++                let (committed, decorations) = (state.committed, state.decorations);
++                state.configures.arrive(serial, configure, committed, decorations)
++            };
++            let callback = self.callbacks.borrow_mut().configure.take();
++            if let Some(mut fun) = callback {
++                fun(record);
++                let mut callbacks = self.callbacks.borrow_mut();
++                if callbacks.configure.is_none() {
++                    callbacks.configure = Some(fun);
++                }
++            }
++            if let Some((serial, configure)) = now {
++                self.apply_configure(serial, configure);
++            }
++        }
++    }
+ 
+-                if let Some(mut configure) = state.in_progress_configure.take() {
+-                    let got_unmaximized = state.maximized && !configure.maximized;
+-                    state.fullscreen = configure.fullscreen;
+-                    state.maximized = configure.maximized;
+-                    state.tiling = configure.tiling;
+-                    let visibility_changed = state.visibility != configure.visibility;
+-                    state.visibility = configure.visibility;
+-                    // Limit interactive resizes to once per vblank
+-                    let throttled = configure.resizing && state.resize_throttle;
+-                    if !throttled {
+-                        if configure.resizing {
+-                            state.resize_throttle = true;
+-                        }
+-                        if !configure.fullscreen && !configure.maximized {
+-                            configure.size = if got_unmaximized {
+-                                Some(state.window_bounds.size)
+-                            } else {
+-                                compute_outer_size(state.inset(), configure.size, state.tiling)
+-                            };
+-                            if let Some(size) = configure.size {
+-                                state.window_bounds = Bounds {
+-                                    origin: Point::default(),
+-                                    size,
+-                                };
+-                            }
+-                        }
+-                    }
+-                    drop(state);
+-                    if visibility_changed {
+-                        self.report_visibility(configure.visibility);
+-                    }
+-                    if throttled {
+-                        self.state.borrow_mut().deferred_configure = Some((serial, configure));
+-                        return;
+-                    }
+-                    self.state.borrow_mut().live_resize = configure.resizing;
+-                    if let Some(size) = configure.size {
+-                        self.resize(size);
+-                    }
+-                    if !configure.resizing {
+-                        let mut state = self.state.borrow_mut();
+-                        if let Some(renderer) = &mut state.renderer
+-                            && renderer.surface_size() != renderer.drawable_size()
+-                        {
+-                            let size = renderer.drawable_size();
+-                            renderer.update_drawable_size(size);
+-                        }
+-                    }
++    fn apply_configure(&self, serial: u32, mut configure: InProgressConfigure) {
++        {
++            let mut state = self.state.borrow_mut();
++            let got_unmaximized = state.maximized && !configure.maximized;
++            state.fullscreen = configure.fullscreen;
++            state.maximized = configure.maximized;
++            state.tiling = configure.tiling;
++            let visibility_changed = state.visibility != configure.visibility;
++            state.visibility = configure.visibility;
++            if !configure.fullscreen && !configure.maximized {
++                configure.size = if got_unmaximized {
++                    Some(state.window_bounds.size)
++                } else {
++                    compute_outer_size(state.inset(), configure.size, state.tiling)
++                };
++                if let Some(size) = configure.size {
++                    state.window_bounds = Bounds {
++                        origin: Point::default(),
++                        size,
++                    };
+                 }
+             }
+-            let state = self.state.borrow_mut();
+-            state.surface_state.ack_configure(serial);
++            drop(state);
++            if visibility_changed {
++                self.report_visibility(configure.visibility);
++            }
++            self.state.borrow_mut().live_resize = configure.resizing;
++            if let Some(size) = configure.size {
++                self.resize(size);
++            }
++            if !configure.resizing {
++                let mut state = self.state.borrow_mut();
++                if let Some(renderer) = &mut state.renderer
++                    && renderer.surface_size() != renderer.drawable_size()
++                {
++                    let size = renderer.drawable_size();
++                    renderer.update_drawable_size(size);
++                }
++            }
++        }
++        let mut state = self.state.borrow_mut();
++        state.surface_state.ack_configure(serial);
+ 
+-            let window_geometry = inset_by_tiling(
+-                state.bounds.map_origin(|_| px(0.0)),
+-                state.inset(),
+-                state.tiling,
+-            )
+-            .map(|v| f32::from(v) as i32)
+-            .map_size(|v| if v <= 0 { 1 } else { v });
+-
+-            state.surface_state.set_geometry(
+-                window_geometry.origin.x,
+-                window_geometry.origin.y,
+-                window_geometry.size.width,
+-                window_geometry.size.height,
+-            );
++        let window_geometry = inset_by_tiling(
++            state.bounds.map_origin(|_| px(0.0)),
++            state.inset(),
++            state.tiling,
++        )
++        .map(|v| f32::from(v) as i32)
++        .map_size(|v| if v <= 0 { 1 } else { v });
+ 
+-            let initial_configure = self.frame_loop.get() == FrameLoop::Unconfigured;
+-            update_window(state);
+-            if initial_configure {
+-                self.frame(None, FrameRequestSource::NativeCallback);
+-            } else {
+-                self.request_redraw();
+-            }
++        state.surface_state.set_geometry(
++            window_geometry.origin.x,
++            window_geometry.origin.y,
++            window_geometry.size.width,
++            window_geometry.size.height,
++        );
++        state.committed = (window_geometry.size.map(|v| px(v as f32)), state.bounds.size);
++
++        let initial_configure = self.frame_loop.get() == FrameLoop::Unconfigured;
++        update_window(state);
++        if initial_configure {
++            self.frame(None, FrameRequestSource::NativeCallback);
++        } else {
++            self.request_redraw();
+         }
+     }
+ 
+@@ -1907,6 +2034,10 @@ impl PlatformWindow for WaylandWindow {
+             window_geometry.size.width,
+             window_geometry.size.height,
+         );
++        let committed = (window_geometry.size.map(|v| px(v as f32)), size);
++        drop(state);
++        self.borrow_mut().committed = committed;
++        let state = self.borrow();
+ 
+         state
+             .globals
+@@ -2113,6 +2244,10 @@ impl PlatformWindow for WaylandWindow {
+         self.0.callbacks.borrow_mut().resize = Some(callback);
+     }
+ 
++    fn on_configure(&self, callback: Box<dyn FnMut(gpui::Configure)>) {
++        self.0.callbacks.borrow_mut().configure = Some(callback);
++    }
++
+     fn on_moved(&self, callback: Box<dyn FnMut()>) {
+         self.0.callbacks.borrow_mut().moved = Some(callback);
+     }
+diff --git a/crates/gpui_linux/src/linux/x11/window.rs b/crates/gpui_linux/src/linux/x11/window.rs
+index 3eede948dc..577c4a3e7c 100644
+--- a/crates/gpui_linux/src/linux/x11/window.rs
++++ b/crates/gpui_linux/src/linux/x11/window.rs
+@@ -254,6 +254,7 @@ pub struct Callbacks {
+     close: Option<Box<dyn FnOnce()>>,
+     appearance_changed: Option<Box<dyn FnMut()>>,
+     button_layout_changed: Option<Box<dyn FnMut()>>,
++    configure: Option<Box<dyn FnMut(gpui::Configure)>>,
+ }
+ 
+ pub struct X11WindowState {
+@@ -267,6 +268,8 @@ pub struct X11WindowState {
+     visual_id: u32,
+     pub(crate) counter_id: sync::Counter,
+     pub(crate) last_sync_counter: Option<sync::Int64>,
++    /// The size last asked of the window manager, for `Configure`.
++    requested: Size<Pixels>,
+     bounds: Bounds<Pixels>,
+     scale_factor: f32,
+     /// Taken when the window is dropped. Its GPU objects use the X connection, so they mustn't
+@@ -295,6 +298,33 @@ pub struct X11WindowState {
+ }
+ 
+ impl X11WindowState {
++    fn decorations(&self) -> Decorations {
++        // Client window decorations require compositor support
++        if !self.client_side_decorations_supported {
++            return Decorations::Server;
++        }
++
++        match self.decorations {
++            WindowDecorations::Server => Decorations::Server,
++            WindowDecorations::Client => {
++                let tiling = if self.fullscreen {
++                    Tiling::tiled()
++                } else if let Some(edge_constraints) = &self.edge_constraints {
++                    edge_constraints.to_tiling()
++                } else {
++                    // https://source.chromium.org/chromium/chromium/src/+/main:ui/ozone/platform/x11/x11_window.cc;l=2519;drc=1f14cc876cc5bf899d13284a12c451498219bb2d
++                    Tiling {
++                        top: self.maximized_vertical,
++                        bottom: self.maximized_vertical,
++                        left: self.maximized_horizontal,
++                        right: self.maximized_horizontal,
++                    }
++                };
++                Decorations::Client { tiling }
++            }
++        }
++    }
++
+     fn is_transparent(&self) -> bool {
+         self.background_appearance != WindowBackgroundAppearance::Opaque
+     }
+@@ -864,6 +894,7 @@ impl X11WindowState {
+                 accesskit_adapter: None,
+                 counter_id: sync_request_counter,
+                 last_sync_counter: None,
++                requested: bounds.to_pixels(scale_factor).size,
+             })
+         });
+ 
+@@ -1297,9 +1328,23 @@ impl X11WindowStatePtr {
+     }
+ 
+     pub fn set_bounds(&self, bounds: Bounds<i32>) -> anyhow::Result<()> {
+-        let (is_resize, content_size, scale_factor) = {
++        let (is_resize, content_size, scale_factor, configure) = {
+             let mut state = self.state.borrow_mut();
+             let bounds = bounds.map(|f| px(f as f32 / state.scale_factor));
++            // The record is in geometry units, the window without the client inset
++            // (_GTK_FRAME_EXTENTS), as Wayland's are.
++            let [left, right, top, bottom] = state.last_insets.map(|v| px(v as f32 / state.scale_factor));
++            let geometry = |s: Size<Pixels>| gpui::size(s.width - left - right, s.height - top - bottom);
++            let requested = state.requested;
++            let configure = gpui::Configure {
++                serial: 0,
++                size: Some(geometry(bounds.size)),
++                geometry: geometry(requested),
++                surface: requested,
++                decorations: state.decorations(),
++                maximized: !state.hidden && state.maximized_vertical && state.maximized_horizontal,
++                fullscreen: state.fullscreen,
++            };
+ 
+             let is_resize = bounds.size.width != state.bounds.size.width
+                 || bounds.size.height != state.bounds.size.height;
+@@ -1316,7 +1361,7 @@ impl X11WindowStatePtr {
+             if let Some(renderer) = &mut state.renderer {
+                 renderer.update_drawable_size(gpu_size);
+             }
+-            let result = (is_resize, state.content_size(), state.scale_factor);
++            let result = (is_resize, state.content_size(), state.scale_factor, configure);
+             if let Some(value) = state.last_sync_counter.take() {
+                 check_reply(
+                     || "X11 sync SetCounter failed.",
+@@ -1335,6 +1380,10 @@ impl X11WindowStatePtr {
+             fun();
+         }
+ 
++        if let Some(ref mut fun) = callbacks.configure {
++            fun(configure);
++        }
++
+         Ok(())
+     }
+ 
+@@ -1443,6 +1492,7 @@ impl PlatformWindow for X11Window {
+     }
+ 
+     fn resize(&mut self, size: Size<Pixels>) {
++        self.0.state.borrow_mut().requested = size;
+         let state = self.0.state.borrow();
+         let size = size.to_device_pixels(state.scale_factor);
+         let width = size.width.0 as u32;
+@@ -1727,6 +1777,10 @@ impl PlatformWindow for X11Window {
+         self.0.callbacks.borrow_mut().resize = Some(callback);
+     }
+ 
++    fn on_configure(&self, callback: Box<dyn FnMut(gpui::Configure)>) {
++        self.0.callbacks.borrow_mut().configure = Some(callback);
++    }
++
+     fn on_moved(&self, callback: Box<dyn FnMut()>) {
+         self.0.callbacks.borrow_mut().moved = Some(callback);
+     }
+@@ -1860,32 +1914,7 @@ impl PlatformWindow for X11Window {
+     }
+ 
+     fn window_decorations(&self) -> gpui::Decorations {
+-        let state = self.0.state.borrow();
+-
+-        // Client window decorations require compositor support
+-        if !state.client_side_decorations_supported {
+-            return Decorations::Server;
+-        }
+-
+-        match state.decorations {
+-            WindowDecorations::Server => Decorations::Server,
+-            WindowDecorations::Client => {
+-                let tiling = if state.fullscreen {
+-                    Tiling::tiled()
+-                } else if let Some(edge_constraints) = &state.edge_constraints {
+-                    edge_constraints.to_tiling()
+-                } else {
+-                    // https://source.chromium.org/chromium/chromium/src/+/main:ui/ozone/platform/x11/x11_window.cc;l=2519;drc=1f14cc876cc5bf899d13284a12c451498219bb2d
+-                    Tiling {
+-                        top: state.maximized_vertical,
+-                        bottom: state.maximized_vertical,
+-                        left: state.maximized_horizontal,
+-                        right: state.maximized_horizontal,
+-                    }
+-                };
+-                Decorations::Client { tiling }
+-            }
+-        }
++        self.0.state.borrow().decorations()
+     }
+ 
+     fn set_client_inset(&self, inset: Pixels) {

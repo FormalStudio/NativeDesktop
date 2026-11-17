@@ -16,6 +16,8 @@ pub(crate) enum Color {
     Label,
     /// A system text colour made legible: see [`legible`].
     Legible(SystemText),
+    /// Text on a table row's emphasized selection.
+    SelectedText,
 }
 
 /// The system colours behind the text tokens.
@@ -51,6 +53,19 @@ impl Color {
             Color::WindowBackground => NSColor::windowBackgroundColor(),
             Color::Label => NSColor::labelColor(),
             Color::Legible(text) => legible(text),
+            Color::SelectedText => NSColor::alternateSelectedControlTextColor(),
+        }
+    }
+
+    /// The colour over a table row's emphasized selection: a label tone (the label colours and
+    /// any grey, which is what a theme's text tokens come to) turns to the selected text colour,
+    /// as AppKit's own labels do in a cell. A colour with a hue is the app's and stays.
+    pub fn on_selection(self) -> Self {
+        const GREY: f32 = 0.02;
+        match self {
+            Color::Label | Color::Legible(SystemText::Secondary | SystemText::Tertiary) => Color::SelectedText,
+            Color::Rgba(r, g, b, _) if r.max(g).max(b) - r.min(g).min(b) < GREY => Color::SelectedText,
+            other => other,
         }
     }
 }

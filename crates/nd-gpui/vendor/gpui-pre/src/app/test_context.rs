@@ -1014,6 +1014,12 @@ impl VisualTestContext {
         self.simulate_window_resize(self.window, size)
     }
 
+    /// Simulates the platform reporting that the pointer device went away.
+    pub fn simulate_pointer_removed(&mut self) {
+        self.test_window(self.window).simulate_pointer_removed();
+        self.background_executor.run_until_parked();
+    }
+
     /// Simulates a change in whether the platform is presenting this window.
     pub fn simulate_visibility_change(&self, visibility: WindowVisibility) {
         self.simulate_window_visibility_change(self.window, visibility);
