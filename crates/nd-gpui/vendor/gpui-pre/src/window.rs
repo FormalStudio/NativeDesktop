@@ -3335,6 +3335,13 @@ impl Window {
         self.platform_window.on_configure(Box::new(callback));
     }
 
+    /// Whether the compositor has placed the window on an output, so `scale_factor` is the
+    /// output's rather than the default (Wayland: after `enter` or a scale event). A redraw
+    /// follows the event that makes it true.
+    pub fn is_on_output(&self) -> bool {
+        self.platform_window.is_on_output()
+    }
+
     /// Sets the client-drawn corner radii so platform effects can match the window's shape.
     pub fn set_client_corner_radii(&mut self, radii: Corners<Pixels>) {
         self.platform_window.set_client_corner_radii(radii);
