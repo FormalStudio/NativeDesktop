@@ -38,3 +38,4 @@
 0039-gpui-light-a-backdrop-s-edge-and-bend-its-blur-in-th.patch
 0040-gpui-mix-a-share-of-a-backdrop-s-unblurred-region-in.patch
 0035-gpui-PlatformDisplay-scale_factor-a-Wayland-output-s.patch
+0047-gpui_wgpu-hold-a-frame-for-the-embedding-application.patch

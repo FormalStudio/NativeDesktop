@@ -155,6 +155,20 @@ pub fn adopt_device(device: AdoptedDevice) {
     *ADOPTED.lock() = Some(device);
 }
 
+static FRAME_HOLD: Mutex<Option<fn() -> Box<dyn std::any::Any>>> = Mutex::new(None);
+
+/// Call `hold` as each frame starts to draw and keep what it returns until the frame is
+/// presented, so the application that shares the device knows when GPUI is using it (to
+/// keep exit handlers from unloading the driver under a frame, for one).
+pub fn set_frame_hold(hold: fn() -> Box<dyn std::any::Any>) {
+    *FRAME_HOLD.lock() = Some(hold);
+}
+
+pub(crate) fn frame_hold() -> Option<Box<dyn std::any::Any>> {
+    let hold = *FRAME_HOLD.lock();
+    hold.map(|hold| hold())
+}
+
 /// Whether windows render with a device of their own: none was adopted before the first
 /// window, the adopted one could not present, or it was lost.
 pub fn renders_with_own_device() -> bool {
