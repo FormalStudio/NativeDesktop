@@ -54,6 +54,9 @@ use wayland_protocols::wp::primary_selection::zv1::client::{
     zwp_primary_selection_device_manager_v1, zwp_primary_selection_device_v1,
     zwp_primary_selection_source_v1,
 };
+use wayland_protocols::ext::data_control::v1::client::{
+    ext_data_control_device_v1, ext_data_control_manager_v1, ext_data_control_offer_v1,
+};
 use wayland_protocols::wp::text_input::zv3::client::zwp_text_input_v3::{
     ContentHint, ContentPurpose,
 };
@@ -96,7 +99,10 @@ use crate::linux::{
     keystroke_from_xkb, keystroke_underlying_dead_key, modifiers_from_xkb, new_xkb_context,
     open_uri_internal, read_fd_with_timeout, reveal_path_internal,
     wayland::{
-        clipboard::{Clipboard, DataOffer, FILE_LIST_MIME_TYPE, TEXT_MIME_TYPES},
+        clipboard::{
+            Clipboard, DataOffer, FILE_LIST_MIME_TYPE, SelectionKind, TEXT_MIME_TYPES,
+            selection_changed, selection_kind,
+        },
         cursor::Cursor,
         serial::{ActivationContext, Serial, SerialKind, SerialTracker},
         to_shape,
@@ -251,6 +257,7 @@ pub struct Globals {
     pub data_device_manager: Option<wl_data_device_manager::WlDataDeviceManager>,
     pub primary_selection_manager:
         Option<zwp_primary_selection_device_manager_v1::ZwpPrimarySelectionDeviceManagerV1>,
+    pub data_control_manager: Option<ext_data_control_manager_v1::ExtDataControlManagerV1>,
     pub wm_base: xdg_wm_base::XdgWmBase,
     pub shm: wl_shm::WlShm,
     pub seat: wl_seat::WlSeat,
@@ -301,6 +308,7 @@ impl Globals {
                 )
                 .ok(),
             primary_selection_manager: globals.bind(&qh, 1..=1, ()).ok(),
+            data_control_manager: globals.bind(&qh, 1..=1, ()).ok(),
             shm: globals
                 .bind(&qh, 1..=1, ())
                 .context("Wayland compositor does not provide wl_shm")?,
@@ -385,6 +393,10 @@ pub(crate) struct WaylandClientState {
     cursor_shape_device: Option<wp_cursor_shape_device_v1::WpCursorShapeDeviceV1>,
     data_device: Option<wl_data_device::WlDataDevice>,
     primary_selection: Option<zwp_primary_selection_device_v1::ZwpPrimarySelectionDeviceV1>,
+    /// Hears every change of the selection, whichever client has the focus, where the
+    /// compositor offers ext-data-control. Only its offers' mime types are used.
+    data_control_device: Option<ext_data_control_device_v1::ExtDataControlDeviceV1>,
+    data_control_offers: Vec<(ext_data_control_offer_v1::ExtDataControlOfferV1, Vec<String>)>,
     text_input: Option<zwp_text_input_v3::ZwpTextInputV3>,
     pre_edit_text: Option<String>,
     ime_pre_edit: Option<String>,
@@ -977,6 +989,12 @@ impl WaylandClientState {
         if let Some(primary_selection) = self.primary_selection.take() {
             primary_selection.destroy();
         }
+        if let Some(data_control_device) = self.data_control_device.take() {
+            data_control_device.destroy();
+        }
+        for (offer, _) in self.data_control_offers.drain(..) {
+            offer.destroy();
+        }
         self.wl_seat.release();
         self.wl_seat_name = None;
         if let Some((name, version)) = next {
@@ -991,6 +1009,11 @@ impl WaylandClientState {
                 .primary_selection_manager
                 .as_ref()
                 .map(|primary_selection_manager| primary_selection_manager.get_device(&seat, qh, ()));
+            self.data_control_device = self
+                .globals
+                .data_control_manager
+                .as_ref()
+                .map(|data_control_manager| data_control_manager.get_data_device(&seat, qh, ()));
             for window in self.windows.values() {
                 window.set_seat(&seat);
             }
@@ -1229,6 +1252,11 @@ impl WaylandConnection {
             .as_ref()
             .map(|primary_selection_manager| primary_selection_manager.get_device(&seat, &qh, ()));
 
+        let data_control_device = globals
+            .data_control_manager
+            .as_ref()
+            .map(|data_control_manager| data_control_manager.get_data_device(&seat, &qh, ()));
+
         let cursor = Cursor::new(&conn, &globals, 24);
 
         let state = Rc::new(RefCell::new(WaylandClientState {
@@ -1246,6 +1274,8 @@ impl WaylandConnection {
             cursor_shape_device: None,
             data_device,
             primary_selection,
+            data_control_device,
+            data_control_offers: Vec::new(),
             text_input: None,
             pre_edit_text: None,
             ime_pre_edit: None,
@@ -3312,16 +3342,23 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
                 }
             }
             wl_data_device::Event::Selection { id: data_offer } => {
-                if let Some(offer) = data_offer {
-                    let offer = state
+                let offer = data_offer.and_then(|offer| {
+                    state
                         .data_offers
                         .iter()
-                        .find(|wrapper| wrapper.inner.id() == offer.id());
-                    let offer = offer.cloned();
-                    state.clipboard.set_offer(offer);
-                } else {
-                    state.clipboard.set_offer(None);
+                        .find(|wrapper| wrapper.inner.id() == offer.id())
+                        .cloned()
+                });
+                // Without data control the selection comes only with the keyboard focus:
+                // one sent while the client has none precedes its keyboard enter, and is
+                // the selection it saw last offered again unless its kind changed.
+                if state.data_control_device.is_none() {
+                    let kind = state.clipboard.offer_kind(offer.as_ref());
+                    if state.keyboard_focused_window.is_some() || kind != selection_kind() {
+                        selection_changed(kind);
+                    }
                 }
+                state.clipboard.set_offer(offer);
             }
 
             // Drag and drop
@@ -3470,6 +3507,84 @@ impl Dispatch<wl_data_offer::WlDataOffer, ()> for WaylandClientStatePtr {
                 .find(|wrapper| wrapper.inner.id() == data_offer.id())
             {
                 offer.add_mime_type(mime_type);
+            }
+        }
+    }
+}
+
+delegate_noop!(WaylandClientStatePtr: ignore ext_data_control_manager_v1::ExtDataControlManagerV1);
+
+impl Dispatch<ext_data_control_device_v1::ExtDataControlDeviceV1, ()> for WaylandClientStatePtr {
+    fn event(
+        this: &mut Self,
+        device: &ext_data_control_device_v1::ExtDataControlDeviceV1,
+        event: ext_data_control_device_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let client = this.get_client();
+        let mut state = client.borrow_mut();
+        if !is_bound(state.data_control_device.as_ref(), device) {
+            return;
+        }
+        match event {
+            ext_data_control_device_v1::Event::DataOffer { id } => {
+                state.data_control_offers.push((id, Vec::new()));
+            }
+            // Sent once for the selection at creation, then for each new one.
+            ext_data_control_device_v1::Event::Selection { id } => {
+                let mime_types = id.as_ref().and_then(|selected| {
+                    state
+                        .data_control_offers
+                        .iter()
+                        .find(|(offer, _)| offer == selected)
+                        .map(|(_, mime_types)| mime_types.as_slice())
+                });
+                let kind = SelectionKind::of(mime_types, &state.clipboard.self_mime());
+                selection_changed(kind);
+                for (offer, _) in state.data_control_offers.drain(..) {
+                    offer.destroy();
+                }
+            }
+            ext_data_control_device_v1::Event::PrimarySelection { id: Some(selected) } => {
+                state.data_control_offers.retain(|(offer, _)| *offer != selected);
+                selected.destroy();
+            }
+            ext_data_control_device_v1::Event::Finished => {
+                device.destroy();
+                state.data_control_device = None;
+                for (offer, _) in state.data_control_offers.drain(..) {
+                    offer.destroy();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    event_created_child!(WaylandClientStatePtr, ext_data_control_device_v1::ExtDataControlDeviceV1, [
+        ext_data_control_device_v1::EVT_DATA_OFFER_OPCODE => (ext_data_control_offer_v1::ExtDataControlOfferV1, ()),
+    ]);
+}
+
+impl Dispatch<ext_data_control_offer_v1::ExtDataControlOfferV1, ()> for WaylandClientStatePtr {
+    fn event(
+        this: &mut Self,
+        offer: &ext_data_control_offer_v1::ExtDataControlOfferV1,
+        event: ext_data_control_offer_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let ext_data_control_offer_v1::Event::Offer { mime_type } = event {
+            let client = this.get_client();
+            let mut state = client.borrow_mut();
+            if let Some((_, mime_types)) = state
+                .data_control_offers
+                .iter_mut()
+                .find(|(offered, _)| offered == offer)
+            {
+                mime_types.push(mime_type);
             }
         }
     }
@@ -3683,6 +3798,23 @@ mod tests {
         repeat.current_keycode = Some(xkb::Keycode::new(38));
         assert!(!repeat.is_current(held));
         assert!(repeat.is_current(repeat.current_id));
+    }
+
+    #[test]
+    fn selection_changes_count_with_their_kind() {
+        let types = |list: &[&str]| list.iter().map(|t| t.to_string()).collect::<Vec<_>>();
+        let own = "pid/1";
+        assert_eq!(SelectionKind::of(None, own), SelectionKind::Empty);
+        assert_eq!(SelectionKind::of(Some(&types(&["text/plain", own])), own), SelectionKind::Own);
+        assert_eq!(SelectionKind::of(Some(&types(&["text/plain"])), own), SelectionKind::Text);
+        assert_eq!(SelectionKind::of(Some(&types(&["image/png"])), own), SelectionKind::Other);
+        // A copy of the same text is a change of its own.
+        let (start, _) = crate::linux::selection();
+        selection_changed(SelectionKind::Text);
+        selection_changed(SelectionKind::Text);
+        assert_eq!(crate::linux::selection(), (start + 2, SelectionKind::Text));
+        selection_changed(SelectionKind::Empty);
+        assert_eq!(crate::linux::selection(), (start + 3, SelectionKind::Empty));
     }
 
     #[test]

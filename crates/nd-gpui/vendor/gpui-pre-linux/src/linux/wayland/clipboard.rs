@@ -23,14 +23,62 @@ pub(crate) const FILE_LIST_MIME_TYPE: &str = "text/uri-list";
 /// the sources that offer only it (wl-copy, Wine, older toolkits) write it.
 pub(crate) const ALLOWED_TEXT_MIME_TYPES: [&str; 3] = ["text/plain;charset=utf-8", "UTF8_STRING", "text/plain"];
 
-/// Counts the compositor's selection events: each new clipboard offer, this
-/// client's own included, and each clear.
-static SELECTION_SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// What the desktop's clipboard selection holds, as its offer's mime types tell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SelectionKind {
+    /// No selection: it was cleared, or its owner went away.
+    Empty,
+    /// This client's own copy.
+    Own,
+    /// Another client's copy, with text.
+    Text,
+    /// Another client's copy, without text.
+    Other,
+}
+
+impl SelectionKind {
+    const ALL: [Self; 4] = [Self::Empty, Self::Own, Self::Text, Self::Other];
+
+    pub(crate) fn of(mime_types: Option<&[String]>, self_mime: &str) -> Self {
+        let Some(mime_types) = mime_types else {
+            return Self::Empty;
+        };
+        if mime_types.iter().any(|t| t == self_mime) {
+            Self::Own
+        } else if mime_types
+            .iter()
+            .any(|t| ALLOWED_TEXT_MIME_TYPES.contains(&t.as_str()))
+        {
+            Self::Text
+        } else {
+            Self::Other
+        }
+    }
+}
+
+/// The count of selection changes, times four, plus the current kind's index.
+static SELECTION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// How many times the desktop's clipboard selection has changed since the
-/// client connected. A new copy changes it even when it holds the same text.
-pub fn selection_serial() -> u64 {
-    SELECTION_SERIAL.load(std::sync::atomic::Ordering::Acquire)
+/// client connected, and what it holds now. A new copy changes it even when it
+/// holds the same text. Only the offer is looked at: no content is read.
+pub fn selection() -> (u64, SelectionKind) {
+    let value = SELECTION.load(std::sync::atomic::Ordering::Acquire);
+    (value >> 2, SelectionKind::ALL[(value & 3) as usize])
+}
+
+/// A change of the desktop's selection to one holding `kind`.
+pub(crate) fn selection_changed(kind: SelectionKind) {
+    let _ = SELECTION.fetch_update(
+        std::sync::atomic::Ordering::AcqRel,
+        std::sync::atomic::Ordering::Acquire,
+        |value| Some((((value >> 2) + 1) << 2) | kind as u64),
+    );
+}
+
+/// The kind of the selection `selection` last reported.
+pub(crate) fn selection_kind() -> SelectionKind {
+    selection().1
 }
 
 pub(crate) struct Clipboard {
@@ -170,8 +218,11 @@ impl Clipboard {
         self.primary_contents = Some(item);
     }
 
+    pub fn offer_kind(&self, data_offer: Option<&DataOffer<WlDataOffer>>) -> SelectionKind {
+        SelectionKind::of(data_offer.map(|offer| offer.mime_types.as_slice()), &self.self_mime)
+    }
+
     pub fn set_offer(&mut self, data_offer: Option<DataOffer<WlDataOffer>>) {
-        SELECTION_SERIAL.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         self.cached_read = None;
         self.current_offer = data_offer;
     }

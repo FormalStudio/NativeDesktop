@@ -1,6 +1,6 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FormalSnake <kyaniserni@gmail.com>
-Date: Sun, 22 Nov 2026 10:47:33 +0000
+Date: Sun, 22 Nov 2026 10:53:15 +0000
 Subject: [PATCH] gpui_linux: take window focus from xdg_toplevel activated
 
 A toplevel's focus follows the activated state of its configure, the
@@ -15,12 +15,92 @@ resets modifiers and ends its composition, also while a blocking child
 window or a nested event loop holds the window's input. The client
 follows one seat: events from other seats are ignored, and removing the
 followed seat ends its devices' input and moves to the next seat.
+
+selection() replaces selection_serial(): the count of selection changes
+and what the selection holds (empty, own, text, other), from the offer's
+mime types alone. With ext-data-control each change counts whichever
+client has the focus; without it, a selection reoffered before the
+keyboard enter counts only when its kind changed.
 ---
+diff --git a/crates/gpui_linux/src/gpui_linux.rs b/crates/gpui_linux/src/gpui_linux.rs
+index 750b8b63..ec9a4c87 100644
+--- a/crates/gpui_linux/src/gpui_linux.rs
++++ b/crates/gpui_linux/src/gpui_linux.rs
+@@ -3,4 +3,4 @@ mod linux;
+ 
+ pub use linux::{current_platform, linux_platform};
+ #[cfg(feature = "wayland")]
+-pub use linux::{selection_serial, set_toplevel_tag};
++pub use linux::{SelectionKind, selection, set_toplevel_tag};
+diff --git a/crates/gpui_linux/src/linux.rs b/crates/gpui_linux/src/linux.rs
+index f0909cbb..f3877d3e 100644
+--- a/crates/gpui_linux/src/linux.rs
++++ b/crates/gpui_linux/src/linux.rs
+@@ -26,7 +26,7 @@ pub(crate) use text_system::*;
+ #[cfg(feature = "wayland")]
+ pub(crate) use wayland::*;
+ #[cfg(feature = "wayland")]
+-pub use wayland::{selection_serial, set_toplevel_tag};
++pub use wayland::{SelectionKind, selection, set_toplevel_tag};
+ #[cfg(feature = "x11")]
+ pub(crate) use x11::*;
+ 
+diff --git a/crates/gpui_linux/src/linux/wayland.rs b/crates/gpui_linux/src/linux/wayland.rs
+index 35b3dc53..0a9c61e8 100644
+--- a/crates/gpui_linux/src/linux/wayland.rs
++++ b/crates/gpui_linux/src/linux/wayland.rs
+@@ -10,7 +10,7 @@ mod window;
+ pub mod layer_shell;
+ 
+ pub(crate) use client::*;
+-pub use clipboard::selection_serial;
++pub use clipboard::{SelectionKind, selection};
+ pub use window::set_toplevel_tag;
+ 
+ use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape;
 diff --git a/crates/gpui_linux/src/linux/wayland/client.rs b/crates/gpui_linux/src/linux/wayland/client.rs
-index ba950348..697667f8 100644
+index ba950348..8ff149bf 100644
 --- a/crates/gpui_linux/src/linux/wayland/client.rs
 +++ b/crates/gpui_linux/src/linux/wayland/client.rs
-@@ -371,7 +371,13 @@ pub(crate) struct WaylandClientState {
+@@ -54,6 +54,9 @@ use wayland_protocols::wp::primary_selection::zv1::client::{
+     zwp_primary_selection_device_manager_v1, zwp_primary_selection_device_v1,
+     zwp_primary_selection_source_v1,
+ };
++use wayland_protocols::ext::data_control::v1::client::{
++    ext_data_control_device_v1, ext_data_control_manager_v1, ext_data_control_offer_v1,
++};
+ use wayland_protocols::wp::text_input::zv3::client::zwp_text_input_v3::{
+     ContentHint, ContentPurpose,
+ };
+@@ -96,7 +99,10 @@ use crate::linux::{
+     keystroke_from_xkb, keystroke_underlying_dead_key, modifiers_from_xkb, new_xkb_context,
+     open_uri_internal, read_fd_with_timeout, reveal_path_internal,
+     wayland::{
+-        clipboard::{Clipboard, DataOffer, FILE_LIST_MIME_TYPE, TEXT_MIME_TYPES},
++        clipboard::{
++            Clipboard, DataOffer, FILE_LIST_MIME_TYPE, SelectionKind, TEXT_MIME_TYPES,
++            selection_changed, selection_kind,
++        },
+         cursor::Cursor,
+         serial::{ActivationContext, Serial, SerialKind, SerialTracker},
+         to_shape,
+@@ -251,6 +257,7 @@ pub struct Globals {
+     pub data_device_manager: Option<wl_data_device_manager::WlDataDeviceManager>,
+     pub primary_selection_manager:
+         Option<zwp_primary_selection_device_manager_v1::ZwpPrimarySelectionDeviceManagerV1>,
++    pub data_control_manager: Option<ext_data_control_manager_v1::ExtDataControlManagerV1>,
+     pub wm_base: xdg_wm_base::XdgWmBase,
+     pub shm: wl_shm::WlShm,
+     pub seat: wl_seat::WlSeat,
+@@ -301,6 +308,7 @@ impl Globals {
+                 )
+                 .ok(),
+             primary_selection_manager: globals.bind(&qh, 1..=1, ()).ok(),
++            data_control_manager: globals.bind(&qh, 1..=1, ()).ok(),
+             shm: globals
+                 .bind(&qh, 1..=1, ())
+                 .context("Wayland compositor does not provide wl_shm")?,
+@@ -371,7 +379,13 @@ pub(crate) struct WaylandClientState {
      globals: Globals,
      pub gpu_context: GpuContext,
      pub compositor_gpu: Option<CompositorGpuHint>,
@@ -35,7 +115,18 @@ index ba950348..697667f8 100644
      wl_pointer: Option<wl_pointer::WlPointer>,
      pinch_gesture: Option<zwp_pointer_gesture_pinch_v1::ZwpPointerGesturePinchV1>,
      pinch_scale: f32,
-@@ -418,6 +424,12 @@ pub(crate) struct WaylandClientState {
+@@ -379,6 +393,10 @@ pub(crate) struct WaylandClientState {
+     cursor_shape_device: Option<wp_cursor_shape_device_v1::WpCursorShapeDeviceV1>,
+     data_device: Option<wl_data_device::WlDataDevice>,
+     primary_selection: Option<zwp_primary_selection_device_v1::ZwpPrimarySelectionDeviceV1>,
++    /// Hears every change of the selection, whichever client has the focus, where the
++    /// compositor offers ext-data-control. Only its offers' mime types are used.
++    data_control_device: Option<ext_data_control_device_v1::ExtDataControlDeviceV1>,
++    data_control_offers: Vec<(ext_data_control_offer_v1::ExtDataControlOfferV1, Vec<String>)>,
+     text_input: Option<zwp_text_input_v3::ZwpTextInputV3>,
+     pre_edit_text: Option<String>,
+     ime_pre_edit: Option<String>,
+@@ -418,6 +436,12 @@ pub(crate) struct WaylandClientState {
      button_pressed: Option<MouseButton>,
      mouse_focused_window: Option<WaylandWindowStatePtr>,
      keyboard_focused_window: Option<WaylandWindowStatePtr>,
@@ -48,7 +139,7 @@ index ba950348..697667f8 100644
      loop_handle: LoopHandle<'static, ()>,
      cursor_style: Option<CursorStyle>,
      cursor_hidden_window: Option<WaylandWindowStatePtr>,
-@@ -842,6 +854,9 @@ impl WaylandClientStatePtr {
+@@ -842,6 +866,9 @@ impl WaylandClientStatePtr {
          {
              state.keyboard_focused_window = Some(window);
          }
@@ -58,7 +149,7 @@ index ba950348..697667f8 100644
          if let Some(window) = state.cursor_hidden_window.take()
              && !window.ptr_eq(&closed_window)
          {
-@@ -868,6 +883,124 @@ impl WaylandClientState {
+@@ -868,6 +895,135 @@ impl WaylandClientState {
          self.cursor_hidden_window = Some(focused_window);
      }
  
@@ -156,6 +247,12 @@ index ba950348..697667f8 100644
 +        if let Some(primary_selection) = self.primary_selection.take() {
 +            primary_selection.destroy();
 +        }
++        if let Some(data_control_device) = self.data_control_device.take() {
++            data_control_device.destroy();
++        }
++        for (offer, _) in self.data_control_offers.drain(..) {
++            offer.destroy();
++        }
 +        self.wl_seat.release();
 +        self.wl_seat_name = None;
 +        if let Some((name, version)) = next {
@@ -170,6 +267,11 @@ index ba950348..697667f8 100644
 +                .primary_selection_manager
 +                .as_ref()
 +                .map(|primary_selection_manager| primary_selection_manager.get_device(&seat, qh, ()));
++            self.data_control_device = self
++                .globals
++                .data_control_manager
++                .as_ref()
++                .map(|data_control_manager| data_control_manager.get_data_device(&seat, qh, ()));
 +            for window in self.windows.values() {
 +                window.set_seat(&seat);
 +            }
@@ -183,7 +285,7 @@ index ba950348..697667f8 100644
      fn restore_cursor_after_hide(&mut self) {
          if self.cursor_hidden_window.take().is_none() {
              return;
-@@ -1025,7 +1158,8 @@ impl WaylandConnection {
+@@ -1025,7 +1181,8 @@ impl WaylandConnection {
              .context("failed to initialize Wayland registry")?;
          let qh = event_queue.handle();
  
@@ -193,7 +295,7 @@ index ba950348..697667f8 100644
          #[allow(clippy::mutable_key_type)]
          let mut in_progress_outputs = HashMap::default();
          #[allow(clippy::mutable_key_type)]
-@@ -1036,12 +1170,20 @@ impl WaylandConnection {
+@@ -1036,12 +1193,20 @@ impl WaylandConnection {
              for global in list {
                  match &global.interface[..] {
                      "wl_seat" => {
@@ -220,7 +322,7 @@ index ba950348..697667f8 100644
                      }
                      "wl_output" => {
                          let output = globals.registry().bind::<wl_output::WlOutput, _, _>(
-@@ -1065,7 +1207,7 @@ impl WaylandConnection {
+@@ -1065,7 +1230,7 @@ impl WaylandConnection {
  
          let (frame_ping, frame_ping_source) =
              calloop::ping::make_ping().context("failed to create Wayland frame ping")?;
@@ -229,7 +331,19 @@ index ba950348..697667f8 100644
          let foreground_executor = common.borrow().foreground_executor.clone();
          let background_executor = common.borrow().background_executor.clone();
          let globals = Globals::new(
-@@ -1095,6 +1237,8 @@ impl WaylandConnection {
+@@ -1087,6 +1252,11 @@ impl WaylandConnection {
+             .as_ref()
+             .map(|primary_selection_manager| primary_selection_manager.get_device(&seat, &qh, ()));
+ 
++        let data_control_device = globals
++            .data_control_manager
++            .as_ref()
++            .map(|data_control_manager| data_control_manager.get_data_device(&seat, &qh, ()));
++
+         let cursor = Cursor::new(&conn, &globals, 24);
+ 
+         let state = Rc::new(RefCell::new(WaylandClientState {
+@@ -1095,6 +1265,8 @@ impl WaylandConnection {
              gpu_context,
              compositor_gpu,
              wl_seat: seat,
@@ -238,7 +352,16 @@ index ba950348..697667f8 100644
              wl_pointer: None,
              wl_keyboard: None,
              pinch_gesture: None,
-@@ -1155,6 +1299,8 @@ impl WaylandConnection {
+@@ -1102,6 +1274,8 @@ impl WaylandConnection {
+             cursor_shape_device: None,
+             data_device,
+             primary_selection,
++            data_control_device,
++            data_control_offers: Vec::new(),
+             text_input: None,
+             pre_edit_text: None,
+             ime_pre_edit: None,
+@@ -1155,6 +1329,8 @@ impl WaylandConnection {
              button_pressed: None,
              mouse_focused_window: None,
              keyboard_focused_window: None,
@@ -247,7 +370,7 @@ index ba950348..697667f8 100644
              loop_handle: handle.clone(),
              enter_token: None,
              cursor_style: None,
-@@ -1346,7 +1492,7 @@ impl WaylandConnection {
+@@ -1346,7 +1522,7 @@ impl WaylandConnection {
              }
              // A window of another client takes the place of the app's own.
              _ if params.foreign_parent.is_some() => (None, None),
@@ -256,7 +379,7 @@ index ba950348..697667f8 100644
          };
  
          let target_output = params.display_id.and_then(|display_id| {
-@@ -1524,11 +1670,7 @@ impl WaylandConnection {
+@@ -1524,11 +1700,7 @@ impl WaylandConnection {
      }
  
      pub(crate) fn active_window(&self) -> Option<AnyWindowHandle> {
@@ -269,7 +392,7 @@ index ba950348..697667f8 100644
      }
  
      pub(crate) fn window_stack(&self) -> Option<Vec<AnyWindowHandle>> {
-@@ -1550,8 +1692,7 @@ impl WaylandConnection {
+@@ -1550,8 +1722,7 @@ impl WaylandConnection {
              }
          }
  
@@ -279,7 +402,7 @@ index ba950348..697667f8 100644
          inner(active_window.map(|aw| aw.surface()))
      }
  }
-@@ -1643,14 +1784,15 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for WaylandClientStat
+@@ -1643,14 +1814,15 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for WaylandClientStat
                          log::error!("ignoring wl_seat below the required version");
                          return;
                      };
@@ -302,7 +425,7 @@ index ba950348..697667f8 100644
                  }
                  "wl_output" => {
                      let Ok(version) = wl_output_version(version) else {
-@@ -1667,7 +1809,14 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for WaylandClientStat
+@@ -1667,7 +1839,14 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for WaylandClientStat
                  }
                  _ => {}
              },
@@ -317,7 +440,7 @@ index ba950348..697667f8 100644
                  let Some(id) = state.output_globals.remove(&name) else {
                      return;
                  };
-@@ -2071,6 +2220,29 @@ fn removed_pointer_inputs(
+@@ -2071,6 +2250,29 @@ fn removed_pointer_inputs(
      inputs
  }
  
@@ -347,7 +470,7 @@ index ba950348..697667f8 100644
  impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
      fn event(
          state: &mut Self,
-@@ -2086,13 +2258,17 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
+@@ -2086,13 +2288,17 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
          {
              let client = state.get_client();
              let mut state = client.borrow_mut();
@@ -367,7 +490,7 @@ index ba950348..697667f8 100644
              let keyboard = seat_device(
                  state.wl_keyboard.is_some(),
                  capabilities.contains(wl_seat::Capability::Keyboard),
-@@ -2106,36 +2282,7 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
+@@ -2106,36 +2312,7 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
                          .map(|text_input_manager| text_input_manager.get_text_input(seat, qh, ()));
                      state.wl_keyboard = Some(seat.get_keyboard(qh, ()));
                  }
@@ -405,7 +528,7 @@ index ba950348..697667f8 100644
                  SeatDevice::Keep => {}
              }
              let pointer = seat_device(
-@@ -2160,54 +2307,11 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
+@@ -2160,54 +2337,11 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
                      );
                      state.wl_pointer = Some(pointer);
                  }
@@ -462,7 +585,7 @@ index ba950348..697667f8 100644
          }
      }
  }
-@@ -2270,11 +2374,21 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
+@@ -2270,11 +2404,21 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                  this.handle_keyboard_layout_change();
              }
              wl_keyboard::Event::Enter { surface, .. } => {
@@ -487,7 +610,7 @@ index ba950348..697667f8 100644
                      window.set_focused(true);
                  }
              }
-@@ -2291,9 +2405,16 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
+@@ -2291,9 +2435,16 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                          compose.reset();
                      }
                      state.pre_edit_text.take();
@@ -506,7 +629,7 @@ index ba950348..697667f8 100644
                  }
              }
              wl_keyboard::Event::Modifiers {
-@@ -2411,6 +2532,8 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
+@@ -2411,6 +2562,8 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
  
                          state.repeat.current_id += 1;
                          state.repeat.current_keycode = Some(keycode);
@@ -515,7 +638,7 @@ index ba950348..697667f8 100644
  
                          let rate = state.repeat.characters_per_second;
                          let repeat_interval = Duration::from_secs(1) / rate.max(1);
-@@ -2459,6 +2582,7 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
+@@ -2459,6 +2612,7 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                          if state.repeat.current_keycode == Some(keycode) {
                              state.repeat.current_keycode = None;
                          }
@@ -523,6 +646,232 @@ index ba950348..697667f8 100644
  
                          drop(state);
                          focused_window.handle_input(input);
+@@ -3188,16 +3342,23 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
+                 }
+             }
+             wl_data_device::Event::Selection { id: data_offer } => {
+-                if let Some(offer) = data_offer {
+-                    let offer = state
++                let offer = data_offer.and_then(|offer| {
++                    state
+                         .data_offers
+                         .iter()
+-                        .find(|wrapper| wrapper.inner.id() == offer.id());
+-                    let offer = offer.cloned();
+-                    state.clipboard.set_offer(offer);
+-                } else {
+-                    state.clipboard.set_offer(None);
++                        .find(|wrapper| wrapper.inner.id() == offer.id())
++                        .cloned()
++                });
++                // Without data control the selection comes only with the keyboard focus:
++                // one sent while the client has none precedes its keyboard enter, and is
++                // the selection it saw last offered again unless its kind changed.
++                if state.data_control_device.is_none() {
++                    let kind = state.clipboard.offer_kind(offer.as_ref());
++                    if state.keyboard_focused_window.is_some() || kind != selection_kind() {
++                        selection_changed(kind);
++                    }
+                 }
++                state.clipboard.set_offer(offer);
+             }
+ 
+             // Drag and drop
+@@ -3351,6 +3512,84 @@ impl Dispatch<wl_data_offer::WlDataOffer, ()> for WaylandClientStatePtr {
+     }
+ }
+ 
++delegate_noop!(WaylandClientStatePtr: ignore ext_data_control_manager_v1::ExtDataControlManagerV1);
++
++impl Dispatch<ext_data_control_device_v1::ExtDataControlDeviceV1, ()> for WaylandClientStatePtr {
++    fn event(
++        this: &mut Self,
++        device: &ext_data_control_device_v1::ExtDataControlDeviceV1,
++        event: ext_data_control_device_v1::Event,
++        _: &(),
++        _: &Connection,
++        _: &QueueHandle<Self>,
++    ) {
++        let client = this.get_client();
++        let mut state = client.borrow_mut();
++        if !is_bound(state.data_control_device.as_ref(), device) {
++            return;
++        }
++        match event {
++            ext_data_control_device_v1::Event::DataOffer { id } => {
++                state.data_control_offers.push((id, Vec::new()));
++            }
++            // Sent once for the selection at creation, then for each new one.
++            ext_data_control_device_v1::Event::Selection { id } => {
++                let mime_types = id.as_ref().and_then(|selected| {
++                    state
++                        .data_control_offers
++                        .iter()
++                        .find(|(offer, _)| offer == selected)
++                        .map(|(_, mime_types)| mime_types.as_slice())
++                });
++                let kind = SelectionKind::of(mime_types, &state.clipboard.self_mime());
++                selection_changed(kind);
++                for (offer, _) in state.data_control_offers.drain(..) {
++                    offer.destroy();
++                }
++            }
++            ext_data_control_device_v1::Event::PrimarySelection { id: Some(selected) } => {
++                state.data_control_offers.retain(|(offer, _)| *offer != selected);
++                selected.destroy();
++            }
++            ext_data_control_device_v1::Event::Finished => {
++                device.destroy();
++                state.data_control_device = None;
++                for (offer, _) in state.data_control_offers.drain(..) {
++                    offer.destroy();
++                }
++            }
++            _ => {}
++        }
++    }
++
++    event_created_child!(WaylandClientStatePtr, ext_data_control_device_v1::ExtDataControlDeviceV1, [
++        ext_data_control_device_v1::EVT_DATA_OFFER_OPCODE => (ext_data_control_offer_v1::ExtDataControlOfferV1, ()),
++    ]);
++}
++
++impl Dispatch<ext_data_control_offer_v1::ExtDataControlOfferV1, ()> for WaylandClientStatePtr {
++    fn event(
++        this: &mut Self,
++        offer: &ext_data_control_offer_v1::ExtDataControlOfferV1,
++        event: ext_data_control_offer_v1::Event,
++        _: &(),
++        _: &Connection,
++        _: &QueueHandle<Self>,
++    ) {
++        if let ext_data_control_offer_v1::Event::Offer { mime_type } = event {
++            let client = this.get_client();
++            let mut state = client.borrow_mut();
++            if let Some((_, mime_types)) = state
++                .data_control_offers
++                .iter_mut()
++                .find(|(offered, _)| offered == offer)
++            {
++                mime_types.push(mime_type);
++            }
++        }
++    }
++}
++
+ impl Dispatch<wl_data_source::WlDataSource, DataSourceKind> for WaylandClientStatePtr {
+     fn event(
+         this: &mut Self,
+@@ -3561,6 +3800,23 @@ mod tests {
+         assert!(repeat.is_current(repeat.current_id));
+     }
+ 
++    #[test]
++    fn selection_changes_count_with_their_kind() {
++        let types = |list: &[&str]| list.iter().map(|t| t.to_string()).collect::<Vec<_>>();
++        let own = "pid/1";
++        assert_eq!(SelectionKind::of(None, own), SelectionKind::Empty);
++        assert_eq!(SelectionKind::of(Some(&types(&["text/plain", own])), own), SelectionKind::Own);
++        assert_eq!(SelectionKind::of(Some(&types(&["text/plain"])), own), SelectionKind::Text);
++        assert_eq!(SelectionKind::of(Some(&types(&["image/png"])), own), SelectionKind::Other);
++        // A copy of the same text is a change of its own.
++        let (start, _) = crate::linux::selection();
++        selection_changed(SelectionKind::Text);
++        selection_changed(SelectionKind::Text);
++        assert_eq!(crate::linux::selection(), (start + 2, SelectionKind::Text));
++        selection_changed(SelectionKind::Empty);
++        assert_eq!(crate::linux::selection(), (start + 3, SelectionKind::Empty));
++    }
++
+     #[test]
+     fn rejects_required_globals_below_supported_versions() {
+         assert!(wl_seat_version(4).is_err());
+diff --git a/crates/gpui_linux/src/linux/wayland/clipboard.rs b/crates/gpui_linux/src/linux/wayland/clipboard.rs
+index 31dea7f1..99e19461 100644
+--- a/crates/gpui_linux/src/linux/wayland/clipboard.rs
++++ b/crates/gpui_linux/src/linux/wayland/clipboard.rs
+@@ -23,14 +23,62 @@ pub(crate) const FILE_LIST_MIME_TYPE: &str = "text/uri-list";
+ /// the sources that offer only it (wl-copy, Wine, older toolkits) write it.
+ pub(crate) const ALLOWED_TEXT_MIME_TYPES: [&str; 3] = ["text/plain;charset=utf-8", "UTF8_STRING", "text/plain"];
+ 
+-/// Counts the compositor's selection events: each new clipboard offer, this
+-/// client's own included, and each clear.
+-static SELECTION_SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
++/// What the desktop's clipboard selection holds, as its offer's mime types tell.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum SelectionKind {
++    /// No selection: it was cleared, or its owner went away.
++    Empty,
++    /// This client's own copy.
++    Own,
++    /// Another client's copy, with text.
++    Text,
++    /// Another client's copy, without text.
++    Other,
++}
++
++impl SelectionKind {
++    const ALL: [Self; 4] = [Self::Empty, Self::Own, Self::Text, Self::Other];
++
++    pub(crate) fn of(mime_types: Option<&[String]>, self_mime: &str) -> Self {
++        let Some(mime_types) = mime_types else {
++            return Self::Empty;
++        };
++        if mime_types.iter().any(|t| t == self_mime) {
++            Self::Own
++        } else if mime_types
++            .iter()
++            .any(|t| ALLOWED_TEXT_MIME_TYPES.contains(&t.as_str()))
++        {
++            Self::Text
++        } else {
++            Self::Other
++        }
++    }
++}
++
++/// The count of selection changes, times four, plus the current kind's index.
++static SELECTION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+ 
+ /// How many times the desktop's clipboard selection has changed since the
+-/// client connected. A new copy changes it even when it holds the same text.
+-pub fn selection_serial() -> u64 {
+-    SELECTION_SERIAL.load(std::sync::atomic::Ordering::Acquire)
++/// client connected, and what it holds now. A new copy changes it even when it
++/// holds the same text. Only the offer is looked at: no content is read.
++pub fn selection() -> (u64, SelectionKind) {
++    let value = SELECTION.load(std::sync::atomic::Ordering::Acquire);
++    (value >> 2, SelectionKind::ALL[(value & 3) as usize])
++}
++
++/// A change of the desktop's selection to one holding `kind`.
++pub(crate) fn selection_changed(kind: SelectionKind) {
++    let _ = SELECTION.fetch_update(
++        std::sync::atomic::Ordering::AcqRel,
++        std::sync::atomic::Ordering::Acquire,
++        |value| Some((((value >> 2) + 1) << 2) | kind as u64),
++    );
++}
++
++/// The kind of the selection `selection` last reported.
++pub(crate) fn selection_kind() -> SelectionKind {
++    selection().1
+ }
+ 
+ pub(crate) struct Clipboard {
+@@ -170,8 +218,11 @@ impl Clipboard {
+         self.primary_contents = Some(item);
+     }
+ 
++    pub fn offer_kind(&self, data_offer: Option<&DataOffer<WlDataOffer>>) -> SelectionKind {
++        SelectionKind::of(data_offer.map(|offer| offer.mime_types.as_slice()), &self.self_mime)
++    }
++
+     pub fn set_offer(&mut self, data_offer: Option<DataOffer<WlDataOffer>>) {
+-        SELECTION_SERIAL.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+         self.cached_read = None;
+         self.current_offer = data_offer;
+     }
 diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/src/linux/wayland/window.rs
 index 71f1502c..cc0ff4c6 100644
 --- a/crates/gpui_linux/src/linux/wayland/window.rs
