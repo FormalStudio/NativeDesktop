@@ -42,3 +42,4 @@
 0043-gpui_linux-reset-modifiers-when-the-keyboard-leaves-.patch
 0044-gpui_linux-read-the-clipboard-from-the-data-control-.patch
 0045-gpui_linux-tell-which-selection-a-clipboard-read-cam.patch
+0035-gpui-PlatformDisplay-scale_factor-a-Wayland-output-s.patch

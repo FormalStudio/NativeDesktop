@@ -653,6 +653,13 @@ pub trait PlatformDisplay: Debug {
     /// [`Window::refresh_interval`](crate::Window::refresh_interval).
     fn refresh_interval(&self) -> Option<Duration>;
 
+    /// The scale a window on this display starts at, where the platform reports one before a
+    /// window is on it (Wayland: the output's integer `wl_output.scale`; the compositor can
+    /// still give a window a fractional scale of its own once it is there).
+    fn scale_factor(&self) -> Option<f32> {
+        None
+    }
+
     /// Get the visible bounds for this display, excluding taskbar/dock areas.
     /// This is the usable area where windows can be placed without being obscured.
     /// Defaults to the full display bounds if not overridden.
