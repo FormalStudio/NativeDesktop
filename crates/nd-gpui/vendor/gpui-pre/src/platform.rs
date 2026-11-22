@@ -37,7 +37,7 @@ pub(crate) type PlatformScreenCaptureFrame =
     objc2_core_foundation::CFRetained<objc2_core_video::CVImageBuffer>;
 
 use crate::{
-    Action, AnyWindowHandle, App, AsyncWindowContext, BackgroundExecutor, Bounds, Corners,
+    Action, AnyWindowHandle, App, AsyncWindowContext, BackgroundExecutor, Bounds, CornerCurve, Corners,
     DEFAULT_WINDOW_SIZE, DevicePixels, DispatchEventResult, Edges, ExternalDragPayload, Font,
     FontId, FontMetrics, FontRun, ForegroundExecutor, GlyphId, GpuSpecs, Hsla, ImageSource, Keymap,
     LineLayout, MissingGlyphSink, Pixels, PlatformGestures, PlatformInput, Point, Priority,
@@ -1455,6 +1455,8 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     fn set_client_inset(&self, _inset: Pixels) {}
     fn on_configure(&self, _callback: Box<dyn FnMut(Configure)>) {}
     fn set_client_corner_radii(&self, _radii: Corners<Pixels>) {}
+    /// Only the wgpu renderer draws continuous corners; the others draw circular ones.
+    fn set_corner_curve(&self, _curve: CornerCurve) {}
     fn gpu_specs(&self) -> Option<GpuSpecs>;
 
     /// When the compositor presented this window's latest frame, where the platform measures

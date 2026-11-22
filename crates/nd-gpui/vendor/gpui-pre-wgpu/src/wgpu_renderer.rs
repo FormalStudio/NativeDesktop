@@ -4,7 +4,7 @@ use anyhow::{Context as _, Result};
 use bytemuck::{Pod, Zeroable};
 use collections::FxHashMap;
 use gpui::{
-    AtlasTextureId, Background, Bounds, DevicePixels, GpuSpecs, Path, Point, PrimitiveBatch,
+    AtlasTextureId, Background, Bounds, CornerCurve, DevicePixels, GpuSpecs, Path, Point, PrimitiveBatch,
     ScaledPixels, Scene, Size, get_gamma_correction_ratios,
 };
 use log::warn;
@@ -25,6 +25,7 @@ const INSTANCE_TEXTURE_TEXEL_SIZE: u64 = 16;
 /// logic plus the storage-buffer instance transport.
 const STORAGE_BUFFER_SHADERS: &str = concat!(
     include_str!("shaders.wgsl"),
+    include_str!("corners.wgsl"),
     include_str!("shaders_storage.wgsl"),
 );
 
@@ -32,6 +33,7 @@ const STORAGE_BUFFER_SHADERS: &str = concat!(
 /// logic plus the texture-based instance transport.
 const WEBGL_SHADERS: &str = concat!(
     include_str!("shaders.wgsl"),
+    include_str!("corners.wgsl"),
     include_str!("shaders_webgl.wgsl"),
 );
 
@@ -41,6 +43,7 @@ const WEBGL_SHADERS: &str = concat!(
 const SUBPIXEL_SHADERS: &str = concat!(
     "enable dual_source_blending;\n",
     include_str!("shaders.wgsl"),
+    include_str!("corners.wgsl"),
     include_str!("shaders_storage.wgsl"),
     include_str!("shaders_subpixel.wgsl"),
 );
@@ -61,7 +64,7 @@ fn least_common_multiple(left: u64, right: u64) -> u64 {
 struct GlobalParams {
     viewport_size: [f32; 2],
     premultiplied_alpha: u32,
-    pad: u32,
+    corner_curve: u32,
 }
 
 #[repr(C)]
@@ -228,6 +231,7 @@ struct WgpuRendererCore {
     uses_webgl_instance_data: bool,
     rendering_params: RenderingParameters,
     is_bgr: bool,
+    corner_curve: CornerCurve,
     dual_source_blending: bool,
     adapter_info: wgpu::AdapterInfo,
     target_format: wgpu::TextureFormat,
@@ -264,6 +268,7 @@ pub struct WgpuRenderer {
     opaque_alpha_mode: wgpu::CompositeAlphaMode,
     max_texture_size: u32,
     is_bgr: bool,
+    corner_curve: CornerCurve,
     failed_frame_count: u32,
     device_errors: Arc<DeviceErrorState>,
     observed_error_generation: u64,
@@ -788,6 +793,7 @@ impl WgpuRenderer {
             opaque_alpha_mode,
             max_texture_size,
             is_bgr: false,
+            corner_curve: CornerCurve::Circular,
             failed_frame_count: 0,
             device_errors: Arc::clone(context.errors()),
             observed_error_generation: 0,
@@ -1428,6 +1434,13 @@ impl WgpuRenderer {
         }
     }
 
+    pub fn set_corner_curve(&mut self, curve: CornerCurve) {
+        self.corner_curve = curve;
+        if let Some(core) = self.core_mut() {
+            core.corner_curve = curve;
+        }
+    }
+
     pub fn update_transparency(&mut self, transparent: bool) {
         let new_alpha_mode = if transparent {
             self.transparent_alpha_mode
@@ -1792,6 +1805,7 @@ impl WgpuRendererCore {
             uses_webgl_instance_data,
             rendering_params,
             is_bgr: false,
+            corner_curve: CornerCurve::Circular,
             dual_source_blending,
             adapter_info: context.adapter.get_info(),
             target_format,
@@ -1876,7 +1890,7 @@ impl WgpuRendererCore {
         let globals = GlobalParams {
             viewport_size: [size.width.0 as f32, size.height.0 as f32],
             premultiplied_alpha: premultiplied_alpha as u32,
-            pad: 0,
+            corner_curve: self.corner_curve as u32,
         };
         let path_globals = GlobalParams {
             premultiplied_alpha: 0,
@@ -2063,6 +2077,7 @@ impl WgpuRendererCore {
                             frame,
                             &scene.backdrops[range],
                             &scene.backdrop_masks,
+                            self.corner_curve,
                         );
                         pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                             label: Some("main_pass_continued"),
@@ -2781,6 +2796,7 @@ impl WgpuRenderer {
         self.atlas.handle_device_lost(context);
 
         let is_bgr = self.is_bgr;
+        let corner_curve = self.corner_curve;
         *self = Self::new_internal(
             Some(gpu_context.clone()),
             context,
@@ -2791,6 +2807,7 @@ impl WgpuRenderer {
             self.atlas.clone(),
         )?;
         self.set_subpixel_layout(is_bgr);
+        self.set_corner_curve(corner_curve);
 
         log::info!("GPU recovery complete");
         Ok(())

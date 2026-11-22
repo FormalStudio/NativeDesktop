@@ -1,0 +1,516 @@
+From 557d5ee8f8c0f280ca616b7ee9e353c530fabea6 Mon Sep 17 00:00:00 2001
+From: FormalSnake <kyaniserni@gmail.com>
+Date: Sun, 22 Nov 2026 08:19:31 +0000
+Subject: [PATCH] gpui: Window::set_corner_curve, continuous corners in the
+ wgpu renderer
+
+---
+ crates/gpui/src/platform.rs                   |  4 +-
+ crates/gpui/src/scene.rs                      | 14 ++++
+ crates/gpui/src/window.rs                     |  8 ++-
+ crates/gpui_linux/src/linux/wayland/window.rs |  8 ++-
+ crates/gpui_linux/src/linux/x11/window.rs     |  6 ++
+ crates/gpui_wgpu/src/backdrop.rs              | 21 +++---
+ crates/gpui_wgpu/src/corners.wgsl             | 64 +++++++++++++++++++
+ crates/gpui_wgpu/src/shaders.wgsl             | 44 +++++--------
+ crates/gpui_wgpu/src/wgpu_renderer.rs         | 23 ++++++-
+ 9 files changed, 150 insertions(+), 42 deletions(-)
+ create mode 100644 crates/gpui_wgpu/src/corners.wgsl
+
+diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
+index ae3f33b9e7..2b2c8175e0 100644
+--- a/crates/gpui/src/platform.rs
++++ b/crates/gpui/src/platform.rs
+@@ -37,7 +37,7 @@ pub(crate) type PlatformScreenCaptureFrame =
+     objc2_core_foundation::CFRetained<objc2_core_video::CVImageBuffer>;
+ 
+ use crate::{
+-    Action, AnyWindowHandle, App, AsyncWindowContext, BackgroundExecutor, Bounds, Corners,
++    Action, AnyWindowHandle, App, AsyncWindowContext, BackgroundExecutor, Bounds, CornerCurve, Corners,
+     DEFAULT_WINDOW_SIZE, DevicePixels, DispatchEventResult, Edges, ExternalDragPayload, Font,
+     FontId, FontMetrics, FontRun, ForegroundExecutor, GlyphId, GpuSpecs, Hsla, ImageSource, Keymap,
+     LineLayout, MissingGlyphSink, Pixels, PlatformGestures, PlatformInput, Point, Priority,
+@@ -1455,6 +1455,8 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
+     fn set_client_inset(&self, _inset: Pixels) {}
+     fn on_configure(&self, _callback: Box<dyn FnMut(Configure)>) {}
+     fn set_client_corner_radii(&self, _radii: Corners<Pixels>) {}
++    /// Only the wgpu renderer draws continuous corners; the others draw circular ones.
++    fn set_corner_curve(&self, _curve: CornerCurve) {}
+     fn gpu_specs(&self) -> Option<GpuSpecs>;
+ 
+     /// When the compositor presented this window's latest frame, where the platform measures
+diff --git a/crates/gpui/src/scene.rs b/crates/gpui/src/scene.rs
+index ff69c9dadd..a2930a1bb0 100644
+--- a/crates/gpui/src/scene.rs
++++ b/crates/gpui/src/scene.rs
+@@ -770,6 +770,20 @@ pub enum BorderStyle {
+     Dashed = 1,
+ }
+ 
++/// The shape a window draws its rounded corners in (`Window::set_corner_curve`).
++#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash)]
++#[repr(u32)]
++pub enum CornerCurve {
++    /// A quarter circle of the corner radius.
++    #[default]
++    Circular = 0,
++    /// macOS's continuous corner: it reaches further along each edge than a
++    /// circle of the same radius and bends into the edge without a kink in
++    /// curvature. A corner without room for that extent falls back toward the
++    /// circle, so discs and capsules stay round.
++    Continuous = 1,
++}
++
+ /// A data type representing a 2 dimensional transformation that can be applied to an element.
+ #[derive(Debug, Clone, Copy, PartialEq)]
+ #[repr(C)]
+diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
+index 730ed1e4a6..e9e62cbf95 100644
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -10,7 +10,7 @@ use crate::{
+     Action, AnyDrag, AnyElement, AnyImageCache, AnyTooltip, AnyView, App, AppContext, Arena, Asset,
+     AsyncWindowContext, AtlasTile, AvailableSpace, Backdrop, BackdropFilter, BackdropMask, BackdropSource,
+     Background, BorderStyle, Bounds, BoxShadow,
+-    Capslock, Context, Corners, CursorHideMode, CursorStyle, Decorations, DevicePixels,
++    Capslock, Context, CornerCurve, Corners, CursorHideMode, CursorStyle, Decorations, DevicePixels,
+     DispatchActionListener, DispatchNodeId, DispatchTree, DisplayId, Edges, Effect, Entity,
+     EntityId, EventEmitter, FileDropEvent, FontId, Global, GlobalElementId, GlyphId, GpuSpecs,
+     Hsla, InputHandler, InputPreference, IsZero, KeyBinding, KeyContext, KeyDownEvent, KeyEvent,
+@@ -3340,6 +3340,12 @@ impl Window {
+         self.platform_window.set_client_corner_radii(radii);
+     }
+ 
++    /// Sets the shape every rounded corner in the window is drawn in: quads,
++    /// images, shadows cut to an element and backdrops. Circular until set.
++    pub fn set_corner_curve(&mut self, curve: CornerCurve) {
++        self.platform_window.set_corner_curve(curve);
++    }
++
+     /// Returns the client_inset value by [`Self::set_client_inset`].
+     pub fn client_inset(&self) -> Option<Pixels> {
+         self.client_inset
+diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/src/linux/wayland/window.rs
+index 74730fe249..0cfd180248 100644
+--- a/crates/gpui_linux/src/linux/wayland/window.rs
++++ b/crates/gpui_linux/src/linux/wayland/window.rs
+@@ -36,7 +36,7 @@ use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1;
+ use crate::linux::wayland::{display::WaylandDisplay, serial::SerialKind};
+ use crate::linux::{Globals, Output, PendingActivation, WaylandClientStatePtr, get_window};
+ use gpui::{
+-    AnyWindowHandle, BackdropSource, Bounds, Capslock, Corners, Decorations, DevicePixels, ExternalDragPayload,
++    AnyWindowHandle, BackdropSource, Bounds, Capslock, CornerCurve, Corners, Decorations, DevicePixels, ExternalDragPayload,
+     ForeignParent, FrameRequestSource, GpuSpecs, Modifiers, Pixels, PlatformAtlas, PlatformDisplay,
+     PlatformFrameSignal, PlatformInput, PlatformInputHandler, PlatformWindow, Point, PromptButton,
+     PromptLevel, RequestFrameOptions, ResizeEdge, Scene, Size, Tiling, WindowAppearance,
+@@ -2518,6 +2518,12 @@ impl PlatformWindow for WaylandWindow {
+         }
+     }
+ 
++    fn set_corner_curve(&self, curve: CornerCurve) {
++        if let Some(renderer) = &mut self.borrow_mut().renderer {
++            renderer.set_corner_curve(curve);
++        }
++    }
++
+     fn set_client_corner_radii(&self, radii: Corners<Pixels>) {
+         let mut state = self.borrow_mut();
+         if radii != state.client_corner_radii {
+diff --git a/crates/gpui_linux/src/linux/x11/window.rs b/crates/gpui_linux/src/linux/x11/window.rs
+index 577c4a3e7c..9a2fa16043 100644
+--- a/crates/gpui_linux/src/linux/x11/window.rs
++++ b/crates/gpui_linux/src/linux/x11/window.rs
+@@ -1917,6 +1917,12 @@ impl PlatformWindow for X11Window {
+         self.0.state.borrow().decorations()
+     }
+ 
++    fn set_corner_curve(&self, curve: gpui::CornerCurve) {
++        if let Some(renderer) = &mut self.0.state.borrow_mut().renderer {
++            renderer.set_corner_curve(curve);
++        }
++    }
++
+     fn set_client_inset(&self, inset: Pixels) {
+         let mut state = self.0.state.borrow_mut();
+ 
+diff --git a/crates/gpui_wgpu/src/backdrop.rs b/crates/gpui_wgpu/src/backdrop.rs
+index 8eec7fe374..ca2fba5f1c 100644
+--- a/crates/gpui_wgpu/src/backdrop.rs
++++ b/crates/gpui_wgpu/src/backdrop.rs
+@@ -10,9 +10,9 @@
+ use std::num::NonZeroU64;
+ 
+ use bytemuck::{Pod, Zeroable};
+-use gpui::{Backdrop, BackdropMask, BackdropSource, Rgba, ScaledPixels};
++use gpui::{Backdrop, BackdropMask, BackdropSource, CornerCurve, Rgba, ScaledPixels};
+ 
+-pub(crate) const SHADER: &str = r#"
++pub(crate) const SHADER: &str = concat!(include_str!("corners.wgsl"), r#"
+ // Every vec4 on a 16-byte boundary, so the layout is the same under WGSL's, HLSL's and C's rules.
+ struct Params {
+     target_size: vec2<f32>,
+@@ -48,7 +48,8 @@ struct Params {
+     has_clamp: u32,
+     clamp_low: f32,
+     clamp_high: f32,
+-    pad0: u32,
++    // Composite: 1 draws the shape's corners continuous (`CornerCurve::Continuous`).
++    corner_curve: u32,
+     pad1: u32,
+     pad2: u32,
+ }
+@@ -149,8 +150,8 @@ fn rounded_rect_sdf(p: vec2<f32>) -> f32 {
+         radius = select(params.radii.z, params.radii.y, d.y < 0.0);
+     }
+     radius = min(radius, min(half_size.x, half_size.y));
+-    let q = abs(d) - half_size + radius;
+-    return length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - radius;
++    let corner = corner_shape(radius, half_size, params.corner_curve != 0u);
++    return corner_sdf(abs(d) - half_size + corner.extent, corner);
+ }
+ 
+ @fragment
+@@ -205,7 +206,7 @@ fn fs_composite(in: Varyings) -> @location(0) vec4<f32> {
+     }
+     return color * coverage * params.opacity;
+ }
+-"#;
++"#);
+ 
+ #[derive(Clone, Copy, Pod, Zeroable)]
+ #[repr(C)]
+@@ -237,7 +238,8 @@ struct Params {
+     has_clamp: u32,
+     clamp_low: f32,
+     clamp_high: f32,
+-    pad: [u32; 3],
++    corner_curve: u32,
++    pad: [u32; 2],
+ }
+ 
+ const _: () = assert!(std::mem::offset_of!(Params, radii) == 96 && std::mem::size_of::<Params>() == 192);
+@@ -549,6 +551,7 @@ impl Backdrops {
+         frame: &wgpu::Texture,
+         backdrops: &[Backdrop],
+         masks: &[BackdropMask<ScaledPixels>],
++        corner_curve: CornerCurve,
+     ) -> Prepared {
+         let size = (frame.width(), frame.height());
+         let has_source = frame.usage().contains(wgpu::TextureUsages::COPY_SRC);
+@@ -639,6 +642,7 @@ impl Backdrops {
+                 has_clamp: backdrop.clamp.is_some() as u32,
+                 clamp_low: backdrop.clamp.map_or(0., |c| c[0]),
+                 clamp_high: backdrop.clamp.map_or(1., |c| c[1]),
++                corner_curve: corner_curve as u32,
+                 ..base
+             };
+             if let Some(r) = region {
+@@ -869,7 +873,8 @@ mod tests {
+         let mut backdrops = Backdrops::new(&device, FORMAT);
+         backdrops.begin_frame(&device, &[backdrop]);
+         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+-        let prepared = backdrops.prepare(&device, &queue, &mut encoder, &frame, &[backdrop], &[]);
++        let prepared =
++            backdrops.prepare(&device, &queue, &mut encoder, &frame, &[backdrop], &[], CornerCurve::Circular);
+         {
+             let view = frame.create_view(&wgpu::TextureViewDescriptor::default());
+             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+diff --git a/crates/gpui_wgpu/src/corners.wgsl b/crates/gpui_wgpu/src/corners.wgsl
+new file mode 100644
+index 0000000000..6c59395656
+--- /dev/null
++++ b/crates/gpui_wgpu/src/corners.wgsl
+@@ -0,0 +1,64 @@
++// The shape of a rounded corner (`CornerCurve`). A circular corner is a quarter
++// circle of the corner radius. A continuous corner, the one macOS draws for its
++// windows and for CALayer's continuous corner curve, is a superellipse quadrant
++// that reaches further along each edge and bends into it without a kink in
++// curvature. The two constants are fitted to a macOS 26 window corner captured
++// at 2x: for a 16 pt radius, a 62.5 px extent and an exponent of 4.3 leave
++// 0.3 px rms against the closest circle's 1.1 px.
++const CONTINUOUS_EXTENT: f32 = 1.95;
++const CONTINUOUS_EXPONENT: f32 = 4.35;
++
++struct CornerShape {
++    // How far along each edge the corner reaches.
++    extent: f32,
++    // 2 for a circle.
++    exponent: f32,
++}
++
++fn corner_shape(radius: f32, half_size: vec2<f32>, continuous: bool) -> CornerShape {
++    if (!continuous || radius <= 0.0) {
++        return CornerShape(radius, 2.0);
++    }
++    // Without room for the full extent the corner turns back into the circle,
++    // so a quad rounded into a disc or a capsule keeps that shape.
++    let room = min(half_size.x, half_size.y);
++    let s = saturate((room - radius) / ((CONTINUOUS_EXTENT - 1.0) * radius));
++    return CornerShape(mix(radius, CONTINUOUS_EXTENT * radius, s), mix(2.0, CONTINUOUS_EXPONENT, s));
++}
++
++// Signed distance to the edge of a rounded corner, negative inside, from the
++// point's offset to the corner's centre (`extent` in from both edges).
++fn corner_sdf(corner_center_to_point: vec2<f32>, shape: CornerShape) -> f32 {
++    let p = corner_center_to_point;
++    if (shape.extent == 0.0 || p.x <= 0.0 || p.y <= 0.0) {
++        // Along a straight edge, or a square corner.
++        return max(p.x, p.y) - shape.extent;
++    }
++    if (shape.exponent == 2.0) {
++        return length(p) - shape.extent;
++    }
++    // The superellipse's norm, divided by the length of its gradient so the
++    // result stays a distance in pixels for antialiasing. That length is never
++    // below 2^(1/n - 1/2) on the curve; the clamp only catches the corner's
++    // centre, where the norm underflows.
++    let u = p / shape.extent;
++    let a = pow(u, vec2<f32>(shape.exponent - 1.0));
++    let norm = max(pow(dot(a, u), 1.0 / shape.exponent), 1e-4);
++    let gradient = max(length(a) / pow(norm, shape.exponent - 1.0), 0.5);
++    return (norm - 1.0) * shape.extent / gradient;
++}
++
++// Signed distance to the inner edge of a continuous corner's border where the
++// two borders meeting at it differ, positive inside: the superellipse with
++// `axes` (the extent less each border) for its semi-axes, from the same centre.
++fn corner_inner_sdf(corner_center_to_point: vec2<f32>, axes: vec2<f32>, exponent: f32) -> f32 {
++    if (axes.x <= 0.0 || axes.y <= 0.0) {
++        // A border wider than the corner leaves no curve inside it.
++        return -1.0;
++    }
++    let u = corner_center_to_point / axes;
++    let a = pow(u, vec2<f32>(exponent - 1.0));
++    let norm = max(pow(dot(a, u), 1.0 / exponent), 1e-4);
++    let gradient = length(a / axes) / pow(norm, exponent - 1.0);
++    return (1.0 - norm) / max(gradient, 1e-4);
++}
+diff --git a/crates/gpui_wgpu/src/shaders.wgsl b/crates/gpui_wgpu/src/shaders.wgsl
+index d1c5d89dad..5aecf68c1e 100644
+--- a/crates/gpui_wgpu/src/shaders.wgsl
++++ b/crates/gpui_wgpu/src/shaders.wgsl
+@@ -80,7 +80,8 @@ fn apply_contrast_and_gamma_correction3(sample: vec3<f32>, color: vec3<f32>, enh
+ struct GlobalParams {
+     viewport_size: vec2<f32>,
+     premultiplied_alpha: u32,
+-    pad: u32,
++    // 1 draws every rounded corner continuous (`CornerCurve::Continuous`).
++    corner_curve: u32,
+ }
+ 
+ struct GammaParams {
+@@ -357,33 +358,17 @@ fn pick_corner_radius(center_to_point: vec2<f32>, radii: Corners) -> f32 {
+ // Signed distance of the point to the quad's border - positive outside the
+ // border, and negative inside.
+ //
+-// See comments on similar code using `quad_sdf_impl` in `fs_quad` for
++// See comments on similar code using `corner_sdf` in `fs_quad` for
+ // explanation.
+ fn quad_sdf(point: vec2<f32>, bounds: Bounds, corner_radii: Corners) -> f32 {
+     let half_size = bounds.size / 2.0;
+     let center = bounds.origin + half_size;
+     let center_to_point = point - center;
+     let corner_radius = pick_corner_radius(center_to_point, corner_radii);
++    let corner = corner_shape(corner_radius, half_size, globals.corner_curve != 0u);
+     let corner_to_point = abs(center_to_point) - half_size;
+-    let corner_center_to_point = corner_to_point + corner_radius;
+-    return quad_sdf_impl(corner_center_to_point, corner_radius);
+-}
+-
+-fn quad_sdf_impl(corner_center_to_point: vec2<f32>, corner_radius: f32) -> f32 {
+-    if (corner_radius == 0.0) {
+-        // Fast path for unrounded corners.
+-        return max(corner_center_to_point.x, corner_center_to_point.y);
+-    } else {
+-        // Signed distance of the point from a quad that is inset by corner_radius.
+-        // It is negative inside this quad, and positive outside.
+-        let signed_distance_to_inset_quad =
+-            // 0 inside the inset quad, and positive outside.
+-            length(max(vec2<f32>(0.0), corner_center_to_point)) +
+-            // 0 outside the inset quad, and negative inside.
+-            min(0.0, max(corner_center_to_point.x, corner_center_to_point.y));
+-
+-        return signed_distance_to_inset_quad - corner_radius;
+-    }
++    let corner_center_to_point = corner_to_point + corner.extent;
++    return corner_sdf(corner_center_to_point, corner);
+ }
+ 
+ // Abstract away the final color transformation based on the
+@@ -596,8 +581,9 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
+     // minimum distance between the center of the pixel and the edge.
+     let antialias_threshold = 0.5;
+ 
+-    // Radius of the nearest corner
++    // Radius of the nearest corner, and the shape the window draws it in
+     let corner_radius = pick_corner_radius(center_to_point, quad.corner_radii);
++    let corner = corner_shape(corner_radius, half_size, globals.corner_curve != 0u);
+ 
+     // Width of the nearest borders
+     let border = vec2<f32>(
+@@ -620,9 +606,9 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
+     // the point into the bottom right quadrant. Both components are <= 0.
+     let corner_to_point = abs(center_to_point) - half_size;
+ 
+-    // Vector from the point to the center of the rounded corner's circle, also
++    // Vector from the point to the center of the rounded corner, also
+     // mirrored into bottom right quadrant.
+-    let corner_center_to_point = corner_to_point + corner_radius;
++    let corner_center_to_point = corner_to_point + corner.extent;
+ 
+     // Whether the nearest point on the border is rounded
+     let is_near_rounded_corner =
+@@ -655,7 +641,7 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
+ 
+     // Signed distance of the point to the outside edge of the quad's border. It
+     // is positive outside this edge, and negative inside.
+-    let outer_sdf = quad_sdf_impl(corner_center_to_point, corner_radius);
++    let outer_sdf = corner_sdf(corner_center_to_point, corner);
+ 
+     // Approximate signed distance of the point to the inside edge of the quad's
+     // border. It is negative outside this edge (within the border), and
+@@ -674,11 +660,13 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
+         // Fast path for points that must be outside the inner edge.
+         inner_sdf = -1.0;
+     } else if (reduced_border.x == reduced_border.y) {
+-        // Fast path for circular inner edge.
++        // Fast path for an inner edge parallel to the outer one.
+         inner_sdf = -(outer_sdf + reduced_border.x);
+-    } else {
+-        let ellipse_radii = max(vec2<f32>(0.0), corner_radius - reduced_border);
++    } else if (corner.exponent == 2.0) {
++        let ellipse_radii = max(vec2<f32>(0.0), corner.extent - reduced_border);
+         inner_sdf = quarter_ellipse_sdf(corner_center_to_point, ellipse_radii);
++    } else {
++        inner_sdf = corner_inner_sdf(corner_center_to_point, corner.extent - reduced_border, corner.exponent);
+     }
+ 
+     // Negative when inside the border
+diff --git a/crates/gpui_wgpu/src/wgpu_renderer.rs b/crates/gpui_wgpu/src/wgpu_renderer.rs
+index be4d288c49..d7bc17a015 100644
+--- a/crates/gpui_wgpu/src/wgpu_renderer.rs
++++ b/crates/gpui_wgpu/src/wgpu_renderer.rs
+@@ -3,7 +3,7 @@ use anyhow::{Context as _, Result};
+ use bytemuck::{Pod, Zeroable};
+ use collections::FxHashMap;
+ use gpui::{
+-    AtlasTextureId, Background, Bounds, DevicePixels, GpuSpecs, Path, Point, PrimitiveBatch,
++    AtlasTextureId, Background, Bounds, CornerCurve, DevicePixels, GpuSpecs, Path, Point, PrimitiveBatch,
+     ScaledPixels, Scene, Size, get_gamma_correction_ratios,
+ };
+ use log::warn;
+@@ -24,6 +24,7 @@ const INSTANCE_TEXTURE_TEXEL_SIZE: u64 = 16;
+ /// logic plus the storage-buffer instance transport.
+ const STORAGE_BUFFER_SHADERS: &str = concat!(
+     include_str!("shaders.wgsl"),
++    include_str!("corners.wgsl"),
+     include_str!("shaders_storage.wgsl"),
+ );
+ 
+@@ -31,6 +32,7 @@ const STORAGE_BUFFER_SHADERS: &str = concat!(
+ /// logic plus the texture-based instance transport.
+ const WEBGL_SHADERS: &str = concat!(
+     include_str!("shaders.wgsl"),
++    include_str!("corners.wgsl"),
+     include_str!("shaders_webgl.wgsl"),
+ );
+ 
+@@ -40,6 +42,7 @@ const WEBGL_SHADERS: &str = concat!(
+ const SUBPIXEL_SHADERS: &str = concat!(
+     "enable dual_source_blending;\n",
+     include_str!("shaders.wgsl"),
++    include_str!("corners.wgsl"),
+     include_str!("shaders_storage.wgsl"),
+     include_str!("shaders_subpixel.wgsl"),
+ );
+@@ -60,7 +63,7 @@ fn least_common_multiple(left: u64, right: u64) -> u64 {
+ struct GlobalParams {
+     viewport_size: [f32; 2],
+     premultiplied_alpha: u32,
+-    pad: u32,
++    corner_curve: u32,
+ }
+ 
+ #[repr(C)]
+@@ -227,6 +230,7 @@ struct WgpuRendererCore {
+     uses_webgl_instance_data: bool,
+     rendering_params: RenderingParameters,
+     is_bgr: bool,
++    corner_curve: CornerCurve,
+     dual_source_blending: bool,
+     adapter_info: wgpu::AdapterInfo,
+     target_format: wgpu::TextureFormat,
+@@ -263,6 +267,7 @@ pub struct WgpuRenderer {
+     opaque_alpha_mode: wgpu::CompositeAlphaMode,
+     max_texture_size: u32,
+     is_bgr: bool,
++    corner_curve: CornerCurve,
+     failed_frame_count: u32,
+     device_errors: Arc<DeviceErrorState>,
+     observed_error_generation: u64,
+@@ -787,6 +792,7 @@ impl WgpuRenderer {
+             opaque_alpha_mode,
+             max_texture_size,
+             is_bgr: false,
++            corner_curve: CornerCurve::Circular,
+             failed_frame_count: 0,
+             device_errors: Arc::clone(context.errors()),
+             observed_error_generation: 0,
+@@ -1427,6 +1433,13 @@ impl WgpuRenderer {
+         }
+     }
+ 
++    pub fn set_corner_curve(&mut self, curve: CornerCurve) {
++        self.corner_curve = curve;
++        if let Some(core) = self.core_mut() {
++            core.corner_curve = curve;
++        }
++    }
++
+     pub fn update_transparency(&mut self, transparent: bool) {
+         let new_alpha_mode = if transparent {
+             self.transparent_alpha_mode
+@@ -1791,6 +1804,7 @@ impl WgpuRendererCore {
+             uses_webgl_instance_data,
+             rendering_params,
+             is_bgr: false,
++            corner_curve: CornerCurve::Circular,
+             dual_source_blending,
+             adapter_info: context.adapter.get_info(),
+             target_format,
+@@ -1875,7 +1889,7 @@ impl WgpuRendererCore {
+         let globals = GlobalParams {
+             viewport_size: [size.width.0 as f32, size.height.0 as f32],
+             premultiplied_alpha: premultiplied_alpha as u32,
+-            pad: 0,
++            corner_curve: self.corner_curve as u32,
+         };
+         let path_globals = GlobalParams {
+             premultiplied_alpha: 0,
+@@ -2062,6 +2076,7 @@ impl WgpuRendererCore {
+                             frame,
+                             &scene.backdrops[range],
+                             &scene.backdrop_masks,
++                            self.corner_curve,
+                         );
+                         pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                             label: Some("main_pass_continued"),
+@@ -2780,6 +2795,7 @@ impl WgpuRenderer {
+         self.atlas.handle_device_lost(context);
+ 
+         let is_bgr = self.is_bgr;
++        let corner_curve = self.corner_curve;
+         *self = Self::new_internal(
+             Some(gpu_context.clone()),
+             context,
+@@ -2790,6 +2806,7 @@ impl WgpuRenderer {
+             self.atlas.clone(),
+         )?;
+         self.set_subpixel_layout(is_bgr);
++        self.set_corner_curve(corner_curve);
+ 
+         log::info!("GPU recovery complete");
+         Ok(())
+-- 
+2.56.0
+

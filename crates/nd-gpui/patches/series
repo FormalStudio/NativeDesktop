@@ -35,3 +35,4 @@
 0033-gpui-report-the-tiled-sides-under-server-side-decorat.patch
 0034-gpui-default-a-window-s-tiling-to-what-its-client-sid.patch
 0035-gpui-PlatformDisplay-scale_factor-a-Wayland-output-s.patch
+0036-gpui-Window-set_corner_curve-continuous-corners-in-t.patch

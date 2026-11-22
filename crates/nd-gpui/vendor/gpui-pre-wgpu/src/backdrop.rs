@@ -10,9 +10,9 @@
 use std::num::NonZeroU64;
 
 use bytemuck::{Pod, Zeroable};
-use gpui::{Backdrop, BackdropMask, BackdropSource, Rgba, ScaledPixels};
+use gpui::{Backdrop, BackdropMask, BackdropSource, CornerCurve, Rgba, ScaledPixels};
 
-pub(crate) const SHADER: &str = r#"
+pub(crate) const SHADER: &str = concat!(include_str!("corners.wgsl"), r#"
 // Every vec4 on a 16-byte boundary, so the layout is the same under WGSL's, HLSL's and C's rules.
 struct Params {
     target_size: vec2<f32>,
@@ -48,7 +48,8 @@ struct Params {
     has_clamp: u32,
     clamp_low: f32,
     clamp_high: f32,
-    pad0: u32,
+    // Composite: 1 draws the shape's corners continuous (`CornerCurve::Continuous`).
+    corner_curve: u32,
     pad1: u32,
     pad2: u32,
 }
@@ -149,8 +150,8 @@ fn rounded_rect_sdf(p: vec2<f32>) -> f32 {
         radius = select(params.radii.z, params.radii.y, d.y < 0.0);
     }
     radius = min(radius, min(half_size.x, half_size.y));
-    let q = abs(d) - half_size + radius;
-    return length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - radius;
+    let corner = corner_shape(radius, half_size, params.corner_curve != 0u);
+    return corner_sdf(abs(d) - half_size + corner.extent, corner);
 }
 
 @fragment
@@ -205,7 +206,7 @@ fn fs_composite(in: Varyings) -> @location(0) vec4<f32> {
     }
     return color * coverage * params.opacity;
 }
-"#;
+"#);
 
 #[derive(Clone, Copy, Pod, Zeroable)]
 #[repr(C)]
@@ -237,7 +238,8 @@ struct Params {
     has_clamp: u32,
     clamp_low: f32,
     clamp_high: f32,
-    pad: [u32; 3],
+    corner_curve: u32,
+    pad: [u32; 2],
 }
 
 const _: () = assert!(std::mem::offset_of!(Params, radii) == 96 && std::mem::size_of::<Params>() == 192);
@@ -549,6 +551,7 @@ impl Backdrops {
         frame: &wgpu::Texture,
         backdrops: &[Backdrop],
         masks: &[BackdropMask<ScaledPixels>],
+        corner_curve: CornerCurve,
     ) -> Prepared {
         let size = (frame.width(), frame.height());
         let has_source = frame.usage().contains(wgpu::TextureUsages::COPY_SRC);
@@ -639,6 +642,7 @@ impl Backdrops {
                 has_clamp: backdrop.clamp.is_some() as u32,
                 clamp_low: backdrop.clamp.map_or(0., |c| c[0]),
                 clamp_high: backdrop.clamp.map_or(1., |c| c[1]),
+                corner_curve: corner_curve as u32,
                 ..base
             };
             if let Some(r) = region {
@@ -869,7 +873,8 @@ mod tests {
         let mut backdrops = Backdrops::new(&device, FORMAT);
         backdrops.begin_frame(&device, &[backdrop]);
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-        let prepared = backdrops.prepare(&device, &queue, &mut encoder, &frame, &[backdrop], &[]);
+        let prepared =
+            backdrops.prepare(&device, &queue, &mut encoder, &frame, &[backdrop], &[], CornerCurve::Circular);
         {
             let view = frame.create_view(&wgpu::TextureViewDescriptor::default());
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

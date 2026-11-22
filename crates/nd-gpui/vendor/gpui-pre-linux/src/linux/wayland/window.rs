@@ -36,7 +36,7 @@ use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1;
 use crate::linux::wayland::{display::WaylandDisplay, serial::SerialKind};
 use crate::linux::{Globals, Output, PendingActivation, WaylandClientStatePtr, get_window};
 use gpui::{
-    AnyWindowHandle, BackdropSource, Bounds, Capslock, Corners, Decorations, DevicePixels, ExternalDragPayload,
+    AnyWindowHandle, BackdropSource, Bounds, Capslock, CornerCurve, Corners, Decorations, DevicePixels, ExternalDragPayload,
     ForeignParent, FrameRequestSource, GpuSpecs, Modifiers, Pixels, PlatformAtlas, PlatformDisplay,
     PlatformFrameSignal, PlatformInput, PlatformInputHandler, PlatformWindow, Point, PromptButton,
     PromptLevel, RequestFrameOptions, ResizeEdge, Scene, Size, Tiling, WindowAppearance,
@@ -2515,6 +2515,12 @@ impl PlatformWindow for WaylandWindow {
             state.client_inset = Some(inset);
             update_window(state);
             self.0.request_redraw();
+        }
+    }
+
+    fn set_corner_curve(&self, curve: CornerCurve) {
+        if let Some(renderer) = &mut self.borrow_mut().renderer {
+            renderer.set_corner_curve(curve);
         }
     }
 

@@ -10,7 +10,7 @@ use crate::{
     Action, AnyDrag, AnyElement, AnyImageCache, AnyTooltip, AnyView, App, AppContext, Arena, Asset,
     AsyncWindowContext, AtlasTile, AvailableSpace, Backdrop, BackdropFilter, BackdropMask, BackdropSource,
     Background, BorderStyle, Bounds, BoxShadow,
-    Capslock, Context, Corners, CursorHideMode, CursorStyle, Decorations, DevicePixels,
+    Capslock, Context, CornerCurve, Corners, CursorHideMode, CursorStyle, Decorations, DevicePixels,
     DispatchActionListener, DispatchNodeId, DispatchTree, DisplayId, Edges, Effect, Entity,
     EntityId, EventEmitter, FileDropEvent, FontId, Global, GlobalElementId, GlyphId, GpuSpecs,
     Hsla, InputHandler, InputPreference, IsZero, KeyBinding, KeyContext, KeyDownEvent, KeyEvent,
@@ -3338,6 +3338,12 @@ impl Window {
     /// Sets the client-drawn corner radii so platform effects can match the window's shape.
     pub fn set_client_corner_radii(&mut self, radii: Corners<Pixels>) {
         self.platform_window.set_client_corner_radii(radii);
+    }
+
+    /// Sets the shape every rounded corner in the window is drawn in: quads,
+    /// images, shadows cut to an element and backdrops. Circular until set.
+    pub fn set_corner_curve(&mut self, curve: CornerCurve) {
+        self.platform_window.set_corner_curve(curve);
     }
 
     /// Returns the client_inset value by [`Self::set_client_inset`].
