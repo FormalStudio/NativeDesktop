@@ -355,6 +355,24 @@ fn pick_corner_radius(center_to_point: vec2<f32>, radii: Corners) -> f32 {
     }
 }
 
+// The radii of the corners sharing the nearest corner's horizontal and its
+// vertical edge.
+fn pick_corner_neighbours(center_to_point: vec2<f32>, radii: Corners) -> vec2<f32> {
+    if (center_to_point.x < 0.0) {
+        if (center_to_point.y < 0.0) {
+            return vec2<f32>(radii.top_right, radii.bottom_left);
+        } else {
+            return vec2<f32>(radii.bottom_right, radii.top_left);
+        }
+    } else {
+        if (center_to_point.y < 0.0) {
+            return vec2<f32>(radii.top_left, radii.bottom_right);
+        } else {
+            return vec2<f32>(radii.bottom_left, radii.top_right);
+        }
+    }
+}
+
 // Signed distance of the point to the quad's border - positive outside the
 // border, and negative inside.
 //
@@ -365,7 +383,8 @@ fn quad_sdf(point: vec2<f32>, bounds: Bounds, corner_radii: Corners) -> f32 {
     let center = bounds.origin + half_size;
     let center_to_point = point - center;
     let corner_radius = pick_corner_radius(center_to_point, corner_radii);
-    let corner = corner_shape(corner_radius, half_size, globals.corner_curve != 0u);
+    let corner = corner_shape(corner_radius, pick_corner_neighbours(center_to_point, corner_radii),
+        bounds.size, globals.corner_curve != 0u);
     let corner_to_point = abs(center_to_point) - half_size;
     let corner_center_to_point = corner_to_point + corner.extent;
     return corner_sdf(corner_center_to_point, corner);
@@ -583,7 +602,8 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
 
     // Radius of the nearest corner, and the shape the window draws it in
     let corner_radius = pick_corner_radius(center_to_point, quad.corner_radii);
-    let corner = corner_shape(corner_radius, half_size, globals.corner_curve != 0u);
+    let corner = corner_shape(corner_radius, pick_corner_neighbours(center_to_point, quad.corner_radii),
+        size, globals.corner_curve != 0u);
 
     // Width of the nearest borders
     let border = vec2<f32>(

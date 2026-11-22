@@ -15,13 +15,17 @@ struct CornerShape {
     exponent: f32,
 }
 
-fn corner_shape(radius: f32, half_size: vec2<f32>, continuous: bool) -> CornerShape {
+// `neighbours` holds the radii of the corners at the other end of the
+// horizontal and of the vertical edge.
+fn corner_shape(radius: f32, neighbours: vec2<f32>, size: vec2<f32>, continuous: bool) -> CornerShape {
     if (!continuous || radius <= 0.0) {
         return CornerShape(radius, 2.0);
     }
-    // Without room for the full extent the corner turns back into the circle,
-    // so a quad rounded into a disc or a capsule keeps that shape.
-    let room = min(half_size.x, half_size.y);
+    // Each edge is shared with the corner at its other end in proportion to
+    // their radii. Without room for the full extent the corner turns back into
+    // the circle, so a quad rounded into a disc or a capsule keeps that shape.
+    let share = size * radius / (radius + neighbours);
+    let room = min(share.x, share.y);
     let s = saturate((room - radius) / ((CONTINUOUS_EXTENT - 1.0) * radius));
     return CornerShape(mix(radius, CONTINUOUS_EXTENT * radius, s), mix(2.0, CONTINUOUS_EXPONENT, s));
 }

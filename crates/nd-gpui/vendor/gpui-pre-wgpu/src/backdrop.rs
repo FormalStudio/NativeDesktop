@@ -143,14 +143,19 @@ fn rounded_rect_sdf(p: vec2<f32>) -> f32 {
     let half_size = params.bounds_size * 0.5;
     let center = params.bounds_origin + half_size;
     let d = p - center;
+    // radii: top left, top right, bottom right, bottom left; `neighbours` the
+    // corners sharing this one's horizontal and vertical edge.
     var radius: f32;
+    var neighbours: vec2<f32>;
     if (d.x < 0.0) {
         radius = select(params.radii.w, params.radii.x, d.y < 0.0);
+        neighbours = select(params.radii.zx, params.radii.yw, d.y < 0.0);
     } else {
         radius = select(params.radii.z, params.radii.y, d.y < 0.0);
+        neighbours = select(params.radii.wy, params.radii.xz, d.y < 0.0);
     }
     radius = min(radius, min(half_size.x, half_size.y));
-    let corner = corner_shape(radius, half_size, params.corner_curve != 0u);
+    let corner = corner_shape(radius, neighbours, params.bounds_size, params.corner_curve != 0u);
     return corner_sdf(abs(d) - half_size + corner.extent, corner);
 }
 

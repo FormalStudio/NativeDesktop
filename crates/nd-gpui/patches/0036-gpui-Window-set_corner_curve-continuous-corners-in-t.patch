@@ -1,4 +1,4 @@
-From 557d5ee8f8c0f280ca616b7ee9e353c530fabea6 Mon Sep 17 00:00:00 2001
+From bea7f978c03d4c74d6effcca2740be64c3003d28 Mon Sep 17 00:00:00 2001
 From: FormalSnake <kyaniserni@gmail.com>
 Date: Sun, 22 Nov 2026 08:19:31 +0000
 Subject: [PATCH] gpui: Window::set_corner_curve, continuous corners in the
@@ -10,11 +10,11 @@ Subject: [PATCH] gpui: Window::set_corner_curve, continuous corners in the
  crates/gpui/src/window.rs                     |  8 ++-
  crates/gpui_linux/src/linux/wayland/window.rs |  8 ++-
  crates/gpui_linux/src/linux/x11/window.rs     |  6 ++
- crates/gpui_wgpu/src/backdrop.rs              | 21 +++---
- crates/gpui_wgpu/src/corners.wgsl             | 64 +++++++++++++++++++
- crates/gpui_wgpu/src/shaders.wgsl             | 44 +++++--------
+ crates/gpui_wgpu/src/backdrop.rs              | 26 ++++---
+ crates/gpui_wgpu/src/corners.wgsl             | 68 +++++++++++++++++++
+ crates/gpui_wgpu/src/shaders.wgsl             | 64 +++++++++--------
  crates/gpui_wgpu/src/wgpu_renderer.rs         | 23 ++++++-
- 9 files changed, 150 insertions(+), 42 deletions(-)
+ 9 files changed, 179 insertions(+), 42 deletions(-)
  create mode 100644 crates/gpui_wgpu/src/corners.wgsl
 
 diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
@@ -134,7 +134,7 @@ index 577c4a3e7c..9a2fa16043 100644
          let mut state = self.0.state.borrow_mut();
  
 diff --git a/crates/gpui_wgpu/src/backdrop.rs b/crates/gpui_wgpu/src/backdrop.rs
-index 8eec7fe374..ca2fba5f1c 100644
+index 8eec7fe374..8e238385ec 100644
 --- a/crates/gpui_wgpu/src/backdrop.rs
 +++ b/crates/gpui_wgpu/src/backdrop.rs
 @@ -10,9 +10,9 @@
@@ -159,18 +159,30 @@ index 8eec7fe374..ca2fba5f1c 100644
      pad1: u32,
      pad2: u32,
  }
-@@ -149,8 +150,8 @@ fn rounded_rect_sdf(p: vec2<f32>) -> f32 {
+@@ -142,15 +143,20 @@ fn rounded_rect_sdf(p: vec2<f32>) -> f32 {
+     let half_size = params.bounds_size * 0.5;
+     let center = params.bounds_origin + half_size;
+     let d = p - center;
++    // radii: top left, top right, bottom right, bottom left; `neighbours` the
++    // corners sharing this one's horizontal and vertical edge.
+     var radius: f32;
++    var neighbours: vec2<f32>;
+     if (d.x < 0.0) {
+         radius = select(params.radii.w, params.radii.x, d.y < 0.0);
++        neighbours = select(params.radii.zx, params.radii.yw, d.y < 0.0);
+     } else {
          radius = select(params.radii.z, params.radii.y, d.y < 0.0);
++        neighbours = select(params.radii.wy, params.radii.xz, d.y < 0.0);
      }
      radius = min(radius, min(half_size.x, half_size.y));
 -    let q = abs(d) - half_size + radius;
 -    return length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - radius;
-+    let corner = corner_shape(radius, half_size, params.corner_curve != 0u);
++    let corner = corner_shape(radius, neighbours, params.bounds_size, params.corner_curve != 0u);
 +    return corner_sdf(abs(d) - half_size + corner.extent, corner);
  }
  
  @fragment
-@@ -205,7 +206,7 @@ fn fs_composite(in: Varyings) -> @location(0) vec4<f32> {
+@@ -205,7 +211,7 @@ fn fs_composite(in: Varyings) -> @location(0) vec4<f32> {
      }
      return color * coverage * params.opacity;
  }
@@ -179,7 +191,7 @@ index 8eec7fe374..ca2fba5f1c 100644
  
  #[derive(Clone, Copy, Pod, Zeroable)]
  #[repr(C)]
-@@ -237,7 +238,8 @@ struct Params {
+@@ -237,7 +243,8 @@ struct Params {
      has_clamp: u32,
      clamp_low: f32,
      clamp_high: f32,
@@ -189,7 +201,7 @@ index 8eec7fe374..ca2fba5f1c 100644
  }
  
  const _: () = assert!(std::mem::offset_of!(Params, radii) == 96 && std::mem::size_of::<Params>() == 192);
-@@ -549,6 +551,7 @@ impl Backdrops {
+@@ -549,6 +556,7 @@ impl Backdrops {
          frame: &wgpu::Texture,
          backdrops: &[Backdrop],
          masks: &[BackdropMask<ScaledPixels>],
@@ -197,7 +209,7 @@ index 8eec7fe374..ca2fba5f1c 100644
      ) -> Prepared {
          let size = (frame.width(), frame.height());
          let has_source = frame.usage().contains(wgpu::TextureUsages::COPY_SRC);
-@@ -639,6 +642,7 @@ impl Backdrops {
+@@ -639,6 +647,7 @@ impl Backdrops {
                  has_clamp: backdrop.clamp.is_some() as u32,
                  clamp_low: backdrop.clamp.map_or(0., |c| c[0]),
                  clamp_high: backdrop.clamp.map_or(1., |c| c[1]),
@@ -205,7 +217,7 @@ index 8eec7fe374..ca2fba5f1c 100644
                  ..base
              };
              if let Some(r) = region {
-@@ -869,7 +873,8 @@ mod tests {
+@@ -869,7 +878,8 @@ mod tests {
          let mut backdrops = Backdrops::new(&device, FORMAT);
          backdrops.begin_frame(&device, &[backdrop]);
          let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
@@ -217,10 +229,10 @@ index 8eec7fe374..ca2fba5f1c 100644
              let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
 diff --git a/crates/gpui_wgpu/src/corners.wgsl b/crates/gpui_wgpu/src/corners.wgsl
 new file mode 100644
-index 0000000000..6c59395656
+index 0000000000..66c2c5bc28
 --- /dev/null
 +++ b/crates/gpui_wgpu/src/corners.wgsl
-@@ -0,0 +1,64 @@
+@@ -0,0 +1,68 @@
 +// The shape of a rounded corner (`CornerCurve`). A circular corner is a quarter
 +// circle of the corner radius. A continuous corner, the one macOS draws for its
 +// windows and for CALayer's continuous corner curve, is a superellipse quadrant
@@ -238,13 +250,17 @@ index 0000000000..6c59395656
 +    exponent: f32,
 +}
 +
-+fn corner_shape(radius: f32, half_size: vec2<f32>, continuous: bool) -> CornerShape {
++// `neighbours` holds the radii of the corners at the other end of the
++// horizontal and of the vertical edge.
++fn corner_shape(radius: f32, neighbours: vec2<f32>, size: vec2<f32>, continuous: bool) -> CornerShape {
 +    if (!continuous || radius <= 0.0) {
 +        return CornerShape(radius, 2.0);
 +    }
-+    // Without room for the full extent the corner turns back into the circle,
-+    // so a quad rounded into a disc or a capsule keeps that shape.
-+    let room = min(half_size.x, half_size.y);
++    // Each edge is shared with the corner at its other end in proportion to
++    // their radii. Without room for the full extent the corner turns back into
++    // the circle, so a quad rounded into a disc or a capsule keeps that shape.
++    let share = size * radius / (radius + neighbours);
++    let room = min(share.x, share.y);
 +    let s = saturate((room - radius) / ((CONTINUOUS_EXTENT - 1.0) * radius));
 +    return CornerShape(mix(radius, CONTINUOUS_EXTENT * radius, s), mix(2.0, CONTINUOUS_EXPONENT, s));
 +}
@@ -286,7 +302,7 @@ index 0000000000..6c59395656
 +    return (1.0 - norm) / max(gradient, 1e-4);
 +}
 diff --git a/crates/gpui_wgpu/src/shaders.wgsl b/crates/gpui_wgpu/src/shaders.wgsl
-index d1c5d89dad..5aecf68c1e 100644
+index d1c5d89dad..5dabcddcaa 100644
 --- a/crates/gpui_wgpu/src/shaders.wgsl
 +++ b/crates/gpui_wgpu/src/shaders.wgsl
 @@ -80,7 +80,8 @@ fn apply_contrast_and_gamma_correction3(sample: vec3<f32>, color: vec3<f32>, enh
@@ -299,7 +315,28 @@ index d1c5d89dad..5aecf68c1e 100644
  }
  
  struct GammaParams {
-@@ -357,33 +358,17 @@ fn pick_corner_radius(center_to_point: vec2<f32>, radii: Corners) -> f32 {
+@@ -354,36 +355,39 @@ fn pick_corner_radius(center_to_point: vec2<f32>, radii: Corners) -> f32 {
+     }
+ }
+ 
++// The radii of the corners sharing the nearest corner's horizontal and its
++// vertical edge.
++fn pick_corner_neighbours(center_to_point: vec2<f32>, radii: Corners) -> vec2<f32> {
++    if (center_to_point.x < 0.0) {
++        if (center_to_point.y < 0.0) {
++            return vec2<f32>(radii.top_right, radii.bottom_left);
++        } else {
++            return vec2<f32>(radii.bottom_right, radii.top_left);
++        }
++    } else {
++        if (center_to_point.y < 0.0) {
++            return vec2<f32>(radii.top_left, radii.bottom_right);
++        } else {
++            return vec2<f32>(radii.bottom_left, radii.top_right);
++        }
++    }
++}
++
  // Signed distance of the point to the quad's border - positive outside the
  // border, and negative inside.
  //
@@ -311,7 +348,8 @@ index d1c5d89dad..5aecf68c1e 100644
      let center = bounds.origin + half_size;
      let center_to_point = point - center;
      let corner_radius = pick_corner_radius(center_to_point, corner_radii);
-+    let corner = corner_shape(corner_radius, half_size, globals.corner_curve != 0u);
++    let corner = corner_shape(corner_radius, pick_corner_neighbours(center_to_point, corner_radii),
++        bounds.size, globals.corner_curve != 0u);
      let corner_to_point = abs(center_to_point) - half_size;
 -    let corner_center_to_point = corner_to_point + corner_radius;
 -    return quad_sdf_impl(corner_center_to_point, corner_radius);
@@ -337,18 +375,19 @@ index d1c5d89dad..5aecf68c1e 100644
  }
  
  // Abstract away the final color transformation based on the
-@@ -596,8 +581,9 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
+@@ -596,8 +600,10 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
      // minimum distance between the center of the pixel and the edge.
      let antialias_threshold = 0.5;
  
 -    // Radius of the nearest corner
 +    // Radius of the nearest corner, and the shape the window draws it in
      let corner_radius = pick_corner_radius(center_to_point, quad.corner_radii);
-+    let corner = corner_shape(corner_radius, half_size, globals.corner_curve != 0u);
++    let corner = corner_shape(corner_radius, pick_corner_neighbours(center_to_point, quad.corner_radii),
++        size, globals.corner_curve != 0u);
  
      // Width of the nearest borders
      let border = vec2<f32>(
-@@ -620,9 +606,9 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
+@@ -620,9 +626,9 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
      // the point into the bottom right quadrant. Both components are <= 0.
      let corner_to_point = abs(center_to_point) - half_size;
  
@@ -360,7 +399,7 @@ index d1c5d89dad..5aecf68c1e 100644
  
      // Whether the nearest point on the border is rounded
      let is_near_rounded_corner =
-@@ -655,7 +641,7 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
+@@ -655,7 +661,7 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
  
      // Signed distance of the point to the outside edge of the quad's border. It
      // is positive outside this edge, and negative inside.
@@ -369,7 +408,7 @@ index d1c5d89dad..5aecf68c1e 100644
  
      // Approximate signed distance of the point to the inside edge of the quad's
      // border. It is negative outside this edge (within the border), and
-@@ -674,11 +660,13 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
+@@ -674,11 +680,13 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
          // Fast path for points that must be outside the inner edge.
          inner_sdf = -1.0;
      } else if (reduced_border.x == reduced_border.y) {
