@@ -39,3 +39,4 @@
 0040-gpui-mix-a-share-of-a-backdrop-s-unblurred-region-in.patch
 0041-gpui_linux-read-plain-text-plain-and-count-clipboard-selec.patch
 0042-gpui_linux-take-window-focus-from-xdg_toplevel-activated.patch
+0043-gpui_linux-reset-modifiers-when-the-keyboard-leaves-.patch

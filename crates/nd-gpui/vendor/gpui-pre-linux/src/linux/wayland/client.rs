@@ -927,6 +927,16 @@ impl WaylandClientState {
         self.repeat.cancel();
         self.enter_token.take();
         self.restore_cursor_after_hide();
+        let inputs = self.end_keys();
+        let window = self.keyboard_focused_window.take()?;
+        Some((window, inputs))
+    }
+
+    /// What a keyboard leaving its window or going away ends: the composition, the held
+    /// keys and the modifiers. The seat's state is reset even with no window to tell, so
+    /// a keyboard removed after its leave, or a leave for a surface already destroyed,
+    /// leaves nothing held for the next window it enters.
+    fn end_keys(&mut self) -> Vec<PlatformInput> {
         if let Some(ref mut compose) = self.compose_state {
             compose.reset();
         }
@@ -939,8 +949,7 @@ impl WaylandClientState {
                 capslock: self.capslock,
             }));
         }
-        let window = self.keyboard_focused_window.take()?;
-        Some((window, inputs))
+        inputs
     }
 
     /// Releases the seat's pointer. Nor does a leave follow a removed pointer: a window
@@ -2431,13 +2440,9 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                 // Prevent keyboard events from repeating after opening e.g. a file chooser and closing it quickly
                 state.repeat.current_id += 1;
                 state.restore_cursor_after_hide();
+                let inputs = state.end_keys();
 
                 if let Some(window) = keyboard_focused_window {
-                    if let Some(ref mut compose) = state.compose_state {
-                        compose.reset();
-                    }
-                    state.pre_edit_text.take();
-                    let inputs = state.release_pressed_keys();
                     let unfocus = state
                         .keyboard_activated
                         .take_if(|focused| focused.ptr_eq(&window))
