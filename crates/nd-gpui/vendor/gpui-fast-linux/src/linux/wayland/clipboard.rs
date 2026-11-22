@@ -8,6 +8,7 @@ use calloop::{LoopHandle, PostAction};
 use filedescriptor::Pipe;
 use strum::IntoEnumIterator;
 use wayland_client::{Connection, protocol::wl_data_offer::WlDataOffer};
+use wayland_protocols::ext::data_control::v1::client::ext_data_control_offer_v1::ExtDataControlOfferV1;
 use wayland_protocols::wp::primary_selection::zv1::client::zwp_primary_selection_offer_v1::ZwpPrimarySelectionOfferV1;
 
 use crate::linux::platform::{PIPE_READ_TIMEOUT, read_fd_with_timeout};
@@ -93,8 +94,17 @@ pub(crate) struct Clipboard {
     // External clipboard
     cached_read: Option<ClipboardItem>,
     current_offer: Option<DataOffer<WlDataOffer>>,
+    /// With data control bound, its offer of the selection (None when there is no
+    /// selection). Reads take it over the data device's, which follows the focus.
+    control_offer: Option<Option<DataOffer<ExtDataControlOfferV1>>>,
     cached_primary_read: Option<ClipboardItem>,
     current_primary_offer: Option<DataOffer<ZwpPrimarySelectionOfferV1>>,
+}
+
+/// What an offer of the selection holds: this client's own copy, or another's content.
+enum Read {
+    Own,
+    Foreign(ClipboardItem),
 }
 
 pub(crate) trait ReceiveData {
@@ -113,6 +123,12 @@ impl ReceiveData for ZwpPrimarySelectionOfferV1 {
     }
 }
 
+impl ReceiveData for ExtDataControlOfferV1 {
+    fn receive_data(&self, mime_type: String, fd: BorrowedFd<'_>) {
+        self.receive(mime_type, fd);
+    }
+}
+
 #[derive(Clone, Debug)]
 /// Wrapper for `WlDataOffer` and `ZwpPrimarySelectionOfferV1`, used to help track mime types.
 pub(crate) struct DataOffer<T: ReceiveData> {
@@ -125,6 +141,13 @@ impl<T: ReceiveData> DataOffer<T> {
         Self {
             inner: offer,
             mime_types: Vec::new(),
+        }
+    }
+
+    pub fn with_mime_types(offer: T, mime_types: Vec<String>) -> Self {
+        Self {
+            inner: offer,
+            mime_types,
         }
     }
 
@@ -153,6 +176,15 @@ impl<T: ReceiveData> DataOffer<T> {
                 None
             }
         }
+    }
+
+    fn read(&self, self_mime: &str, connection: &Connection) -> Option<Read> {
+        if self.has_mime_type(self_mime) {
+            return Some(Read::Own);
+        }
+        self.read_text(connection)
+            .or_else(|| self.read_image(connection))
+            .map(Read::Foreign)
     }
 
     fn read_text(&self, connection: &Connection) -> Option<ClipboardItem> {
@@ -205,6 +237,7 @@ impl Clipboard {
 
             cached_read: None,
             current_offer: None,
+            control_offer: None,
             cached_primary_read: None,
             current_primary_offer: None,
         }
@@ -223,8 +256,19 @@ impl Clipboard {
     }
 
     pub fn set_offer(&mut self, data_offer: Option<DataOffer<WlDataOffer>>) {
-        self.cached_read = None;
+        if self.control_offer.is_none() {
+            self.cached_read = None;
+        }
         self.current_offer = data_offer;
+    }
+
+    /// The data control device's offer of a new selection, `Some(None)` for none, or
+    /// None once that device is gone.
+    pub fn set_control_offer(&mut self, offer: Option<Option<DataOffer<ExtDataControlOfferV1>>>) {
+        self.cached_read = None;
+        if let Some(Some(previous)) = std::mem::replace(&mut self.control_offer, offer) {
+            previous.inner.destroy();
+        }
     }
 
     pub fn set_primary_offer(&mut self, data_offer: Option<DataOffer<ZwpPrimarySelectionOfferV1>>) {
@@ -253,21 +297,20 @@ impl Clipboard {
     }
 
     pub fn read(&mut self) -> Option<ClipboardItem> {
-        let offer = self.current_offer.as_ref()?;
         if let Some(cached) = self.cached_read.clone() {
             return Some(cached);
         }
-
-        if offer.has_mime_type(&self.self_mime) {
-            return self.contents.clone();
+        let read = match &self.control_offer {
+            Some(offer) => offer.as_ref()?.read(&self.self_mime, &self.connection),
+            None => self.current_offer.as_ref()?.read(&self.self_mime, &self.connection),
+        };
+        match read? {
+            Read::Own => self.contents.clone(),
+            Read::Foreign(item) => {
+                self.cached_read = Some(item.clone());
+                Some(item)
+            }
         }
-
-        let item = offer
-            .read_text(&self.connection)
-            .or_else(|| offer.read_image(&self.connection))?;
-
-        self.cached_read = Some(item.clone());
-        Some(item)
     }
 
     pub fn read_primary(&mut self) -> Option<ClipboardItem> {

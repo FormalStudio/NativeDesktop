@@ -1004,6 +1004,7 @@ impl WaylandClientState {
         for (offer, _) in self.data_control_offers.drain(..) {
             offer.destroy();
         }
+        self.clipboard.set_control_offer(None);
         self.wl_seat.release();
         self.wl_seat_name = None;
         if let Some((name, version)) = next {
@@ -3549,10 +3550,18 @@ impl Dispatch<ext_data_control_device_v1::ExtDataControlDeviceV1, ()> for Waylan
                         .map(|(_, mime_types)| mime_types.as_slice())
                 });
                 let kind = SelectionKind::of(mime_types, &state.clipboard.self_mime());
-                selection_changed(kind);
-                for (offer, _) in state.data_control_offers.drain(..) {
-                    offer.destroy();
+                let mut selected = None;
+                for (offer, mime_types) in state.data_control_offers.drain(..) {
+                    if id.as_ref() == Some(&offer) {
+                        selected = Some(DataOffer::with_mime_types(offer, mime_types));
+                    } else {
+                        offer.destroy();
+                    }
                 }
+                // The selection is read from this offer, the one just counted, as the
+                // data device's comes only with the keyboard focus and can come later.
+                state.clipboard.set_control_offer(Some(selected));
+                selection_changed(kind);
             }
             ext_data_control_device_v1::Event::PrimarySelection { id: Some(selected) } => {
                 state.data_control_offers.retain(|(offer, _)| *offer != selected);
@@ -3564,6 +3573,7 @@ impl Dispatch<ext_data_control_device_v1::ExtDataControlDeviceV1, ()> for Waylan
                 for (offer, _) in state.data_control_offers.drain(..) {
                     offer.destroy();
                 }
+                state.clipboard.set_control_offer(None);
             }
             _ => {}
         }
