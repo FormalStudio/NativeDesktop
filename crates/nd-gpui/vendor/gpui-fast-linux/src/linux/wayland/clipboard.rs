@@ -18,8 +18,20 @@ pub(crate) const TEXT_MIME_TYPES: [&str; 3] =
     ["text/plain;charset=utf-8", "UTF8_STRING", "text/plain"];
 pub(crate) const FILE_LIST_MIME_TYPE: &str = "text/uri-list";
 
-/// Text mime types that we'll accept from other programs.
-pub(crate) const ALLOWED_TEXT_MIME_TYPES: [&str; 2] = ["text/plain;charset=utf-8", "UTF8_STRING"];
+/// Text mime types that we'll accept from other programs, in order of
+/// preference. Plain `text/plain` names no charset; it is read as UTF-8, as
+/// the sources that offer only it (wl-copy, Wine, older toolkits) write it.
+pub(crate) const ALLOWED_TEXT_MIME_TYPES: [&str; 3] = ["text/plain;charset=utf-8", "UTF8_STRING", "text/plain"];
+
+/// Counts the compositor's selection events: each new clipboard offer, this
+/// client's own included, and each clear.
+static SELECTION_SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// How many times the desktop's clipboard selection has changed since the
+/// client connected. A new copy changes it even when it holds the same text.
+pub fn selection_serial() -> u64 {
+    SELECTION_SERIAL.load(std::sync::atomic::Ordering::Acquire)
+}
 
 pub(crate) struct Clipboard {
     connection: Connection,
@@ -96,11 +108,9 @@ impl<T: ReceiveData> DataOffer<T> {
     }
 
     fn read_text(&self, connection: &Connection) -> Option<ClipboardItem> {
-        let mime_type = self.mime_types.iter().find(|&mime_type| {
-            ALLOWED_TEXT_MIME_TYPES
-                .iter()
-                .any(|&allowed| allowed == mime_type)
-        })?;
+        let mime_type = ALLOWED_TEXT_MIME_TYPES
+            .iter()
+            .find(|&&allowed| self.has_mime_type(allowed))?;
         let bytes = self.read_bytes(connection, mime_type)?;
         let text_content = match String::from_utf8(bytes) {
             Ok(content) => content,
@@ -161,6 +171,7 @@ impl Clipboard {
     }
 
     pub fn set_offer(&mut self, data_offer: Option<DataOffer<WlDataOffer>>) {
+        SELECTION_SERIAL.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         self.cached_read = None;
         self.current_offer = data_offer;
     }

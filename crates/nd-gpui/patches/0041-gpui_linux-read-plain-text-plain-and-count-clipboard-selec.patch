@@ -1,0 +1,97 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: FormalSnake <kyaniserni@gmail.com>
+Date: Sun, 22 Nov 2026 07:48:20 +0000
+Subject: [PATCH] gpui_linux: read plain text/plain and count clipboard selection
+ changes
+
+A Wayland source that offers only text/plain (wl-copy, Wine) could not be
+pasted. selection_serial counts selection events, so a client can tell a
+new copy from an old one with the same text.
+---
+diff --git a/crates/gpui_linux/src/gpui_linux.rs b/crates/gpui_linux/src/gpui_linux.rs
+index 23d735e3..750b8b63 100644
+--- a/crates/gpui_linux/src/gpui_linux.rs
++++ b/crates/gpui_linux/src/gpui_linux.rs
+@@ -3,4 +3,4 @@ mod linux;
+ 
+ pub use linux::{current_platform, linux_platform};
+ #[cfg(feature = "wayland")]
+-pub use linux::set_toplevel_tag;
++pub use linux::{selection_serial, set_toplevel_tag};
+diff --git a/crates/gpui_linux/src/linux.rs b/crates/gpui_linux/src/linux.rs
+index 8e4036fd..f0909cbb 100644
+--- a/crates/gpui_linux/src/linux.rs
++++ b/crates/gpui_linux/src/linux.rs
+@@ -26,7 +26,7 @@ pub(crate) use text_system::*;
+ #[cfg(feature = "wayland")]
+ pub(crate) use wayland::*;
+ #[cfg(feature = "wayland")]
+-pub use wayland::set_toplevel_tag;
++pub use wayland::{selection_serial, set_toplevel_tag};
+ #[cfg(feature = "x11")]
+ pub(crate) use x11::*;
+ 
+diff --git a/crates/gpui_linux/src/linux/wayland.rs b/crates/gpui_linux/src/linux/wayland.rs
+index 6d929e0f..35b3dc53 100644
+--- a/crates/gpui_linux/src/linux/wayland.rs
++++ b/crates/gpui_linux/src/linux/wayland.rs
+@@ -10,6 +10,7 @@ mod window;
+ pub mod layer_shell;
+ 
+ pub(crate) use client::*;
++pub use clipboard::selection_serial;
+ pub use window::set_toplevel_tag;
+ 
+ use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape;
+diff --git a/crates/gpui_linux/src/linux/wayland/clipboard.rs b/crates/gpui_linux/src/linux/wayland/clipboard.rs
+index 86dc7da9..31dea7f1 100644
+--- a/crates/gpui_linux/src/linux/wayland/clipboard.rs
++++ b/crates/gpui_linux/src/linux/wayland/clipboard.rs
+@@ -18,8 +18,20 @@ pub(crate) const TEXT_MIME_TYPES: [&str; 3] =
+     ["text/plain;charset=utf-8", "UTF8_STRING", "text/plain"];
+ pub(crate) const FILE_LIST_MIME_TYPE: &str = "text/uri-list";
+ 
+-/// Text mime types that we'll accept from other programs.
+-pub(crate) const ALLOWED_TEXT_MIME_TYPES: [&str; 2] = ["text/plain;charset=utf-8", "UTF8_STRING"];
++/// Text mime types that we'll accept from other programs, in order of
++/// preference. Plain `text/plain` names no charset; it is read as UTF-8, as
++/// the sources that offer only it (wl-copy, Wine, older toolkits) write it.
++pub(crate) const ALLOWED_TEXT_MIME_TYPES: [&str; 3] = ["text/plain;charset=utf-8", "UTF8_STRING", "text/plain"];
++
++/// Counts the compositor's selection events: each new clipboard offer, this
++/// client's own included, and each clear.
++static SELECTION_SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
++
++/// How many times the desktop's clipboard selection has changed since the
++/// client connected. A new copy changes it even when it holds the same text.
++pub fn selection_serial() -> u64 {
++    SELECTION_SERIAL.load(std::sync::atomic::Ordering::Acquire)
++}
+ 
+ pub(crate) struct Clipboard {
+     connection: Connection,
+@@ -96,11 +108,9 @@ impl<T: ReceiveData> DataOffer<T> {
+     }
+ 
+     fn read_text(&self, connection: &Connection) -> Option<ClipboardItem> {
+-        let mime_type = self.mime_types.iter().find(|&mime_type| {
+-            ALLOWED_TEXT_MIME_TYPES
+-                .iter()
+-                .any(|&allowed| allowed == mime_type)
+-        })?;
++        let mime_type = ALLOWED_TEXT_MIME_TYPES
++            .iter()
++            .find(|&&allowed| self.has_mime_type(allowed))?;
+         let bytes = self.read_bytes(connection, mime_type)?;
+         let text_content = match String::from_utf8(bytes) {
+             Ok(content) => content,
+@@ -161,6 +171,7 @@ impl Clipboard {
+     }
+ 
+     pub fn set_offer(&mut self, data_offer: Option<DataOffer<WlDataOffer>>) {
++        SELECTION_SERIAL.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+         self.cached_read = None;
+         self.current_offer = data_offer;
+     }
+-- 
+2.50.1
