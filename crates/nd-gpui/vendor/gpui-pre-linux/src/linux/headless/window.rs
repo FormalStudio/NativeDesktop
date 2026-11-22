@@ -202,6 +202,10 @@ impl PlatformWindow for HeadlessWindow {
 
     fn update_ime_position(&self, _bounds: Bounds<Pixels>) {}
 
+    fn output_placement(&self) -> gpui::OutputPlacement {
+        gpui::OutputPlacement::Offscreen
+    }
+
     fn gpu_specs(&self) -> Option<GpuSpecs> {
         None
     }

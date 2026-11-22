@@ -37,4 +37,4 @@
 0038-gpui-tone-a-backdrop-by-its-luma-instead-of-saturati.patch
 0039-gpui-light-a-backdrop-s-edge-and-bend-its-blur-in-th.patch
 0040-gpui-mix-a-share-of-a-backdrop-s-unblurred-region-in.patch
-0035-gpui-Window-is_on_output-set-by-a-Wayland-surface-s-.patch
+0035-gpui-Window-output_placement-placed-once-the-scale-p.patch
