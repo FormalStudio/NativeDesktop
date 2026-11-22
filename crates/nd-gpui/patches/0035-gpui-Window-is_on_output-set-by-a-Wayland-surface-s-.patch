@@ -1,0 +1,105 @@
+From 5ade19f96f7197527cfcad2a36efaa875ade8c3e Mon Sep 17 00:00:00 2001
+From: FormalSnake <kyaniserni@gmail.com>
+Date: Sun, 22 Nov 2026 06:25:55 +0000
+Subject: [PATCH 35/35] gpui: Window::is_on_output, set by a Wayland surface's
+ first enter or scale event
+
+---
+ crates/gpui/src/platform.rs                   |  5 +++++
+ crates/gpui/src/window.rs                     |  7 +++++++
+ crates/gpui_linux/src/linux/wayland/window.rs | 10 ++++++++++
+ 3 files changed, 22 insertions(+)
+
+diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
+index 2397ebb204..bbe67546ac 100644
+--- a/crates/gpui/src/platform.rs
++++ b/crates/gpui/src/platform.rs
+@@ -1447,6 +1447,11 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
+     }
+     fn set_client_inset(&self, _inset: Pixels) {}
+     fn on_configure(&self, _callback: Box<dyn FnMut(Configure)>) {}
++    /// Whether the compositor has placed the window on an output: it entered one or was told
++    /// its scale (Wayland). Elsewhere a window is on its screen once created.
++    fn is_on_output(&self) -> bool {
++        true
++    }
+     fn set_client_corner_radii(&self, _radii: Corners<Pixels>) {}
+     fn gpu_specs(&self) -> Option<GpuSpecs>;
+ 
+diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
+index 730ed1e4a6..f60a57d3f6 100644
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -3335,6 +3335,13 @@ impl Window {
+         self.platform_window.on_configure(Box::new(callback));
+     }
+ 
++    /// Whether the compositor has placed the window on an output, so `scale_factor` is the
++    /// output's rather than the default (Wayland: after `enter` or a scale event). A redraw
++    /// follows the event that makes it true.
++    pub fn is_on_output(&self) -> bool {
++        self.platform_window.is_on_output()
++    }
++
+     /// Sets the client-drawn corner radii so platform effects can match the window's shape.
+     pub fn set_client_corner_radii(&mut self, radii: Corners<Pixels>) {
+         self.platform_window.set_client_corner_radii(radii);
+diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/src/linux/wayland/window.rs
+index 71f1502ca3..5e2499827c 100644
+--- a/crates/gpui_linux/src/linux/wayland/window.rs
++++ b/crates/gpui_linux/src/linux/wayland/window.rs
+@@ -275,6 +275,8 @@ pub struct WaylandWindowState {
+     /// window's exact size.
+     viewport_source: Option<Size<DevicePixels>>,
+     last_presentation: Option<gpui::PresentationTime>,
++    /// Set by the first `enter` or scale event: the scale is the output's from then on.
++    on_output: bool,
+     in_progress_window_controls: Option<WindowControls>,
+     window_controls: WindowControls,
+     client_inset: Option<Pixels>,
+@@ -824,6 +826,7 @@ impl WaylandWindowState {
+             live_resize: false,
+             viewport_source: None,
+             last_presentation: None,
++            on_output: false,
+             client,
+             appearance,
+             handle,
+@@ -1441,6 +1444,7 @@ impl WaylandWindowStatePtr {
+ 
+     pub fn handle_fractional_scale_event(&self, event: wp_fractional_scale_v1::Event) {
+         if let wp_fractional_scale_v1::Event::PreferredScale { scale } = event {
++            self.state.borrow_mut().on_output = true;
+             self.rescale(scale as f32 / 120.0);
+             self.request_redraw();
+         }
+@@ -1645,6 +1649,7 @@ impl WaylandWindowStatePtr {
+                 };
+ 
+                 state.outputs.insert(id, output.clone());
++                state.on_output = true;
+ 
+                 let previous_display = state.display.as_ref().map(|(id, _)| id.clone());
+                 let scale = state.primary_output_scale();
+@@ -1688,6 +1693,7 @@ impl WaylandWindowStatePtr {
+                 self.request_redraw();
+             }
+             wl_surface::Event::PreferredBufferScale { factor } => {
++                state.on_output = true;
+                 // We use `WpFractionalScale` instead to set the scale if it's available
+                 if state.globals.fractional_scale_manager.is_none() {
+                     state.surface.set_buffer_scale(factor);
+@@ -2538,6 +2544,10 @@ impl PlatformWindow for WaylandWindow {
+         self.borrow().last_presentation
+     }
+ 
++    fn is_on_output(&self) -> bool {
++        self.borrow().on_output
++    }
++
+     fn gpu_specs(&self) -> Option<GpuSpecs> {
+         self.borrow().renderer.as_ref()?.gpu_specs()
+     }
+-- 
+2.56.0
+

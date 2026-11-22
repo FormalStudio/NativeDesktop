@@ -34,3 +34,4 @@
 0032-gpui-mirror-a-backdrop-s-sample-region-at-its-edge-a.patch
 0033-gpui-report-the-tiled-sides-under-server-side-decorat.patch
 0034-gpui-default-a-window-s-tiling-to-what-its-client-sid.patch
+0035-gpui-Window-is_on_output-set-by-a-Wayland-surface-s-.patch
