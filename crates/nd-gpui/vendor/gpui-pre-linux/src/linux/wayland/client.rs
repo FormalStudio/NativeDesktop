@@ -371,7 +371,13 @@ pub(crate) struct WaylandClientState {
     globals: Globals,
     pub gpu_context: GpuContext,
     pub compositor_gpu: Option<CompositorGpuHint>,
-    wl_seat: wl_seat::WlSeat, // TODO: Multi seat support
+    /// The one seat the client follows, and its global's name; `None` once that global is
+    /// removed with no other seat to move to. Events from any other seat are ignored.
+    wl_seat: wl_seat::WlSeat,
+    wl_seat_name: Option<u32>,
+    /// Seats announced while one is followed, as (name, version): the next one taken when
+    /// the followed seat goes.
+    spare_seats: Vec<(u32, u32)>,
     wl_pointer: Option<wl_pointer::WlPointer>,
     pinch_gesture: Option<zwp_pointer_gesture_pinch_v1::ZwpPointerGesturePinchV1>,
     pinch_scale: f32,
@@ -418,6 +424,12 @@ pub(crate) struct WaylandClientState {
     button_pressed: Option<MouseButton>,
     mouse_focused_window: Option<WaylandWindowStatePtr>,
     keyboard_focused_window: Option<WaylandWindowStatePtr>,
+    /// A popup or layer surface the keyboard focused. These have no activated state, so
+    /// keyboard focus is their focus.
+    keyboard_activated: Option<WaylandWindowStatePtr>,
+    /// Keys pressed and delivered to `keyboard_focused_window`, with what went out for them,
+    /// released when the keyboard leaves or goes away.
+    pressed_keys: Vec<(Keycode, Keystroke)>,
     loop_handle: LoopHandle<'static, ()>,
     cursor_style: Option<CursorStyle>,
     cursor_hidden_window: Option<WaylandWindowStatePtr>,
@@ -842,6 +854,9 @@ impl WaylandClientStatePtr {
         {
             state.keyboard_focused_window = Some(window);
         }
+        state
+            .keyboard_activated
+            .take_if(|window| window.ptr_eq(&closed_window));
         if let Some(window) = state.cursor_hidden_window.take()
             && !window.ptr_eq(&closed_window)
         {
@@ -866,6 +881,124 @@ impl WaylandClientState {
         let serial = self.serial_tracker.get(SerialKind::MouseEnter);
         wl_pointer.set_cursor(serial.as_raw(), None, 0, 0);
         self.cursor_hidden_window = Some(focused_window);
+    }
+
+    /// A popup or layer surface the keyboard focused, else the activated toplevel.
+    fn active_window(&self) -> Option<WaylandWindowStatePtr> {
+        self.keyboard_activated
+            .clone()
+            .or_else(|| self.windows.values().find(|window| window.is_active()).cloned())
+    }
+
+    fn release_pressed_keys(&mut self) -> Vec<PlatformInput> {
+        self.repeat.current_keycode = None;
+        self.pressed_keys
+            .drain(..)
+            .map(|(_, keystroke)| PlatformInput::KeyUp(KeyUpEvent { keystroke }))
+            .collect()
+    }
+
+    /// Releases the seat's keyboard. No leave or key release follows a removed keyboard,
+    /// so what it started ends here: the releases of its held keys, a modifier reset and
+    /// the end of its composition, for the window it focused. That window's focus stays:
+    /// it is the compositor's to move, and a virtual keyboard (wtype, an on-screen
+    /// keyboard) comes and goes with every use.
+    fn release_keyboard(&mut self) -> Option<(WaylandWindowStatePtr, Vec<PlatformInput>)> {
+        if let Some(wl_keyboard) = self.wl_keyboard.take() {
+            wl_keyboard.release();
+        }
+        if let Some(text_input) = self.text_input.take() {
+            text_input.destroy();
+            self.ime_pre_edit = None;
+            self.composing = false;
+        }
+        self.repeat.cancel();
+        self.enter_token.take();
+        self.restore_cursor_after_hide();
+        if let Some(ref mut compose) = self.compose_state {
+            compose.reset();
+        }
+        self.pre_edit_text.take();
+        let mut inputs = self.release_pressed_keys();
+        if self.modifiers != Modifiers::default() {
+            self.modifiers = Modifiers::default();
+            inputs.push(PlatformInput::ModifiersChanged(ModifiersChangedEvent {
+                modifiers: Modifiers::default(),
+                capslock: self.capslock,
+            }));
+        }
+        let window = self.keyboard_focused_window.take()?;
+        Some((window, inputs))
+    }
+
+    /// Releases the seat's pointer. Nor does a leave follow a removed pointer: a window
+    /// left focused by it would set its cursor through a pointer that is gone.
+    fn release_pointer(&mut self) -> Option<(WaylandWindowStatePtr, Vec<PlatformInput>)> {
+        if let Some(cursor_shape_device) = self.cursor_shape_device.take() {
+            cursor_shape_device.destroy();
+        }
+        if let Some(pinch_gesture) = self.pinch_gesture.take() {
+            pinch_gesture.destroy();
+        }
+        if let Some(wl_pointer) = self.wl_pointer.take() {
+            wl_pointer.release();
+        }
+        let window = self.mouse_focused_window.take();
+        let position = self.mouse_location.take();
+        let pressed_button = self.button_pressed.take();
+        let finger_scroll = std::mem::take(&mut self.finger_scroll);
+        self.cursor_hidden_window = None;
+        self.continuous_scroll_delta = None;
+        self.discrete_scroll_delta = None;
+        self.scroll_event_received = false;
+        self.axis_stopped = false;
+        let (window, position) = (window?, position?);
+        let inputs = removed_pointer_inputs(position, pressed_button, finger_scroll, self.modifiers);
+        Some((window, inputs))
+    }
+
+    /// Leaves the followed seat, ending what its devices started as when they are removed,
+    /// and follows `next` (name, version) if there is one.
+    fn switch_seat(
+        &mut self,
+        next: Option<(u32, u32)>,
+        registry: &wl_registry::WlRegistry,
+        qh: &QueueHandle<WaylandClientStatePtr>,
+    ) -> SeatDevicesGone {
+        let gone = SeatDevicesGone {
+            keyboard: self.release_keyboard(),
+            pointer: self.release_pointer(),
+        };
+        if let Some(data_device) = self.data_device.take()
+            && data_device.version() >= wl_data_device::REQ_RELEASE_SINCE
+        {
+            data_device.release();
+        }
+        if let Some(primary_selection) = self.primary_selection.take() {
+            primary_selection.destroy();
+        }
+        self.wl_seat.release();
+        self.wl_seat_name = None;
+        if let Some((name, version)) = next {
+            let seat = registry.bind::<wl_seat::WlSeat, _, _>(name, version, qh, ());
+            self.data_device = self
+                .globals
+                .data_device_manager
+                .as_ref()
+                .map(|data_device_manager| data_device_manager.get_data_device(&seat, qh, ()));
+            self.primary_selection = self
+                .globals
+                .primary_selection_manager
+                .as_ref()
+                .map(|primary_selection_manager| primary_selection_manager.get_device(&seat, qh, ()));
+            for window in self.windows.values() {
+                window.set_seat(&seat);
+            }
+            self.globals.seat = seat.clone();
+            self.wl_seat = seat;
+            self.wl_seat_name = Some(name);
+        }
+        gone
     }
 
     fn restore_cursor_after_hide(&mut self) {
@@ -1025,7 +1158,8 @@ impl WaylandConnection {
             .context("failed to initialize Wayland registry")?;
         let qh = event_queue.handle();
 
-        let mut seat: Option<wl_seat::WlSeat> = None;
+        let mut seat: Option<(u32, wl_seat::WlSeat)> = None;
+        let mut spare_seats = Vec::new();
         #[allow(clippy::mutable_key_type)]
         let mut in_progress_outputs = HashMap::default();
         #[allow(clippy::mutable_key_type)]
@@ -1036,12 +1170,20 @@ impl WaylandConnection {
             for global in list {
                 match &global.interface[..] {
                     "wl_seat" => {
-                        seat = Some(globals.registry().bind::<wl_seat::WlSeat, _, _>(
-                            global.name,
-                            wl_seat_version(global.version)?,
-                            &qh,
-                            (),
-                        ));
+                        let version = wl_seat_version(global.version)?;
+                        if seat.is_some() {
+                            spare_seats.push((global.name, version));
+                        } else {
+                            seat = Some((
+                                global.name,
+                                globals.registry().bind::<wl_seat::WlSeat, _, _>(
+                                    global.name,
+                                    version,
+                                    &qh,
+                                    (),
+                                ),
+                            ));
+                        }
                     }
                     "wl_output" => {
                         let output = globals.registry().bind::<wl_output::WlOutput, _, _>(
@@ -1065,7 +1207,7 @@ impl WaylandConnection {
 
         let (frame_ping, frame_ping_source) =
             calloop::ping::make_ping().context("failed to create Wayland frame ping")?;
-        let seat = seat.context("Wayland compositor does not provide wl_seat")?;
+        let (seat_name, seat) = seat.context("Wayland compositor does not provide wl_seat")?;
         let foreground_executor = common.borrow().foreground_executor.clone();
         let background_executor = common.borrow().background_executor.clone();
         let globals = Globals::new(
@@ -1095,6 +1237,8 @@ impl WaylandConnection {
             gpu_context,
             compositor_gpu,
             wl_seat: seat,
+            wl_seat_name: Some(seat_name),
+            spare_seats,
             wl_pointer: None,
             wl_keyboard: None,
             pinch_gesture: None,
@@ -1155,6 +1299,8 @@ impl WaylandConnection {
             button_pressed: None,
             mouse_focused_window: None,
             keyboard_focused_window: None,
+            keyboard_activated: None,
+            pressed_keys: Vec::new(),
             loop_handle: handle.clone(),
             enter_token: None,
             cursor_style: None,
@@ -1346,7 +1492,7 @@ impl WaylandConnection {
             }
             // A window of another client takes the place of the app's own.
             _ if params.foreign_parent.is_some() => (None, None),
-            _ => (state.keyboard_focused_window.clone(), None),
+            _ => (state.active_window(), None),
         };
 
         let target_output = params.display_id.and_then(|display_id| {
@@ -1524,11 +1670,7 @@ impl WaylandConnection {
     }
 
     pub(crate) fn active_window(&self) -> Option<AnyWindowHandle> {
-        self.0
-            .borrow_mut()
-            .keyboard_focused_window
-            .as_ref()
-            .map(|window| window.handle())
+        self.0.borrow().active_window().map(|window| window.handle())
     }
 
     pub(crate) fn window_stack(&self) -> Option<Vec<AnyWindowHandle>> {
@@ -1550,8 +1692,7 @@ impl WaylandConnection {
             }
         }
 
-        let client_state = self.0.borrow();
-        let active_window = client_state.keyboard_focused_window.as_ref();
+        let active_window = self.0.borrow().active_window();
         inner(active_window.map(|aw| aw.surface()))
     }
 }
@@ -1643,14 +1784,15 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for WaylandClientStat
                         log::error!("ignoring wl_seat below the required version");
                         return;
                     };
-                    if let Some(wl_pointer) = state.wl_pointer.take() {
-                        wl_pointer.release();
+                    // The followed seat stays until its global goes; a client with none
+                    // follows the new one.
+                    if state.wl_seat_name.is_some() {
+                        state.spare_seats.push((name, version));
+                    } else {
+                        let gone = state.switch_seat(Some((name, version)), registry, qh);
+                        drop(state);
+                        gone.deliver();
                     }
-                    if let Some(wl_keyboard) = state.wl_keyboard.take() {
-                        wl_keyboard.release();
-                    }
-                    state.wl_seat.release();
-                    state.wl_seat = registry.bind::<wl_seat::WlSeat, _, _>(name, version, qh, ());
                 }
                 "wl_output" => {
                     let Ok(version) = wl_output_version(version) else {
@@ -1667,7 +1809,14 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for WaylandClientStat
                 }
                 _ => {}
             },
+            wl_registry::Event::GlobalRemove { name } if state.wl_seat_name == Some(name) => {
+                let next = (!state.spare_seats.is_empty()).then(|| state.spare_seats.remove(0));
+                let gone = state.switch_seat(next, registry, qh);
+                drop(state);
+                gone.deliver();
+            }
             wl_registry::Event::GlobalRemove { name } => {
+                state.spare_seats.retain(|(spare, _)| *spare != name);
                 let Some(id) = state.output_globals.remove(&name) else {
                     return;
                 };
@@ -2071,6 +2220,29 @@ fn removed_pointer_inputs(
     inputs
 }
 
+/// What a seat's removed devices leave for the windows they focused.
+#[derive(Default)]
+struct SeatDevicesGone {
+    keyboard: Option<(WaylandWindowStatePtr, Vec<PlatformInput>)>,
+    pointer: Option<(WaylandWindowStatePtr, Vec<PlatformInput>)>,
+}
+
+impl SeatDevicesGone {
+    /// Runs with the client state released: windows call back into it.
+    fn deliver(self) {
+        if let Some((window, inputs)) = self.keyboard {
+            window.end_keyboard_input(inputs);
+        }
+        if let Some((window, inputs)) = self.pointer {
+            window.pointer_removed();
+            for input in inputs {
+                window.handle_input(input);
+            }
+            window.set_hovered(false);
+        }
+    }
+}
+
 impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
     fn event(
         state: &mut Self,
@@ -2086,13 +2258,17 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
         {
             let client = state.get_client();
             let mut state = client.borrow_mut();
+            // Another seat's devices, or ones queued from a seat the client has left, are
+            // not the ones it binds.
+            if *seat != state.wl_seat || state.wl_seat_name.is_none() {
+                return;
+            }
             // A seat resends its capabilities whenever a device comes or goes (a virtual
             // keyboard, a mouse waking up). Rebinding a device that is still there makes a
             // new wl_pointer whose enter some compositors send at -1,-1 while the cursor
             // rests on the surface, so clicks miss until the pointer moves. Bind what was
             // added, release what was removed, and keep the rest.
-            let mut keyboard_left = None;
-            let mut pointer_left = None;
+            let mut gone = SeatDevicesGone::default();
             let keyboard = seat_device(
                 state.wl_keyboard.is_some(),
                 capabilities.contains(wl_seat::Capability::Keyboard),
@@ -2106,39 +2282,7 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
                         .map(|text_input_manager| text_input_manager.get_text_input(seat, qh, ()));
                     state.wl_keyboard = Some(seat.get_keyboard(qh, ()));
                 }
-                SeatDevice::Release => {
-                    if let Some(wl_keyboard) = state.wl_keyboard.take() {
-                        wl_keyboard.release();
-                    }
-                    if let Some(text_input) = state.text_input.take() {
-                        text_input.destroy();
-                        state.ime_pre_edit = None;
-                        state.composing = false;
-                    }
-                    // No leave or key release follows a removed keyboard: its held keys,
-                    // modifiers and composition end here. The window's focus does not.
-                    // The compositor still has the window focused, and a virtual keyboard
-                    // (wtype, an on-screen keyboard) comes and goes with every use; the
-                    // next keyboard's enter moves the focus if it changed.
-                    state.repeat.cancel();
-                    state.enter_token.take();
-                    state.restore_cursor_after_hide();
-                    if let Some(ref mut compose) = state.compose_state {
-                        compose.reset();
-                    }
-                    state.pre_edit_text.take();
-                    let had_modifiers = state.modifiers != Modifiers::default();
-                    state.modifiers = Modifiers::default();
-                    if let Some(window) = state.keyboard_focused_window.clone() {
-                        let modifiers = had_modifiers.then(|| {
-                            PlatformInput::ModifiersChanged(ModifiersChangedEvent {
-                                modifiers: Modifiers::default(),
-                                capslock: state.capslock,
-                            })
-                        });
-                        keyboard_left = Some((window, modifiers));
-                    }
-                }
+                SeatDevice::Release => gone.keyboard = state.release_keyboard(),
                 SeatDevice::Keep => {}
             }
             let pointer = seat_device(
@@ -2163,53 +2307,11 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
                     );
                     state.wl_pointer = Some(pointer);
                 }
-                SeatDevice::Release => {
-                    if let Some(cursor_shape_device) = state.cursor_shape_device.take() {
-                        cursor_shape_device.destroy();
-                    }
-                    if let Some(pinch_gesture) = state.pinch_gesture.take() {
-                        pinch_gesture.destroy();
-                    }
-                    if let Some(wl_pointer) = state.wl_pointer.take() {
-                        wl_pointer.release();
-                    }
-                    // Nor does a leave follow a removed pointer: a window left focused
-                    // by it would set its cursor through a pointer that is gone.
-                    let window = state.mouse_focused_window.take();
-                    let position = state.mouse_location.take();
-                    let pressed_button = state.button_pressed.take();
-                    let finger_scroll = std::mem::take(&mut state.finger_scroll);
-                    state.cursor_hidden_window = None;
-                    state.continuous_scroll_delta = None;
-                    state.discrete_scroll_delta = None;
-                    state.scroll_event_received = false;
-                    state.axis_stopped = false;
-                    if let (Some(window), Some(position)) = (window, position) {
-                        let inputs = removed_pointer_inputs(
-                            position,
-                            pressed_button,
-                            finger_scroll,
-                            state.modifiers,
-                        );
-                        pointer_left = Some((window, inputs));
-                    }
-                }
+                SeatDevice::Release => gone.pointer = state.release_pointer(),
                 SeatDevice::Keep => {}
             }
             drop(state);
-            if let Some((window, modifiers)) = keyboard_left {
-                window.handle_ime(ImeInput::DeleteText);
-                if let Some(modifiers) = modifiers {
-                    window.handle_input(modifiers);
-                }
-            }
-            if let Some((window, inputs)) = pointer_left {
-                window.pointer_removed();
-                for input in inputs {
-                    window.handle_input(input);
-                }
-                window.set_hovered(false);
-            }
+            gone.deliver();
         }
     }
 }
@@ -2273,16 +2375,20 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
             }
             wl_keyboard::Event::Enter { surface, .. } => {
                 let window = get_window(&mut state, &surface.id());
-                // A window a removed keyboard left focused gets no leave of its own.
-                let previous = std::mem::replace(&mut state.keyboard_focused_window, window.clone())
-                    .filter(|previous| window.as_ref().is_none_or(|window| !previous.ptr_eq(window)));
+                state.keyboard_focused_window = window.clone();
                 state.enter_token = Some(());
+                // A toplevel's focus comes from its configure's activated state. A popup
+                // or layer surface has none: the keyboard's focus is its focus, kept when
+                // a keyboard goes away and moved by the next keyboard's enter.
+                let focused = window.filter(|window| window.toplevel().is_none());
+                let previous = std::mem::replace(&mut state.keyboard_activated, focused.clone())
+                    .filter(|previous| focused.as_ref().is_none_or(|window| !previous.ptr_eq(window)));
                 drop(state);
 
                 if let Some(previous) = previous {
                     previous.set_focused(false);
                 }
-                if let Some(window) = window {
+                if let Some(window) = focused {
                     window.set_focused(true);
                 }
             }
@@ -2299,9 +2405,16 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                         compose.reset();
                     }
                     state.pre_edit_text.take();
+                    let inputs = state.release_pressed_keys();
+                    let unfocus = state
+                        .keyboard_activated
+                        .take_if(|focused| focused.ptr_eq(&window))
+                        .is_some();
                     drop(state);
-                    window.handle_ime(ImeInput::DeleteText);
-                    window.set_focused(false);
+                    window.end_keyboard_input(inputs);
+                    if unfocus {
+                        window.set_focused(false);
+                    }
                 }
             }
             wl_keyboard::Event::Modifiers {
@@ -2419,6 +2532,8 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
 
                         state.repeat.current_id += 1;
                         state.repeat.current_keycode = Some(keycode);
+                        state.pressed_keys.retain(|(pressed, _)| *pressed != keycode);
+                        state.pressed_keys.push((keycode, keystroke.clone()));
 
                         let rate = state.repeat.characters_per_second;
                         let repeat_interval = Duration::from_secs(1) / rate.max(1);
@@ -2467,6 +2582,7 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                         if state.repeat.current_keycode == Some(keycode) {
                             state.repeat.current_keycode = None;
                         }
+                        state.pressed_keys.retain(|(pressed, _)| *pressed != keycode);
 
                         drop(state);
                         focused_window.handle_input(input);

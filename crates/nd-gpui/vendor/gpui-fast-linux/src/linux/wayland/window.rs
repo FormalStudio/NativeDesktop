@@ -73,6 +73,10 @@ pub(crate) struct Callbacks {
     appearance_changed: Option<Box<dyn FnMut()>>,
     button_layout_changed: Option<Box<dyn FnMut()>>,
     configure: Option<Box<dyn FnMut(gpui::Configure)>>,
+    /// What a keyboard that went away or left started and has to end (key releases, a
+    /// modifier reset, marked text), held while the input callback is busy.
+    ended_inputs: Vec<gpui::PlatformInput>,
+    delete_marked: bool,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1105,6 +1109,14 @@ impl WaylandWindowStatePtr {
         self.state.borrow().surface.clone()
     }
 
+    pub fn is_active(&self) -> bool {
+        self.state.borrow().active
+    }
+
+    pub fn set_seat(&self, seat: &wl_seat::WlSeat) {
+        self.state.borrow_mut().globals.seat = seat.clone();
+    }
+
     pub fn toplevel(&self) -> Option<xdg_toplevel::XdgToplevel> {
         self.state.borrow().surface_state.toplevel().cloned()
     }
@@ -1472,9 +1484,11 @@ impl WaylandWindowStatePtr {
                 let mut maximized = false;
                 let mut resizing = false;
                 let mut visibility = WindowVisibility::Visible;
+                let mut activated = false;
 
                 for state in states {
                     match state {
+                        xdg_toplevel::State::Activated => activated = true,
                         xdg_toplevel::State::Maximized => {
                             maximized = true;
                         }
@@ -1514,6 +1528,15 @@ impl WaylandWindowStatePtr {
                     visibility,
                     tiling,
                 });
+                // The compositor's own statement of which toplevel has the focus. Keyboard
+                // enter and leave only route keys: a keyboard can go away (a virtual one
+                // comes and goes with each use) while the window keeps the focus, and the
+                // focus can move to another client while no keyboard exists.
+                let changed = state.active != activated;
+                drop(state);
+                if changed {
+                    self.set_focused(activated);
+                }
 
                 false
             }
@@ -1829,6 +1852,7 @@ impl WaylandWindowStatePtr {
         if let Some(mut fun) = callback {
             let result = fun(input.clone());
             self.callbacks.borrow_mut().input = Some(fun);
+            self.flush_ended_input();
             if !result.propagate {
                 return;
             }
@@ -1843,6 +1867,47 @@ impl WaylandWindowStatePtr {
                 input_handler.replace_text_in_range(None, key_char);
                 self.state.borrow_mut().input_handler = Some(input_handler);
             }
+        }
+    }
+
+    /// Ends what a keyboard that went away or left the window started: its marked text
+    /// goes, then `inputs` (its held keys' releases, a modifier reset). A blocking child
+    /// window does not stop these, or the window would keep a key down for good.
+    pub fn end_keyboard_input(&self, inputs: Vec<PlatformInput>) {
+        let mut callbacks = self.callbacks.borrow_mut();
+        callbacks.delete_marked = true;
+        callbacks.ended_inputs.extend(inputs);
+        drop(callbacks);
+        self.flush_ended_input();
+    }
+
+    // A nested event loop run from the input callback (a modal session) dispatches
+    // events while the callback is taken: what they end waits for it to return.
+    fn flush_ended_input(&self) {
+        loop {
+            let mut callbacks = self.callbacks.borrow_mut();
+            if !callbacks.delete_marked && callbacks.ended_inputs.is_empty() {
+                return;
+            }
+            let Some(mut fun) = callbacks.input.take() else {
+                return;
+            };
+            let delete_marked = std::mem::take(&mut callbacks.delete_marked);
+            let inputs = std::mem::take(&mut callbacks.ended_inputs);
+            drop(callbacks);
+            if delete_marked {
+                let input_handler = self.state.borrow_mut().input_handler.take();
+                if let Some(mut input_handler) = input_handler {
+                    if let Some(marked) = input_handler.marked_text_range() {
+                        input_handler.replace_text_in_range(Some(marked), "");
+                    }
+                    self.state.borrow_mut().input_handler = Some(input_handler);
+                }
+            }
+            for input in inputs {
+                fun(input);
+            }
+            self.callbacks.borrow_mut().input = Some(fun);
         }
     }
 
