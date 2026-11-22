@@ -77,6 +77,17 @@ pub(crate) fn selection_changed(kind: SelectionKind) {
     );
 }
 
+/// The selection count of the offer the last read took its content from.
+static READ_SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The count `selection` gave for the selection the last clipboard read took
+/// its content from. A read blocks without dispatching events, so the count can
+/// lag a newer selection; a reader matches this against the count it acted on
+/// rather than against `selection`.
+pub fn read_serial() -> u64 {
+    READ_SERIAL.load(std::sync::atomic::Ordering::Acquire)
+}
+
 /// The kind of the selection `selection` last reported.
 pub(crate) fn selection_kind() -> SelectionKind {
     selection().1
@@ -97,6 +108,8 @@ pub(crate) struct Clipboard {
     /// With data control bound, its offer of the selection (None when there is no
     /// selection). Reads take it over the data device's, which follows the focus.
     control_offer: Option<Option<DataOffer<ExtDataControlOfferV1>>>,
+    /// The selection count the control offer was counted under.
+    control_serial: u64,
     cached_primary_read: Option<ClipboardItem>,
     current_primary_offer: Option<DataOffer<ZwpPrimarySelectionOfferV1>>,
 }
@@ -238,6 +251,7 @@ impl Clipboard {
             cached_read: None,
             current_offer: None,
             control_offer: None,
+            control_serial: 0,
             cached_primary_read: None,
             current_primary_offer: None,
         }
@@ -263,9 +277,10 @@ impl Clipboard {
     }
 
     /// The data control device's offer of a new selection, `Some(None)` for none, or
-    /// None once that device is gone.
+    /// None once that device is gone. Set after the selection is counted.
     pub fn set_control_offer(&mut self, offer: Option<Option<DataOffer<ExtDataControlOfferV1>>>) {
         self.cached_read = None;
+        self.control_serial = selection().0;
         if let Some(Some(previous)) = std::mem::replace(&mut self.control_offer, offer) {
             previous.inner.destroy();
         }
@@ -297,6 +312,9 @@ impl Clipboard {
     }
 
     pub fn read(&mut self) -> Option<ClipboardItem> {
+        // Without data control the offer read is the selection counted last.
+        let serial = if self.control_offer.is_some() { self.control_serial } else { selection().0 };
+        READ_SERIAL.store(serial, std::sync::atomic::Ordering::Release);
         if let Some(cached) = self.cached_read.clone() {
             return Some(cached);
         }

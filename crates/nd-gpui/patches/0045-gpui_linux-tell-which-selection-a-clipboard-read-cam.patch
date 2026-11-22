@@ -1,0 +1,132 @@
+From 10539a0fd4e887fe8a279be48e0bffbbc151e9c9 Mon Sep 17 00:00:00 2001
+From: FormalSnake <kyaniserni@gmail.com>
+Date: Sun, 22 Nov 2026 18:18:33 +0000
+Subject: [PATCH] gpui_linux: tell which selection a clipboard read came from
+
+A read blocks on the source's pipe without dispatching events, so the
+selection count it is checked against can lag a newer selection.
+read_serial() gives the count of the offer the last read took its
+content from: with data control the count its offer came with, without
+it the count at the read.
+---
+ crates/gpui_linux/src/gpui_linux.rs           |  2 +-
+ crates/gpui_linux/src/linux.rs                |  2 +-
+ crates/gpui_linux/src/linux/wayland.rs        |  2 +-
+ crates/gpui_linux/src/linux/wayland/client.rs |  2 +-
+ .../gpui_linux/src/linux/wayland/clipboard.rs | 20 ++++++++++++++++++-
+ 5 files changed, 23 insertions(+), 5 deletions(-)
+
+diff --git a/crates/gpui_linux/src/gpui_linux.rs b/crates/gpui_linux/src/gpui_linux.rs
+index ec9a4c8780..fb048de599 100644
+--- a/crates/gpui_linux/src/gpui_linux.rs
++++ b/crates/gpui_linux/src/gpui_linux.rs
+@@ -3,4 +3,4 @@ mod linux;
+ 
+ pub use linux::{current_platform, linux_platform};
+ #[cfg(feature = "wayland")]
+-pub use linux::{SelectionKind, selection, set_toplevel_tag};
++pub use linux::{SelectionKind, read_serial, selection, set_toplevel_tag};
+diff --git a/crates/gpui_linux/src/linux.rs b/crates/gpui_linux/src/linux.rs
+index f3877d3e6b..88a93edb8f 100644
+--- a/crates/gpui_linux/src/linux.rs
++++ b/crates/gpui_linux/src/linux.rs
+@@ -26,7 +26,7 @@ pub(crate) use text_system::*;
+ #[cfg(feature = "wayland")]
+ pub(crate) use wayland::*;
+ #[cfg(feature = "wayland")]
+-pub use wayland::{SelectionKind, selection, set_toplevel_tag};
++pub use wayland::{SelectionKind, read_serial, selection, set_toplevel_tag};
+ #[cfg(feature = "x11")]
+ pub(crate) use x11::*;
+ 
+diff --git a/crates/gpui_linux/src/linux/wayland.rs b/crates/gpui_linux/src/linux/wayland.rs
+index 0a9c61e8ef..fe2e47f9fb 100644
+--- a/crates/gpui_linux/src/linux/wayland.rs
++++ b/crates/gpui_linux/src/linux/wayland.rs
+@@ -10,7 +10,7 @@ mod window;
+ pub mod layer_shell;
+ 
+ pub(crate) use client::*;
+-pub use clipboard::{SelectionKind, selection};
++pub use clipboard::{SelectionKind, read_serial, selection};
+ pub use window::set_toplevel_tag;
+ 
+ use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape;
+diff --git a/crates/gpui_linux/src/linux/wayland/client.rs b/crates/gpui_linux/src/linux/wayland/client.rs
+index 23283f31e7..b1192271b8 100644
+--- a/crates/gpui_linux/src/linux/wayland/client.rs
++++ b/crates/gpui_linux/src/linux/wayland/client.rs
+@@ -3560,8 +3560,8 @@ impl Dispatch<ext_data_control_device_v1::ExtDataControlDeviceV1, ()> for Waylan
+                 }
+                 // The selection is read from this offer, the one just counted, as the
+                 // data device's comes only with the keyboard focus and can come later.
+-                state.clipboard.set_control_offer(Some(selected));
+                 selection_changed(kind);
++                state.clipboard.set_control_offer(Some(selected));
+             }
+             ext_data_control_device_v1::Event::PrimarySelection { id: Some(selected) } => {
+                 state.data_control_offers.retain(|(offer, _)| *offer != selected);
+diff --git a/crates/gpui_linux/src/linux/wayland/clipboard.rs b/crates/gpui_linux/src/linux/wayland/clipboard.rs
+index 3896e8d928..3e9e5ef77c 100644
+--- a/crates/gpui_linux/src/linux/wayland/clipboard.rs
++++ b/crates/gpui_linux/src/linux/wayland/clipboard.rs
+@@ -77,6 +77,17 @@ pub(crate) fn selection_changed(kind: SelectionKind) {
+     );
+ }
+ 
++/// The selection count of the offer the last read took its content from.
++static READ_SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
++
++/// The count `selection` gave for the selection the last clipboard read took
++/// its content from. A read blocks without dispatching events, so the count can
++/// lag a newer selection; a reader matches this against the count it acted on
++/// rather than against `selection`.
++pub fn read_serial() -> u64 {
++    READ_SERIAL.load(std::sync::atomic::Ordering::Acquire)
++}
++
+ /// The kind of the selection `selection` last reported.
+ pub(crate) fn selection_kind() -> SelectionKind {
+     selection().1
+@@ -97,6 +108,8 @@ pub(crate) struct Clipboard {
+     /// With data control bound, its offer of the selection (None when there is no
+     /// selection). Reads take it over the data device's, which follows the focus.
+     control_offer: Option<Option<DataOffer<ExtDataControlOfferV1>>>,
++    /// The selection count the control offer was counted under.
++    control_serial: u64,
+     cached_primary_read: Option<ClipboardItem>,
+     current_primary_offer: Option<DataOffer<ZwpPrimarySelectionOfferV1>>,
+ }
+@@ -238,6 +251,7 @@ impl Clipboard {
+             cached_read: None,
+             current_offer: None,
+             control_offer: None,
++            control_serial: 0,
+             cached_primary_read: None,
+             current_primary_offer: None,
+         }
+@@ -263,9 +277,10 @@ impl Clipboard {
+     }
+ 
+     /// The data control device's offer of a new selection, `Some(None)` for none, or
+-    /// None once that device is gone.
++    /// None once that device is gone. Set after the selection is counted.
+     pub fn set_control_offer(&mut self, offer: Option<Option<DataOffer<ExtDataControlOfferV1>>>) {
+         self.cached_read = None;
++        self.control_serial = selection().0;
+         if let Some(Some(previous)) = std::mem::replace(&mut self.control_offer, offer) {
+             previous.inner.destroy();
+         }
+@@ -297,6 +312,9 @@ impl Clipboard {
+     }
+ 
+     pub fn read(&mut self) -> Option<ClipboardItem> {
++        // Without data control the offer read is the selection counted last.
++        let serial = if self.control_offer.is_some() { self.control_serial } else { selection().0 };
++        READ_SERIAL.store(serial, std::sync::atomic::Ordering::Release);
+         if let Some(cached) = self.cached_read.clone() {
+             return Some(cached);
+         }
+-- 
+2.56.0
+

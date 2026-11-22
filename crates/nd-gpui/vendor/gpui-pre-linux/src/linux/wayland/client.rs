@@ -3560,8 +3560,8 @@ impl Dispatch<ext_data_control_device_v1::ExtDataControlDeviceV1, ()> for Waylan
                 }
                 // The selection is read from this offer, the one just counted, as the
                 // data device's comes only with the keyboard focus and can come later.
-                state.clipboard.set_control_offer(Some(selected));
                 selection_changed(kind);
+                state.clipboard.set_control_offer(Some(selected));
             }
             ext_data_control_device_v1::Event::PrimarySelection { id: Some(selected) } => {
                 state.data_control_offers.retain(|(offer, _)| *offer != selected);

@@ -41,3 +41,4 @@
 0042-gpui_linux-take-window-focus-from-xdg_toplevel-activated.patch
 0043-gpui_linux-reset-modifiers-when-the-keyboard-leaves-.patch
 0044-gpui_linux-read-the-clipboard-from-the-data-control-.patch
+0045-gpui_linux-tell-which-selection-a-clipboard-read-cam.patch

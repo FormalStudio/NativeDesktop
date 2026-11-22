@@ -26,7 +26,7 @@ pub(crate) use text_system::*;
 #[cfg(feature = "wayland")]
 pub(crate) use wayland::*;
 #[cfg(feature = "wayland")]
-pub use wayland::{SelectionKind, selection, set_toplevel_tag};
+pub use wayland::{SelectionKind, read_serial, selection, set_toplevel_tag};
 #[cfg(feature = "x11")]
 pub(crate) use x11::*;
 
