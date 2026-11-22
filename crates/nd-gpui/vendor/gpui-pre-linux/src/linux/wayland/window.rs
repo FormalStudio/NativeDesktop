@@ -275,9 +275,6 @@ pub struct WaylandWindowState {
     /// window's exact size.
     viewport_source: Option<Size<DevicePixels>>,
     last_presentation: Option<gpui::PresentationTime>,
-    /// The scale protocol in use (fractional scale, else the preferred buffer scale, else the
-    /// entered outputs' scale) has applied a scale. With `outputs` it makes the window placed.
-    scaled: bool,
     in_progress_window_controls: Option<WindowControls>,
     window_controls: WindowControls,
     client_inset: Option<Pixels>,
@@ -827,7 +824,6 @@ impl WaylandWindowState {
             live_resize: false,
             viewport_source: None,
             last_presentation: None,
-            scaled: false,
             client,
             appearance,
             handle,
@@ -860,13 +856,6 @@ impl WaylandWindowState {
         if let Some(renderer) = &mut self.renderer {
             renderer.set_subpixel_layout(is_bgr);
         }
-    }
-
-    /// Whether the window takes its scale from the outputs it entered: the compositor offers
-    /// neither fractional scale nor `preferred_buffer_scale`.
-    fn scale_from_outputs(&self) -> bool {
-        self.globals.fractional_scale_manager.is_none()
-            && self.surface.version() < wl_surface::EVT_PREFERRED_BUFFER_SCALE_SINCE
     }
 
     pub fn primary_output_scale(&mut self) -> i32 {
@@ -1453,7 +1442,6 @@ impl WaylandWindowStatePtr {
     pub fn handle_fractional_scale_event(&self, event: wp_fractional_scale_v1::Event) {
         if let wp_fractional_scale_v1::Event::PreferredScale { scale } = event {
             self.rescale(scale as f32 / 120.0);
-            self.state.borrow_mut().scaled = true;
             self.request_redraw();
         }
     }
@@ -1664,11 +1652,11 @@ impl WaylandWindowStatePtr {
                     state.display.as_ref().map(|(id, _)| id) != previous_display.as_ref();
                 state.update_subpixel_layout();
 
-                if state.scale_from_outputs() {
+                // We use `PreferredBufferScale` instead to set the scale if it's available
+                if state.surface.version() < wl_surface::EVT_PREFERRED_BUFFER_SCALE_SINCE {
                     state.surface.set_buffer_scale(scale);
                     drop(state);
                     self.rescale(scale as f32);
-                    self.state.borrow_mut().scaled = true;
                 } else {
                     drop(state);
                 }
@@ -1686,8 +1674,8 @@ impl WaylandWindowStatePtr {
                     state.display.as_ref().map(|(id, _)| id) != previous_display.as_ref();
                 state.update_subpixel_layout();
 
-                // Off every output the window keeps its last scale until an output gives it one.
-                if state.scale_from_outputs() && !state.outputs.is_empty() {
+                // We use `PreferredBufferScale` instead to set the scale if it's available
+                if state.surface.version() < wl_surface::EVT_PREFERRED_BUFFER_SCALE_SINCE {
                     state.surface.set_buffer_scale(scale);
                     drop(state);
                     self.rescale(scale as f32);
@@ -1705,7 +1693,6 @@ impl WaylandWindowStatePtr {
                     state.surface.set_buffer_scale(factor);
                     drop(state);
                     self.rescale(factor as f32);
-                    self.state.borrow_mut().scaled = true;
                     self.request_redraw();
                 }
             }
@@ -2079,6 +2066,7 @@ impl PlatformWindow for WaylandWindow {
             id,
             name: display.name.clone(),
             bounds: display.bounds.to_pixels(state.scale),
+            scale: display.scale,
             refresh_interval: display.refresh_interval,
         }))
     }
@@ -2549,15 +2537,6 @@ impl PlatformWindow for WaylandWindow {
 
     fn last_presentation(&self) -> Option<gpui::PresentationTime> {
         self.borrow().last_presentation
-    }
-
-    fn output_placement(&self) -> gpui::OutputPlacement {
-        let state = self.borrow();
-        if state.scaled && !state.outputs.is_empty() {
-            gpui::OutputPlacement::Placed
-        } else {
-            gpui::OutputPlacement::Pending
-        }
     }
 
     fn gpu_specs(&self) -> Option<GpuSpecs> {

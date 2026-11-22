@@ -16,6 +16,8 @@ pub(crate) struct WaylandDisplay {
     pub id: ObjectId,
     pub name: Option<String>,
     pub bounds: Bounds<Pixels>,
+    /// `wl_output.scale`.
+    pub scale: i32,
     pub refresh_interval: Option<Duration>,
 }
 
@@ -44,6 +46,10 @@ impl PlatformDisplay for WaylandDisplay {
 
     fn refresh_interval(&self) -> Option<Duration> {
         self.refresh_interval
+    }
+
+    fn scale_factor(&self) -> Option<f32> {
+        Some(self.scale as f32)
     }
 }
 

@@ -653,6 +653,13 @@ pub trait PlatformDisplay: Debug {
     /// [`Window::refresh_interval`](crate::Window::refresh_interval).
     fn refresh_interval(&self) -> Option<Duration>;
 
+    /// The scale a window on this display starts at, where the platform reports one before a
+    /// window is on it (Wayland: the output's integer `wl_output.scale`; the compositor can
+    /// still give a window a fractional scale of its own once it is there).
+    fn scale_factor(&self) -> Option<f32> {
+        None
+    }
+
     /// Get the visible bounds for this display, excluding taskbar/dock areas.
     /// This is the usable area where windows can be placed without being obscured.
     /// Defaults to the full display bounds if not overridden.
@@ -843,17 +850,6 @@ pub enum Decorations {
         /// The edge tiling state
         tiling: Tiling,
     },
-}
-
-/// Where a window stands with the output it shows on.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum OutputPlacement {
-    /// Not on an output yet, or its scale from the compositor is still to come.
-    Pending,
-    /// On an output, and `scale_factor` is the scale the compositor asked for.
-    Placed,
-    /// Never on an output: a headless or test window.
-    Offscreen,
 }
 
 /// A configure from the compositor (Wayland `xdg_surface.configure`, X11 `ConfigureNotify`),
@@ -1458,11 +1454,6 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     }
     fn set_client_inset(&self, _inset: Pixels) {}
     fn on_configure(&self, _callback: Box<dyn FnMut(Configure)>) {}
-    /// Whether `scale_factor` is the scale of the output the window shows on. A window is on its
-    /// screen once created, except under Wayland, where the compositor places it later.
-    fn output_placement(&self) -> OutputPlacement {
-        OutputPlacement::Placed
-    }
     fn set_client_corner_radii(&self, _radii: Corners<Pixels>) {}
     fn gpu_specs(&self) -> Option<GpuSpecs>;
 

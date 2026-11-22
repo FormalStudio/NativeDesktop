@@ -3335,12 +3335,6 @@ impl Window {
         self.platform_window.on_configure(Box::new(callback));
     }
 
-    /// Whether the window is on an output and `scale_factor` is that output's scale rather than
-    /// the default. A redraw follows the event that places the window.
-    pub fn output_placement(&self) -> crate::OutputPlacement {
-        self.platform_window.output_placement()
-    }
-
     /// Sets the client-drawn corner radii so platform effects can match the window's shape.
     pub fn set_client_corner_radii(&mut self, radii: Corners<Pixels>) {
         self.platform_window.set_client_corner_radii(radii);
