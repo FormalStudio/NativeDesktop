@@ -1,0 +1,82 @@
+From fca2fe15ec5d2c2c637177d64393d6ba561e18e8 Mon Sep 17 00:00:00 2001
+From: FormalSnake <kyaniserni@gmail.com>
+Date: Sun, 22 Nov 2026 07:55:03 +0000
+Subject: [PATCH 35/35] gpui: PlatformDisplay::scale_factor, a Wayland output's
+ scale before a window is on it
+
+---
+ crates/gpui/src/platform.rs                    | 7 +++++++
+ crates/gpui_linux/src/linux/wayland/client.rs  | 1 +
+ crates/gpui_linux/src/linux/wayland/display.rs | 6 ++++++
+ crates/gpui_linux/src/linux/wayland/window.rs  | 1 +
+ 4 files changed, 15 insertions(+)
+
+diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
+index 2397ebb204..ae3f33b9e7 100644
+--- a/crates/gpui/src/platform.rs
++++ b/crates/gpui/src/platform.rs
+@@ -653,6 +653,13 @@ pub trait PlatformDisplay: Debug {
+     /// [`Window::refresh_interval`](crate::Window::refresh_interval).
+     fn refresh_interval(&self) -> Option<Duration>;
+ 
++    /// The scale a window on this display starts at, where the platform reports one before a
++    /// window is on it (Wayland: the output's integer `wl_output.scale`; the compositor can
++    /// still give a window a fractional scale of its own once it is there).
++    fn scale_factor(&self) -> Option<f32> {
++        None
++    }
++
+     /// Get the visible bounds for this display, excluding taskbar/dock areas.
+     /// This is the usable area where windows can be placed without being obscured.
+     /// Defaults to the full display bounds if not overridden.
+diff --git a/crates/gpui_linux/src/linux/wayland/client.rs b/crates/gpui_linux/src/linux/wayland/client.rs
+index ba950348cf..5191046a23 100644
+--- a/crates/gpui_linux/src/linux/wayland/client.rs
++++ b/crates/gpui_linux/src/linux/wayland/client.rs
+@@ -1282,6 +1282,7 @@ impl WaylandConnection {
+                     id: id.clone(),
+                     name: output.name.clone(),
+                     bounds: output.bounds.to_pixels(output.scale as f32),
++                    scale: output.scale,
+                     refresh_interval: output.refresh_interval,
+                 }) as Rc<dyn PlatformDisplay>
+             })
+diff --git a/crates/gpui_linux/src/linux/wayland/display.rs b/crates/gpui_linux/src/linux/wayland/display.rs
+index 410f45080f..7ae841cabf 100644
+--- a/crates/gpui_linux/src/linux/wayland/display.rs
++++ b/crates/gpui_linux/src/linux/wayland/display.rs
+@@ -16,6 +16,8 @@ pub(crate) struct WaylandDisplay {
+     pub id: ObjectId,
+     pub name: Option<String>,
+     pub bounds: Bounds<Pixels>,
++    /// `wl_output.scale`.
++    pub scale: i32,
+     pub refresh_interval: Option<Duration>,
+ }
+ 
+@@ -45,6 +47,10 @@ impl PlatformDisplay for WaylandDisplay {
+     fn refresh_interval(&self) -> Option<Duration> {
+         self.refresh_interval
+     }
++
++    fn scale_factor(&self) -> Option<f32> {
++        Some(self.scale as f32)
++    }
+ }
+ 
+ /// Converts a `wl_output.mode` refresh rate, in millihertz, to an interval.
+diff --git a/crates/gpui_linux/src/linux/wayland/window.rs b/crates/gpui_linux/src/linux/wayland/window.rs
+index 71f1502ca3..74730fe249 100644
+--- a/crates/gpui_linux/src/linux/wayland/window.rs
++++ b/crates/gpui_linux/src/linux/wayland/window.rs
+@@ -2066,6 +2066,7 @@ impl PlatformWindow for WaylandWindow {
+             id,
+             name: display.name.clone(),
+             bounds: display.bounds.to_pixels(state.scale),
++            scale: display.scale,
+             refresh_interval: display.refresh_interval,
+         }))
+     }
+-- 
+2.56.0
+
