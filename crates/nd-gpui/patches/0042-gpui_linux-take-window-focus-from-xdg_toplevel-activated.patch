@@ -1,6 +1,6 @@
 From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: FormalSnake <kyaniserni@gmail.com>
-Date: Sun, 22 Nov 2026 10:53:15 +0000
+Date: Sun, 22 Nov 2026 11:21:11 +0000
 Subject: [PATCH] gpui_linux: take window focus from xdg_toplevel activated
 
 A toplevel's focus follows the activated state of its configure, the
@@ -59,7 +59,7 @@ index 35b3dc53..0a9c61e8 100644
  
  use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape;
 diff --git a/crates/gpui_linux/src/linux/wayland/client.rs b/crates/gpui_linux/src/linux/wayland/client.rs
-index ba950348..8ff149bf 100644
+index ba950348..aaeace57 100644
 --- a/crates/gpui_linux/src/linux/wayland/client.rs
 +++ b/crates/gpui_linux/src/linux/wayland/client.rs
 @@ -54,6 +54,9 @@ use wayland_protocols::wp::primary_selection::zv1::client::{
@@ -379,7 +379,27 @@ index ba950348..8ff149bf 100644
          };
  
          let target_output = params.display_id.and_then(|display_id| {
-@@ -1524,11 +1700,7 @@ impl WaylandConnection {
+@@ -1472,7 +1648,9 @@ impl WaylandConnection {
+         ) else {
+             return;
+         };
+-        if state.mouse_focused_window.is_some() || state.keyboard_focused_window.is_some() {
++        // A focused window, not a present keyboard: a copy whose shortcut came from a
++        // virtual keyboard runs after that keyboard is gone.
++        if state.mouse_focused_window.is_some() || state.active_window().is_some() {
+             state.clipboard.set_primary(item);
+             let Some(serial) = state.serial_tracker.selection_serial() else {
+                 log::warn!(
+@@ -1497,7 +1675,7 @@ impl WaylandConnection {
+         ) else {
+             return;
+         };
+-        if state.mouse_focused_window.is_some() || state.keyboard_focused_window.is_some() {
++        if state.mouse_focused_window.is_some() || state.active_window().is_some() {
+             state.clipboard.set(item);
+             let Some(serial) = state.serial_tracker.selection_serial() else {
+                 log::warn!(
+@@ -1524,11 +1702,7 @@ impl WaylandConnection {
      }
  
      pub(crate) fn active_window(&self) -> Option<AnyWindowHandle> {
@@ -392,7 +412,7 @@ index ba950348..8ff149bf 100644
      }
  
      pub(crate) fn window_stack(&self) -> Option<Vec<AnyWindowHandle>> {
-@@ -1550,8 +1722,7 @@ impl WaylandConnection {
+@@ -1550,8 +1724,7 @@ impl WaylandConnection {
              }
          }
  
@@ -402,7 +422,7 @@ index ba950348..8ff149bf 100644
          inner(active_window.map(|aw| aw.surface()))
      }
  }
-@@ -1643,14 +1814,15 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for WaylandClientStat
+@@ -1643,14 +1816,15 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for WaylandClientStat
                          log::error!("ignoring wl_seat below the required version");
                          return;
                      };
@@ -425,7 +445,7 @@ index ba950348..8ff149bf 100644
                  }
                  "wl_output" => {
                      let Ok(version) = wl_output_version(version) else {
-@@ -1667,7 +1839,14 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for WaylandClientStat
+@@ -1667,7 +1841,14 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for WaylandClientStat
                  }
                  _ => {}
              },
@@ -440,7 +460,7 @@ index ba950348..8ff149bf 100644
                  let Some(id) = state.output_globals.remove(&name) else {
                      return;
                  };
-@@ -2071,6 +2250,29 @@ fn removed_pointer_inputs(
+@@ -2071,6 +2252,29 @@ fn removed_pointer_inputs(
      inputs
  }
  
@@ -470,7 +490,7 @@ index ba950348..8ff149bf 100644
  impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
      fn event(
          state: &mut Self,
-@@ -2086,13 +2288,17 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
+@@ -2086,13 +2290,17 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
          {
              let client = state.get_client();
              let mut state = client.borrow_mut();
@@ -490,7 +510,7 @@ index ba950348..8ff149bf 100644
              let keyboard = seat_device(
                  state.wl_keyboard.is_some(),
                  capabilities.contains(wl_seat::Capability::Keyboard),
-@@ -2106,36 +2312,7 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
+@@ -2106,36 +2314,7 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
                          .map(|text_input_manager| text_input_manager.get_text_input(seat, qh, ()));
                      state.wl_keyboard = Some(seat.get_keyboard(qh, ()));
                  }
@@ -528,7 +548,7 @@ index ba950348..8ff149bf 100644
                  SeatDevice::Keep => {}
              }
              let pointer = seat_device(
-@@ -2160,54 +2337,11 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
+@@ -2160,54 +2339,11 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
                      );
                      state.wl_pointer = Some(pointer);
                  }
@@ -585,7 +605,7 @@ index ba950348..8ff149bf 100644
          }
      }
  }
-@@ -2270,11 +2404,21 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
+@@ -2270,11 +2406,21 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                  this.handle_keyboard_layout_change();
              }
              wl_keyboard::Event::Enter { surface, .. } => {
@@ -610,7 +630,7 @@ index ba950348..8ff149bf 100644
                      window.set_focused(true);
                  }
              }
-@@ -2291,9 +2435,16 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
+@@ -2291,9 +2437,16 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                          compose.reset();
                      }
                      state.pre_edit_text.take();
@@ -629,7 +649,7 @@ index ba950348..8ff149bf 100644
                  }
              }
              wl_keyboard::Event::Modifiers {
-@@ -2411,6 +2562,8 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
+@@ -2411,6 +2564,8 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
  
                          state.repeat.current_id += 1;
                          state.repeat.current_keycode = Some(keycode);
@@ -638,7 +658,7 @@ index ba950348..8ff149bf 100644
  
                          let rate = state.repeat.characters_per_second;
                          let repeat_interval = Duration::from_secs(1) / rate.max(1);
-@@ -2459,6 +2612,7 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
+@@ -2459,6 +2614,7 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                          if state.repeat.current_keycode == Some(keycode) {
                              state.repeat.current_keycode = None;
                          }
@@ -646,7 +666,7 @@ index ba950348..8ff149bf 100644
  
                          drop(state);
                          focused_window.handle_input(input);
-@@ -3188,16 +3342,23 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
+@@ -3188,16 +3344,23 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
                  }
              }
              wl_data_device::Event::Selection { id: data_offer } => {
@@ -677,7 +697,7 @@ index ba950348..8ff149bf 100644
              }
  
              // Drag and drop
-@@ -3351,6 +3512,84 @@ impl Dispatch<wl_data_offer::WlDataOffer, ()> for WaylandClientStatePtr {
+@@ -3351,6 +3514,84 @@ impl Dispatch<wl_data_offer::WlDataOffer, ()> for WaylandClientStatePtr {
      }
  }
  
@@ -762,7 +782,7 @@ index ba950348..8ff149bf 100644
  impl Dispatch<wl_data_source::WlDataSource, DataSourceKind> for WaylandClientStatePtr {
      fn event(
          this: &mut Self,
-@@ -3561,6 +3800,23 @@ mod tests {
+@@ -3561,6 +3802,23 @@ mod tests {
          assert!(repeat.is_current(repeat.current_id));
      }
  

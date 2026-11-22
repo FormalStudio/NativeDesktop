@@ -1655,7 +1655,9 @@ impl WaylandConnection {
         ) else {
             return;
         };
-        if state.mouse_focused_window.is_some() || state.keyboard_focused_window.is_some() {
+        // A focused window, not a present keyboard: a copy whose shortcut came from a
+        // virtual keyboard runs after that keyboard is gone.
+        if state.mouse_focused_window.is_some() || state.active_window().is_some() {
             state.clipboard.set_primary(item);
             let Some(serial) = state.serial_tracker.selection_serial() else {
                 log::warn!(
@@ -1680,7 +1682,7 @@ impl WaylandConnection {
         ) else {
             return;
         };
-        if state.mouse_focused_window.is_some() || state.keyboard_focused_window.is_some() {
+        if state.mouse_focused_window.is_some() || state.active_window().is_some() {
             state.clipboard.set(item);
             let Some(serial) = state.serial_tracker.selection_serial() else {
                 log::warn!(
