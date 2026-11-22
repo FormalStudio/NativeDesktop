@@ -2122,8 +2122,11 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
                         state.ime_pre_edit = None;
                         state.composing = false;
                     }
-                    // No leave or key release follows a removed keyboard: what its
-                    // leave would have ended ends here, held keys and modifiers too.
+                    // No leave or key release follows a removed keyboard: its held keys,
+                    // modifiers and composition end here. The window's focus does not.
+                    // The compositor still has the window focused, and a virtual keyboard
+                    // (wtype, an on-screen keyboard) comes and goes with every use; the
+                    // next keyboard's enter moves the focus if it changed.
                     state.repeat.cancel();
                     state.enter_token.take();
                     state.restore_cursor_after_hide();
@@ -2133,7 +2136,7 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
                     state.pre_edit_text.take();
                     let had_modifiers = state.modifiers != Modifiers::default();
                     state.modifiers = Modifiers::default();
-                    if let Some(window) = state.keyboard_focused_window.take() {
+                    if let Some(window) = state.keyboard_focused_window.clone() {
                         let modifiers = had_modifiers.then(|| {
                             PlatformInput::ModifiersChanged(ModifiersChangedEvent {
                                 modifiers: Modifiers::default(),
@@ -2206,7 +2209,6 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
                 if let Some(modifiers) = modifiers {
                     window.handle_input(modifiers);
                 }
-                window.set_focused(false);
             }
             if let Some((window, inputs)) = pointer_left {
                 window.pointer_removed();
@@ -2277,11 +2279,17 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                 this.handle_keyboard_layout_change();
             }
             wl_keyboard::Event::Enter { surface, .. } => {
-                state.keyboard_focused_window = get_window(&mut state, &surface.id());
+                let window = get_window(&mut state, &surface.id());
+                // A window a removed keyboard left focused gets no leave of its own.
+                let previous = std::mem::replace(&mut state.keyboard_focused_window, window.clone())
+                    .filter(|previous| window.as_ref().is_none_or(|window| !previous.ptr_eq(window)));
                 state.enter_token = Some(());
+                drop(state);
 
-                if let Some(window) = state.keyboard_focused_window.clone() {
-                    drop(state);
+                if let Some(previous) = previous {
+                    previous.set_focused(false);
+                }
+                if let Some(window) = window {
                     window.set_focused(true);
                 }
             }
