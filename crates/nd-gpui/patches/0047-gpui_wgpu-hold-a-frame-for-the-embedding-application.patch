@@ -1,0 +1,51 @@
+From e86ee3b58c89b436834dcd8daa494fe6541259b7 Mon Sep 17 00:00:00 2001
+From: FormalSnake <kyaniserni@gmail.com>
+Date: Sun, 22 Nov 2026 20:57:34 +0000
+Subject: [PATCH] gpui_wgpu: hold a frame for the embedding application while
+ it draws
+
+---
+ crates/gpui_wgpu/src/wgpu_context.rs  | 14 ++++++++++++++
+ crates/gpui_wgpu/src/wgpu_renderer.rs |  1 +
+ 2 files changed, 15 insertions(+)
+
+diff --git a/crates/gpui_wgpu/src/wgpu_context.rs b/crates/gpui_wgpu/src/wgpu_context.rs
+index 8f79f6e964..553846ccd9 100644
+--- a/crates/gpui_wgpu/src/wgpu_context.rs
++++ b/crates/gpui_wgpu/src/wgpu_context.rs
+@@ -153,6 +153,20 @@ pub fn adopt_device(device: AdoptedDevice) {
+     *ADOPTED.lock() = Some(device);
+ }
+ 
++static FRAME_HOLD: Mutex<Option<fn() -> Box<dyn std::any::Any>>> = Mutex::new(None);
++
++/// Call `hold` as each frame starts to draw and keep what it returns until the frame is
++/// presented, so the application that shares the device knows when GPUI is using it (to
++/// keep exit handlers from unloading the driver under a frame, for one).
++pub fn set_frame_hold(hold: fn() -> Box<dyn std::any::Any>) {
++    *FRAME_HOLD.lock() = Some(hold);
++}
++
++pub(crate) fn frame_hold() -> Option<Box<dyn std::any::Any>> {
++    let hold = *FRAME_HOLD.lock();
++    hold.map(|hold| hold())
++}
++
+ /// Whether windows render with a device of their own: none was adopted before the first
+ /// window, the adopted one could not present, or it was lost.
+ pub fn renders_with_own_device() -> bool {
+diff --git a/crates/gpui_wgpu/src/wgpu_renderer.rs b/crates/gpui_wgpu/src/wgpu_renderer.rs
+index 9e34c3437b..231f196e5a 100644
+--- a/crates/gpui_wgpu/src/wgpu_renderer.rs
++++ b/crates/gpui_wgpu/src/wgpu_renderer.rs
+@@ -1491,6 +1491,7 @@ impl WgpuRenderer {
+     }
+ 
+     pub fn draw(&mut self, scene: &Scene) -> bool {
++        let _hold = crate::wgpu_context::frame_hold();
+         #[cfg(target_family = "wasm")]
+         if self.device_lost() {
+             if matches!(self.state, RendererState::Ready { .. }) {
+-- 
+2.56.0
+

@@ -1492,6 +1492,7 @@ impl WgpuRenderer {
     }
 
     pub fn draw(&mut self, scene: &Scene) -> bool {
+        let _hold = crate::wgpu_context::frame_hold();
         #[cfg(target_family = "wasm")]
         if self.device_lost() {
             if matches!(self.state, RendererState::Ready { .. }) {
