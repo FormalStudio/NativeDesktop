@@ -168,6 +168,16 @@ pub(crate) fn frame_hold() -> Option<Box<dyn std::any::Any>> {
     hold.map(|hold| hold())
 }
 
+/// A hold taken as its owner starts to drop, kept until the owner's other fields are gone.
+#[derive(Default)]
+pub(crate) struct DropHold(Option<Box<dyn std::any::Any>>);
+
+impl DropHold {
+    pub(crate) fn take(&mut self) {
+        self.0 = frame_hold();
+    }
+}
+
 /// Whether windows render with a device of their own: none was adopted before the first
 /// window, the adopted one could not present, or it was lost.
 pub fn renders_with_own_device() -> bool {

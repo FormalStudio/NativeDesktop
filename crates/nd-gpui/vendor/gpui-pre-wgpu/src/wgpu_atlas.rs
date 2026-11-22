@@ -72,6 +72,7 @@ impl WgpuAtlas {
     }
 
     pub fn before_frame(&self) {
+        let _hold = crate::wgpu_context::frame_hold();
         let mut lock = self.0.lock();
         lock.backend.flush_uploads();
     }
@@ -92,6 +93,7 @@ impl WgpuAtlas {
     /// Clears all cached textures and tiles, forcing them to be recreated.
     /// Use this for incremental recovery when the device is still valid.
     pub fn clear(&self) {
+        let _hold = crate::wgpu_context::frame_hold();
         self.0.lock().clear(|textures| {
             textures.storage = WgpuAtlasStorage::default();
             textures.pending_uploads.clear();
@@ -101,6 +103,7 @@ impl WgpuAtlas {
     /// Handles device lost by clearing all textures and cached tiles.
     /// The atlas will lazily recreate textures as needed on subsequent frames.
     pub fn handle_device_lost(&self, context: &WgpuContext) {
+        let _hold = crate::wgpu_context::frame_hold();
         self.0.lock().clear(|textures| {
             textures.device = context.device.clone();
             textures.queue = context.queue.clone();
@@ -117,11 +120,22 @@ impl PlatformAtlas for WgpuAtlas {
         key: AtlasKey,
         build: &mut dyn FnMut() -> Result<Option<(Size<DevicePixels>, Cow<'a, [u8]>)>>,
     ) -> Result<Option<AtlasTile>> {
+        let _hold = crate::wgpu_context::frame_hold();
         self.0.lock().get_or_insert_with(key, build)
     }
 
     fn remove(&self, key: &AtlasKey) {
+        let _hold = crate::wgpu_context::frame_hold();
         self.0.lock().remove(key);
+    }
+}
+
+impl Drop for WgpuAtlas {
+    fn drop(&mut self) {
+        let _hold = crate::wgpu_context::frame_hold();
+        let textures = &mut self.0.get_mut().backend;
+        textures.storage = WgpuAtlasStorage::default();
+        textures.pending_uploads.clear();
     }
 }
 

@@ -1,0 +1,147 @@
+From 748062c4aeaf5ef8b9235bad3885861ce589fb50 Mon Sep 17 00:00:00 2001
+From: FormalSnake <kyaniserni@gmail.com>
+Date: Sun, 22 Nov 2026 20:57:34 +0000
+Subject: [PATCH] gpui_wgpu: hold the GPU for the embedding application while
+ frames, resizes, atlas work and drops use it
+
+---
+ crates/gpui_wgpu/src/wgpu_atlas.rs    | 14 ++++++++++++++
+ crates/gpui_wgpu/src/wgpu_context.rs  | 24 ++++++++++++++++++++++++
+ crates/gpui_wgpu/src/wgpu_renderer.rs | 11 +++++++++++
+ 3 files changed, 49 insertions(+)
+
+diff --git a/crates/gpui_wgpu/src/wgpu_atlas.rs b/crates/gpui_wgpu/src/wgpu_atlas.rs
+index b2a7bfeb49..73abde99b8 100644
+--- a/crates/gpui_wgpu/src/wgpu_atlas.rs
++++ b/crates/gpui_wgpu/src/wgpu_atlas.rs
+@@ -71,6 +71,7 @@ impl WgpuAtlas {
+     }
+ 
+     pub fn before_frame(&self) {
++        let _hold = crate::wgpu_context::frame_hold();
+         let mut lock = self.0.lock();
+         lock.backend.flush_uploads();
+     }
+@@ -91,6 +92,7 @@ impl WgpuAtlas {
+     /// Clears all cached textures and tiles, forcing them to be recreated.
+     /// Use this for incremental recovery when the device is still valid.
+     pub fn clear(&self) {
++        let _hold = crate::wgpu_context::frame_hold();
+         self.0.lock().clear(|textures| {
+             textures.storage = WgpuAtlasStorage::default();
+             textures.pending_uploads.clear();
+@@ -100,6 +102,7 @@ impl WgpuAtlas {
+     /// Handles device lost by clearing all textures and cached tiles.
+     /// The atlas will lazily recreate textures as needed on subsequent frames.
+     pub fn handle_device_lost(&self, context: &WgpuContext) {
++        let _hold = crate::wgpu_context::frame_hold();
+         self.0.lock().clear(|textures| {
+             textures.device = context.device.clone();
+             textures.queue = context.queue.clone();
+@@ -116,14 +119,25 @@ impl PlatformAtlas for WgpuAtlas {
+         key: AtlasKey,
+         build: &mut dyn FnMut() -> Result<Option<(Size<DevicePixels>, Cow<'a, [u8]>)>>,
+     ) -> Result<Option<AtlasTile>> {
++        let _hold = crate::wgpu_context::frame_hold();
+         self.0.lock().get_or_insert_with(key, build)
+     }
+ 
+     fn remove(&self, key: &AtlasKey) {
++        let _hold = crate::wgpu_context::frame_hold();
+         self.0.lock().remove(key);
+     }
+ }
+ 
++impl Drop for WgpuAtlas {
++    fn drop(&mut self) {
++        let _hold = crate::wgpu_context::frame_hold();
++        let textures = &mut self.0.get_mut().backend;
++        textures.storage = WgpuAtlasStorage::default();
++        textures.pending_uploads.clear();
++    }
++}
++
+ impl AtlasBackend for WgpuAtlasTextures {
+     fn insert(
+         &mut self,
+diff --git a/crates/gpui_wgpu/src/wgpu_context.rs b/crates/gpui_wgpu/src/wgpu_context.rs
+index 8f79f6e964..e023e4de59 100644
+--- a/crates/gpui_wgpu/src/wgpu_context.rs
++++ b/crates/gpui_wgpu/src/wgpu_context.rs
+@@ -153,6 +153,30 @@ pub fn adopt_device(device: AdoptedDevice) {
+     *ADOPTED.lock() = Some(device);
+ }
+ 
++static FRAME_HOLD: Mutex<Option<fn() -> Box<dyn std::any::Any>>> = Mutex::new(None);
++
++/// Call `hold` as each frame starts to draw and keep what it returns until the frame is
++/// presented, so the application that shares the device knows when GPUI is using it (to
++/// keep exit handlers from unloading the driver under a frame, for one).
++pub fn set_frame_hold(hold: fn() -> Box<dyn std::any::Any>) {
++    *FRAME_HOLD.lock() = Some(hold);
++}
++
++pub(crate) fn frame_hold() -> Option<Box<dyn std::any::Any>> {
++    let hold = *FRAME_HOLD.lock();
++    hold.map(|hold| hold())
++}
++
++/// A hold taken as its owner starts to drop, kept until the owner's other fields are gone.
++#[derive(Default)]
++pub(crate) struct DropHold(Option<Box<dyn std::any::Any>>);
++
++impl DropHold {
++    pub(crate) fn take(&mut self) {
++        self.0 = frame_hold();
++    }
++}
++
+ /// Whether windows render with a device of their own: none was adopted before the first
+ /// window, the adopted one could not present, or it was lost.
+ pub fn renders_with_own_device() -> bool {
+diff --git a/crates/gpui_wgpu/src/wgpu_renderer.rs b/crates/gpui_wgpu/src/wgpu_renderer.rs
+index 9e34c3437b..83fb1086c7 100644
+--- a/crates/gpui_wgpu/src/wgpu_renderer.rs
++++ b/crates/gpui_wgpu/src/wgpu_renderer.rs
+@@ -276,6 +276,14 @@ pub struct WgpuRenderer {
+     /// Whether the surface can be copied from, which backdrops need: it is configured so the
+     /// first time a frame draws one.
+     surface_copy_src: bool,
++    /// The embedding application's hold while the fields above drop. Last, so it drops last.
++    drop_hold: crate::wgpu_context::DropHold,
++}
++
++impl Drop for WgpuRenderer {
++    fn drop(&mut self) {
++        self.drop_hold.take();
++    }
+ }
+ 
+ /// How far a live resize lets the surface outgrow the drawable before it reconfigures, in device
+@@ -793,6 +801,7 @@ impl WgpuRenderer {
+             last_surface_error: None,
+             needs_redraw: false,
+             surface_copy_src,
++            drop_hold: Default::default(),
+         })
+     }
+ }
+@@ -1369,6 +1378,7 @@ impl WgpuRenderer {
+     }
+ 
+     fn configure_surface(&mut self, width: u32, height: u32) {
++        let _hold = crate::wgpu_context::frame_hold();
+         let clamped_width = width.min(self.max_texture_size);
+         let clamped_height = height.min(self.max_texture_size);
+         if clamped_width.max(1) == self.surface_config.width
+@@ -1491,6 +1501,7 @@ impl WgpuRenderer {
+     }
+ 
+     pub fn draw(&mut self, scene: &Scene) -> bool {
++        let _hold = crate::wgpu_context::frame_hold();
+         #[cfg(target_family = "wasm")]
+         if self.device_lost() {
+             if matches!(self.state, RendererState::Ready { .. }) {
+-- 
+2.56.0
+

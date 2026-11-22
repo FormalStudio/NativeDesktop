@@ -136,8 +136,6 @@ pub(crate) struct WgpuPipelines {
     pub(crate) poly_sprites: wgpu::RenderPipeline,
     #[allow(dead_code)]
     surfaces: wgpu::RenderPipeline,
-    surface_textures: wgpu::RenderPipeline,
-    surface_textures_opaque: wgpu::RenderPipeline,
 }
 
 /// One frame allocation of instance data, ready to bind.
@@ -158,8 +156,6 @@ struct InstanceBindings {
     monochrome_sprites: InstanceBinding,
     subpixel_sprites: InstanceBinding,
     polychrome_sprites: InstanceBinding,
-    /// Embedder textures, drawn as polychrome sprites over the whole texture.
-    surfaces: InstanceBinding,
 }
 
 pub(crate) struct WgpuBindGroupLayouts {
@@ -269,278 +265,7 @@ pub struct WgpuRenderer {
     device_errors: Arc<DeviceErrorState>,
     observed_error_generation: u64,
     last_surface_error: Option<String>,
-    /// The size the window shows. The surface can be larger during a live resize, see
-    /// [`WgpuRenderer::update_drawable_size_live`].
-    drawable_size: Size<DevicePixels>,
-    /// Draws the frames of a live resize, while the surface is larger than the drawable.
-    edge_extend: Option<EdgeExtend>,
     needs_redraw: bool,
-}
-
-/// How far a live resize lets the surface outgrow the drawable before it reconfigures, in device
-/// pixels per axis.
-const LIVE_RESIZE_SLACK: u32 = 512;
-
-/// `ND_DEBUG_SWAPCHAIN=cost=<ms>[,eager]` stands in for a weak GPU in the resize gate: every
-/// surface reconfigure takes `cost` more, and `eager` reconfigures per resize step as before the
-/// oversized live surface, which is what the gate's control run needs to see the lag.
-struct DebugSwapchain {
-    cost: Option<std::time::Duration>,
-    eager: bool,
-}
-
-fn debug_swapchain() -> &'static DebugSwapchain {
-    static DEBUG: std::sync::OnceLock<DebugSwapchain> = std::sync::OnceLock::new();
-    DEBUG.get_or_init(|| {
-        let spec = std::env::var("ND_DEBUG_SWAPCHAIN").unwrap_or_default();
-        let mut debug = DebugSwapchain { cost: None, eager: false };
-        for part in spec.split(',') {
-            match part.split_once('=') {
-                Some(("cost", ms)) => debug.cost = ms.parse().ok().map(std::time::Duration::from_millis),
-                None if part == "eager" => debug.eager = true,
-                _ => {}
-            }
-        }
-        debug
-    })
-}
-
-/// The surface size a live resize to `drawable` wants, given the `surface` it has: kept while the
-/// drawable fits in it with at most [`LIVE_RESIZE_SLACK`] to spare, otherwise the drawable plus
-/// half the slack, capped at `max_texture_size`.
-fn live_surface_size(drawable: Size<DevicePixels>, surface: (u32, u32), max_texture_size: u32) -> (u32, u32) {
-    let axis = |drawable: i32, surface: u32| {
-        let drawable = drawable.max(1) as u32;
-        if drawable <= surface && surface - drawable <= LIVE_RESIZE_SLACK {
-            surface
-        } else {
-            (drawable + LIVE_RESIZE_SLACK / 2).min(max_texture_size)
-        }
-    };
-    (axis(drawable.width.0, surface.0), axis(drawable.height.0, surface.1))
-}
-
-/// Copies a frame from an offscreen texture to the surface, every pixel past the drawable
-/// repeating the drawable's last column and row. During a live resize the compositor can show a
-/// window larger than the surface size the client last committed; Hyprland then stretches the
-/// texture coordinates past the viewport's source crop, into the oversized buffer, where an
-/// exact-size buffer would clamp to its edge pixels instead.
-struct EdgeExtend {
-    /// The device the resources below belong to; a recovered device needs new ones.
-    device: std::sync::Weak<wgpu::Device>,
-    pipeline: wgpu::RenderPipeline,
-    layout: wgpu::BindGroupLayout,
-    /// The drawable's last pixel, `vec2<u32>` padded to 16 bytes.
-    params: wgpu::Buffer,
-    target: Option<(wgpu::Texture, wgpu::TextureView, wgpu::BindGroup)>,
-}
-
-const EDGE_EXTEND_SHADER: &str = r#"
-struct Params { last: vec2<u32>, pad: vec2<u32> }
-@group(0) @binding(0) var frame: texture_2d<f32>;
-@group(0) @binding(1) var<uniform> params: Params;
-
-@vertex
-fn vs(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
-    let corner = vec2<f32>(f32((index << 1u) & 2u), f32(index & 2u));
-    return vec4<f32>(corner * 2.0 - 1.0, 0.0, 1.0);
-}
-
-@fragment
-fn fs(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> {
-    return textureLoad(frame, min(vec2<u32>(position.xy), params.last), 0);
-}
-"#;
-
-impl EdgeExtend {
-    fn new(device: &Arc<wgpu::Device>, format: wgpu::TextureFormat) -> Self {
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("edge_extend_layout"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: NonZeroU64::new(16),
-                    },
-                    count: None,
-                },
-            ],
-        });
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("edge_extend_pipeline_layout"),
-            bind_group_layouts: &[Some(&layout)],
-            immediate_size: 0,
-        });
-        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("edge_extend_shader"),
-            source: wgpu::ShaderSource::Wgsl(EDGE_EXTEND_SHADER.into()),
-        });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("edge_extend"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &module,
-                entry_point: Some("vs"),
-                buffers: &[],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &module,
-                entry_point: Some("fs"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
-        let params = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("edge_extend_params"),
-            size: 16,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        Self {
-            device: Arc::downgrade(device),
-            pipeline,
-            layout,
-            params,
-            target: None,
-        }
-    }
-
-    fn belongs_to(&self, device: &Arc<wgpu::Device>) -> bool {
-        self.device
-            .upgrade()
-            .is_some_and(|own| Arc::ptr_eq(&own, device))
-    }
-
-    /// The offscreen texture a frame of `size` renders to.
-    fn target(
-        &mut self,
-        device: &wgpu::Device,
-        format: wgpu::TextureFormat,
-        size: Size<DevicePixels>,
-    ) -> wgpu::TextureView {
-        let (width, height) = (size.width.0 as u32, size.height.0 as u32);
-        if let Some((texture, view, _)) = &self.target
-            && texture.width() == width
-            && texture.height() == height
-        {
-            return view.clone();
-        }
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("edge_extend_frame"),
-            size: wgpu::Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("edge_extend_bind_group"),
-            layout: &self.layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: self.params.as_entire_binding(),
-                },
-            ],
-        });
-        self.target = Some((texture, view.clone(), bind_group));
-        view
-    }
-
-    /// `core`'s [`WgpuRendererCore::render_frame`] for a frame larger than the `drawable` the
-    /// window shows: renders offscreen, then fills `target_view` from it.
-    fn render(
-        &mut self,
-        core: &mut WgpuRendererCore,
-        scene: &Scene,
-        target_view: &wgpu::TextureView,
-        size: Size<DevicePixels>,
-        drawable: Size<DevicePixels>,
-        premultiplied_alpha: bool,
-        clear_color: wgpu::Color,
-    ) -> Result<wgpu::SubmissionIndex> {
-        let device = Arc::clone(&core.resources.device);
-        let offscreen = self.target(&device, core.target_format, size);
-        core.render_frame(scene, &offscreen, size, premultiplied_alpha, clear_color)?;
-
-        let Some((_, _, bind_group)) = &self.target else {
-            unreachable!("created above");
-        };
-        let queue = &core.resources.queue;
-        queue.write_buffer(
-            &self.params,
-            0,
-            bytemuck::cast_slice(&edge_extend_params(drawable, size)),
-        );
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("edge_extend_encoder"),
-        });
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("edge_extend_pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target_view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                ..Default::default()
-            });
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, bind_group, &[]);
-            pass.draw(0..3, 0..1);
-        }
-        Ok(queue.submit(Some(encoder.finish())))
-    }
-}
-
-/// The last pixel of `drawable` inside a frame of `size`, as [`EdgeExtend`]'s params.
-fn edge_extend_params(drawable: Size<DevicePixels>, size: Size<DevicePixels>) -> [u32; 4] {
-    let last = |drawable: i32, size: i32| (drawable.clamp(1, size.max(1)) - 1) as u32;
-    [
-        last(drawable.width.0, size.width.0),
-        last(drawable.height.0, size.height.0),
-        0,
-        0,
-    ]
 }
 
 impl WgpuRenderer {
@@ -580,30 +305,44 @@ impl WgpuRenderer {
         let window_handle = window
             .window_handle()
             .map_err(|e| anyhow::anyhow!("Failed to get window handle: {e}"))?;
-        let display_handle = window.display_handle().ok().map(|d| d.as_raw());
+
+        let target = wgpu::SurfaceTargetUnsafe::RawHandle {
+            // Fall back to the display handle already provided via InstanceDescriptor::display.
+            raw_display_handle: None,
+            raw_window_handle: window_handle.as_raw(),
+        };
+
+        // Use the existing context's instance if available, otherwise create a new one.
+        // The surface must be created with the same instance that will be used for
+        // adapter selection, otherwise wgpu will panic.
+        let instance = gpu_context
+            .borrow()
+            .as_ref()
+            .map(|ctx| ctx.instance.clone())
+            .unwrap_or_else(|| WgpuContext::instance(Some(Box::new(window.clone()))));
 
         // Safety: The caller guarantees that the window handle is valid for the
         // lifetime of this renderer. In practice, the RawWindow struct is created
         // from the native window handles and the surface is dropped before the window.
+        let surface = unsafe {
+            instance
+                .create_surface_unsafe(target)
+                .map_err(|e| anyhow::anyhow!("Failed to create surface: {e}"))?
+        };
+
         let mut ctx_ref = gpu_context.borrow_mut();
         let surface_configured = ctx_ref.is_none();
-        let (context, surface) = match ctx_ref.as_mut() {
+        let context = match ctx_ref.as_mut() {
             Some(context) => {
-                let surface = create_surface(&context.instance, display_handle, window_handle.as_raw())
-                    .map_err(|e| anyhow::anyhow!("Failed to create surface: {e}"))?;
                 context.check_compatible_with_surface(&surface)?;
-                (context, surface)
+                context
             }
-            None => {
-                let (context, surface) = WgpuContext::new_with_surface(
-                    || Box::new(window.clone()),
-                    |instance| create_surface(instance, display_handle, window_handle.as_raw()),
-                    &config,
-                    compositor_gpu,
-                    false,
-                )?;
-                (ctx_ref.insert(context), surface)
-            }
+            None => ctx_ref.insert(WgpuContext::new(
+                instance,
+                &surface,
+                &config,
+                compositor_gpu,
+            )?),
         };
 
         let atlas = Arc::new(WgpuAtlas::from_context(context));
@@ -769,11 +508,6 @@ impl WgpuRenderer {
             context: gpu_context,
             compositor_gpu,
             state: RendererState::Ready { surface, core },
-            drawable_size: Size {
-                width: DevicePixels(surface_config.width as i32),
-                height: DevicePixels(surface_config.height as i32),
-            },
-            edge_extend: None,
             surface_config,
             atlas,
             transparent_alpha_mode,
@@ -1213,32 +947,6 @@ impl WgpuRendererCore {
             &shader_module,
         );
 
-        let surface_textures = create_pipeline(
-            "surface_textures",
-            "vs_poly_sprite",
-            "fs_surface_texture",
-            &layouts.globals,
-            &layouts.instances,
-            Some(&layouts.texture),
-            wgpu::PrimitiveTopology::TriangleStrip,
-            &[Some(color_target.clone())],
-            1,
-            &shader_module,
-        );
-
-        let surface_textures_opaque = create_pipeline(
-            "surface_textures_opaque",
-            "vs_poly_sprite",
-            "fs_surface_texture_opaque",
-            &layouts.globals,
-            &layouts.instances,
-            Some(&layouts.texture),
-            wgpu::PrimitiveTopology::TriangleStrip,
-            &[Some(color_target.clone())],
-            1,
-            &shader_module,
-        );
-
         let surfaces = create_pipeline(
             "surfaces",
             "vs_surface",
@@ -1261,8 +969,6 @@ impl WgpuRendererCore {
             mono_sprites,
             subpixel_sprites,
             poly_sprites,
-            surface_textures,
-            surface_textures_opaque,
             surfaces,
         }
     }
@@ -1324,52 +1030,15 @@ impl WgpuRenderer {
     /// Records the new drawable size and reconfigures the surface when one is present.
     /// The size is kept even without GPU resources so that recovery restores it.
     pub fn update_drawable_size(&mut self, size: Size<DevicePixels>) {
-        self.drawable_size = size;
-        self.edge_extend = None;
-        self.configure_surface(size.width.0 as u32, size.height.0 as u32);
-    }
+        let width = size.width.0 as u32;
+        let height = size.height.0 as u32;
 
-    /// As [`Self::update_drawable_size`], for a size that is about to change again (an
-    /// interactive resize): the surface keeps its size while the drawable fits in it with at most
-    /// [`LIVE_RESIZE_SLACK`] to spare, and otherwise grows with that much headroom. Each surface
-    /// reconfigure idles the device and recreates the swapchain, several milliseconds on a weak
-    /// GPU, so reconfiguring per resize step halves the frame rate there. The frame covers the
-    /// surface's top left `size`; the platform crops the rest with [`Self::surface_size`] and
-    /// [`Self::drawable_size`]. Settle with `update_drawable_size` once the resize ends.
-    pub fn update_drawable_size_live(&mut self, size: Size<DevicePixels>) {
-        if debug_swapchain().eager {
-            return self.update_drawable_size(size);
-        }
-        self.drawable_size = size;
-        let (width, height) = live_surface_size(
-            size,
-            (self.surface_config.width, self.surface_config.height),
-            self.max_texture_size,
-        );
-        self.configure_surface(width, height);
-    }
-
-    /// What the window shows: the top left of the surface.
-    pub fn drawable_size(&self) -> Size<DevicePixels> {
-        self.drawable_size
-    }
-
-    /// The swapchain's size, larger than [`Self::drawable_size`] during a live resize.
-    pub fn surface_size(&self) -> Size<DevicePixels> {
-        Size {
-            width: DevicePixels(self.surface_config.width as i32),
-            height: DevicePixels(self.surface_config.height as i32),
-        }
-    }
-
-    fn configure_surface(&mut self, width: u32, height: u32) {
-        let clamped_width = width.min(self.max_texture_size);
-        let clamped_height = height.min(self.max_texture_size);
-        if clamped_width.max(1) == self.surface_config.width
-            && clamped_height.max(1) == self.surface_config.height
-        {
+        if width == self.surface_config.width && height == self.surface_config.height {
             return;
         }
+
+        let clamped_width = width.min(self.max_texture_size);
+        let clamped_height = height.min(self.max_texture_size);
         if clamped_width != width || clamped_height != height {
             warn!(
                 "Requested surface size ({}, {}) exceeds maximum texture dimension {}. \
@@ -1379,9 +1048,6 @@ impl WgpuRenderer {
         }
         self.surface_config.width = clamped_width.max(1);
         self.surface_config.height = clamped_height.max(1);
-        if let Some(cost) = debug_swapchain().cost {
-            std::thread::sleep(cost);
-        }
 
         let Some(core) = self.core_mut() else {
             return;
@@ -1487,7 +1153,6 @@ impl WgpuRenderer {
     }
 
     pub fn draw(&mut self, scene: &Scene) -> bool {
-        let _hold = crate::wgpu_context::frame_hold();
         #[cfg(target_family = "wasm")]
         if self.device_lost() {
             if matches!(self.state, RendererState::Ready { .. }) {
@@ -1564,66 +1229,19 @@ impl WgpuRenderer {
             .create_view(&wgpu::TextureViewDescriptor::default());
         let premultiplied_alpha =
             self.surface_config.alpha_mode == wgpu::CompositeAlphaMode::PreMultiplied;
-        let drawable = self.drawable_size;
-        let rendered = if drawable.width.0 < size.width.0 || drawable.height.0 < size.height.0 {
-            if self
-                .edge_extend
-                .as_ref()
-                .is_some_and(|edge| !edge.belongs_to(&core.resources.device))
-            {
-                self.edge_extend = None;
-            }
-            let edge = self.edge_extend.get_or_insert_with(|| {
-                EdgeExtend::new(&core.resources.device, core.target_format)
-            });
-            edge.render(
-                core,
-                scene,
-                &frame_view,
-                size,
-                drawable,
-                premultiplied_alpha,
-                wgpu::Color::TRANSPARENT,
-            )
-        } else {
-            core.render_frame(
-                scene,
-                &frame_view,
-                size,
-                premultiplied_alpha,
-                wgpu::Color::TRANSPARENT,
-            )
-        };
-        if let Err(error) = rendered {
+        if let Err(error) = core.render_frame(
+            scene,
+            &frame_view,
+            size,
+            premultiplied_alpha,
+            wgpu::Color::TRANSPARENT,
+        ) {
             log::error!("{error:#}");
             return false;
         }
 
         core.resources.queue.present(frame);
         true
-    }
-
-    /// Renders `scene` at the drawable's size into an offscreen texture and reads it back as
-    /// width, height and RGBA rows, without presenting: a window's `render_to_image`.
-    #[cfg(not(target_family = "wasm"))]
-    pub fn render_to_pixels(&mut self, scene: &Scene) -> anyhow::Result<(u32, u32, Vec<u8>)> {
-        let size = self.drawable_size;
-        let premultiplied_alpha =
-            self.surface_config.alpha_mode == wgpu::CompositeAlphaMode::PreMultiplied;
-        let core = match &mut self.state {
-            RendererState::Ready { core, .. } | RendererState::Unconfigured { core } => core,
-            RendererState::Released => anyhow::bail!("the renderer has no GPU resources"),
-        };
-        let texture = core.create_readback_target(size, "render_to_image_target")?;
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        core.render_frame(
-            scene,
-            &view,
-            size,
-            premultiplied_alpha,
-            wgpu::Color::TRANSPARENT,
-        )?;
-        core.read_back(&texture)
     }
 }
 
@@ -2016,9 +1634,9 @@ impl WgpuRendererCore {
                             &mut pass,
                         )?;
                     }
-                    PrimitiveBatch::Surfaces(range) => {
-                        self.draw_surfaces(scene, range, &instance_bindings.surfaces, &mut pass);
-                    }
+                    // Surfaces are macOS-only for video playback and are not
+                    // implemented by the WGPU renderer.
+                    PrimitiveBatch::Surfaces(_surfaces) => {}
                 }
             }
         }
@@ -2066,47 +1684,7 @@ impl WgpuRendererCore {
                 instance_offset,
                 &scene.polychrome_sprites,
             )?,
-            surfaces: self.write_instance_binding(
-                "surfaces_bind_group",
-                instance_offset,
-                &surface_sprites(scene),
-            )?,
         })
-    }
-
-    /// Each surface is one polychrome sprite instance, at its index in `scene.surfaces`,
-    /// sampling the embedder's texture instead of an atlas texture.
-    fn draw_surfaces(
-        &self,
-        scene: &Scene,
-        range: Range<usize>,
-        instances: &InstanceBinding,
-        pass: &mut wgpu::RenderPass<'_>,
-    ) {
-        #[cfg(not(any(target_os = "macos", target_os = "ios")))]
-        {
-            let start = range.start;
-            let resources = self.resources();
-            for (k, surface) in scene.surfaces[range].iter().enumerate() {
-                let Some(view) = surface.texture.handle.downcast_ref::<wgpu::TextureView>() else {
-                    warn!("a surface texture is not a wgpu::TextureView");
-                    continue;
-                };
-                let texture = self.create_texture_bind_group("surface_texture_bind_group", view);
-                let instance = instances.first_instance + (start + k) as u32;
-                pass.set_pipeline(if surface.texture.opaque {
-                    &resources.pipelines.surface_textures_opaque
-                } else {
-                    &resources.pipelines.surface_textures
-                });
-                pass.set_bind_group(0, &resources.globals_bind_group, &[]);
-                pass.set_bind_group(1, &instances.bind_group, &[]);
-                pass.set_bind_group(2, &texture, &[]);
-                pass.draw(0..4, instance..instance + 1);
-            }
-        }
-        #[cfg(any(target_os = "macos", target_os = "ios"))]
-        let _ = (scene, range, instances, pass);
     }
 
     fn create_texture_bind_group(
@@ -2596,7 +2174,7 @@ impl WgpuRenderer {
             .window_handle()
             .map_err(|e| anyhow::anyhow!("Failed to get window handle: {e}"))?;
 
-        let surface = create_surface(instance, None, window_handle.as_raw())?;
+        let surface = create_surface(instance, window_handle.as_raw())?;
 
         let width = (config.size.width.0 as u32).max(1);
         let height = (config.size.height.0 as u32).max(1);
@@ -2674,7 +2252,6 @@ impl WgpuRenderer {
         let window_handle = window
             .window_handle()
             .map_err(|e| anyhow::anyhow!("Failed to get window handle: {e}"))?;
-        let display_handle = window.display_handle().ok().map(|d| d.as_raw());
 
         let config = WgpuSurfaceConfig {
             size: gpui::Size {
@@ -2691,7 +2268,6 @@ impl WgpuRenderer {
             // Drop old resources to release Arc<Device>/Arc<Queue> and GPU resources
             self.state = RendererState::Released;
             *gpu_context.borrow_mut() = None;
-            crate::wgpu_context::forget_adopted_device();
 
             // Wait briefly for the GPU driver to stabilize, then try to
             // recreate the context without software renderers. If this fails
@@ -2699,19 +2275,20 @@ impl WgpuRenderer {
             // may need more time to come back (e.g. after suspend/resume).
             std::thread::sleep(std::time::Duration::from_millis(350));
 
-            let (new_context, surface) = WgpuContext::new_with_surface(
-                || Box::new(window.clone()),
-                |instance| create_surface(instance, display_handle, window_handle.as_raw()),
+            let instance = WgpuContext::instance(Some(Box::new(window.clone())));
+            let surface = create_surface(&instance, window_handle.as_raw())?;
+            let new_context = WgpuContext::new_rejecting_software(
+                instance,
+                &surface,
                 &config,
                 self.compositor_gpu,
-                true,
             )?;
             *gpu_context.borrow_mut() = Some(new_context);
             surface
         } else {
             let ctx_ref = gpu_context.borrow();
             let instance = &ctx_ref.as_ref().unwrap().instance;
-            create_surface(instance, display_handle, window_handle.as_raw())?
+            create_surface(instance, window_handle.as_raw())?
         };
 
         let gpu_context = Rc::clone(gpu_context);
@@ -2798,6 +2375,16 @@ impl WgpuHeadlessRenderer {
     }
 
     fn ensure_render_target(&mut self, size: Size<DevicePixels>) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            size.width.0 > 0 && size.height.0 > 0,
+            "invalid headless render target size: {size:?}"
+        );
+        anyhow::ensure!(
+            size.width.0 as u32 <= self.core.max_texture_size
+                && size.height.0 as u32 <= self.core.max_texture_size,
+            "headless render target size {size:?} exceeds maximum texture dimension {}",
+            self.core.max_texture_size
+        );
         if self
             .render_target
             .as_ref()
@@ -2805,9 +2392,25 @@ impl WgpuHeadlessRenderer {
         {
             return Ok(());
         }
+
         let texture = self
             .core
-            .create_readback_target(size, "headless_render_target")?;
+            .resources
+            .device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("headless_render_target"),
+                size: wgpu::Extent3d {
+                    width: size.width.0 as u32,
+                    height: size.height.0 as u32,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: self.core.target_format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         self.render_target = Some(HeadlessRenderTarget { texture, view });
         Ok(())
@@ -2842,101 +2445,49 @@ impl WgpuHeadlessRenderer {
         Ok(())
     }
 
+    /// Copies the current render target back to the CPU. Dimensions come from the
+    /// target texture itself, so the copy can never disagree with what was rendered.
     fn read_image(&mut self) -> anyhow::Result<image::RgbaImage> {
         let target = self
             .render_target
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Headless render target was not created"))?;
-        let (width, height, pixels) = self.core.read_back(&target.texture)?;
-        self.check_gpu_errors()?;
-        image::RgbaImage::from_raw(width, height, pixels)
-            .ok_or_else(|| anyhow::anyhow!("Failed to create image from headless pixel data"))
-    }
-}
-
-#[cfg(not(target_family = "wasm"))]
-impl WgpuRendererCore {
-    /// A texture in the target format that frames can be drawn into and copied out of.
-    fn create_readback_target(
-        &self,
-        size: Size<DevicePixels>,
-        label: &'static str,
-    ) -> anyhow::Result<wgpu::Texture> {
-        anyhow::ensure!(
-            size.width.0 > 0 && size.height.0 > 0,
-            "invalid {label} size: {size:?}"
-        );
-        anyhow::ensure!(
-            size.width.0 as u32 <= self.max_texture_size
-                && size.height.0 as u32 <= self.max_texture_size,
-            "{label} size {size:?} exceeds maximum texture dimension {}",
-            self.max_texture_size
-        );
-        Ok(self
-            .resources
-            .device
-            .create_texture(&wgpu::TextureDescriptor {
-                label: Some(label),
-                size: wgpu::Extent3d {
-                    width: size.width.0 as u32,
-                    height: size.height.0 as u32,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: self.target_format,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-                view_formats: &[],
-            }))
-    }
-
-    /// Copies `texture` back to the CPU as width, height and RGBA rows. Dimensions come from
-    /// the texture itself, so the copy can never disagree with what was rendered.
-    fn read_back(&self, texture: &wgpu::Texture) -> anyhow::Result<(u32, u32, Vec<u8>)> {
-        // Rows are copied as 4 bytes per pixel and only swizzled.
-        anyhow::ensure!(
-            matches!(
-                self.target_format,
-                wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Bgra8Unorm
-            ),
-            "cannot read back a {:?} render target",
-            self.target_format
-        );
-        let width = texture.width();
-        let height = texture.height();
+        let width = target.texture.width();
+        let height = target.texture.height();
         let bytes_per_row = width
             .checked_mul(4)
-            .ok_or_else(|| anyhow::anyhow!("Readback render target row size overflowed"))?;
+            .ok_or_else(|| anyhow::anyhow!("Headless render target row size overflowed"))?;
         let padded_bytes_per_row = bytes_per_row
             .checked_next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
-            .ok_or_else(|| anyhow::anyhow!("Readback padded row size overflowed"))?;
+            .ok_or_else(|| anyhow::anyhow!("Headless padded row size overflowed"))?;
         let buffer_size = u64::from(padded_bytes_per_row)
             .checked_mul(u64::from(height))
-            .ok_or_else(|| anyhow::anyhow!("Readback buffer size overflowed"))?;
+            .ok_or_else(|| anyhow::anyhow!("Headless readback buffer size overflowed"))?;
         anyhow::ensure!(
-            buffer_size <= self.resources.device.limits().max_buffer_size,
-            "Readback buffer size {buffer_size} exceeds maximum buffer size {}",
-            self.resources.device.limits().max_buffer_size
+            buffer_size <= self.core.resources.device.limits().max_buffer_size,
+            "Headless readback buffer size {buffer_size} exceeds maximum buffer size {}",
+            self.core.resources.device.limits().max_buffer_size
         );
         let readback_buffer = self
+            .core
             .resources
             .device
             .create_buffer(&wgpu::BufferDescriptor {
-                label: Some("readback_buffer"),
+                label: Some("headless_readback_buffer"),
                 size: buffer_size,
                 usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
                 mapped_at_creation: false,
             });
         let mut encoder =
-            self.resources
+            self.core
+                .resources
                 .device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("readback_encoder"),
+                    label: Some("headless_readback_encoder"),
                 });
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
-                texture,
+                texture: &target.texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
@@ -2956,6 +2507,7 @@ impl WgpuRendererCore {
             },
         );
         let submission = self
+            .core
             .resources
             .queue
             .submit(std::iter::once(encoder.finish()));
@@ -2964,23 +2516,26 @@ impl WgpuRendererCore {
             .slice(..)
             .map_async(wgpu::MapMode::Read, move |result| {
                 if sender.send(result).is_err() {
-                    log::error!("Readback receiver was dropped before mapping completed");
+                    log::error!("Headless readback receiver was dropped before mapping completed");
                 }
             });
-        self.resources
+        self.core
+            .resources
             .device
             .poll(wgpu::PollType::Wait {
                 submission_index: Some(submission),
                 timeout: Some(std::time::Duration::from_secs(30)),
             })
-            .map_err(|error| anyhow::anyhow!("Failed to wait for rendering: {error}"))?;
+            .map_err(|error| anyhow::anyhow!("Failed to wait for headless rendering: {error}"))?;
         receiver
             .recv_timeout(std::time::Duration::from_secs(30))
-            .map_err(|error| anyhow::anyhow!("Failed to receive readback mapping result: {error}"))?
-            .map_err(|error| anyhow::anyhow!("Failed to map readback buffer: {error}"))?;
+            .map_err(|error| anyhow::anyhow!("Failed to receive headless mapping result: {error}"))?
+            .map_err(|error| anyhow::anyhow!("Failed to map headless readback buffer: {error}"))?;
+        self.check_gpu_errors()?;
+
         let mapped_data = readback_buffer.slice(..).get_mapped_range()?;
         let pixel_capacity = usize::try_from(u64::from(bytes_per_row) * u64::from(height))
-            .map_err(|_| anyhow::anyhow!("Readback image size exceeds addressable memory"))?;
+            .map_err(|_| anyhow::anyhow!("Headless image size exceeds addressable memory"))?;
         let mut pixels = Vec::with_capacity(pixel_capacity);
         for row in mapped_data
             .chunks_exact(padded_bytes_per_row as usize)
@@ -2991,13 +2546,14 @@ impl WgpuRendererCore {
         drop(mapped_data);
         readback_buffer.unmap();
 
-        if self.target_format == wgpu::TextureFormat::Bgra8Unorm {
+        if self.core.target_format == wgpu::TextureFormat::Bgra8Unorm {
             for pixel in pixels.chunks_exact_mut(4) {
                 pixel.swap(0, 2);
             }
         }
 
-        Ok((width, height, pixels))
+        image::RgbaImage::from_raw(width, height, pixels)
+            .ok_or_else(|| anyhow::anyhow!("Failed to create image from headless pixel data"))
     }
 }
 
@@ -3031,15 +2587,13 @@ fn instance_range(range: Range<usize>) -> Range<u32> {
 #[cfg(not(target_family = "wasm"))]
 pub(crate) fn create_surface(
     instance: &wgpu::Instance,
-    raw_display_handle: Option<raw_window_handle::RawDisplayHandle>,
     raw_window_handle: raw_window_handle::RawWindowHandle,
 ) -> anyhow::Result<wgpu::Surface<'static>> {
     unsafe {
         instance
             .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
-                // None falls back to the display handle given in InstanceDescriptor::display,
-                // which an adopted device's instance may not have.
-                raw_display_handle,
+                // Fall back to the display handle already provided via InstanceDescriptor::display.
+                raw_display_handle: None,
                 raw_window_handle,
             })
             .map_err(|e| anyhow::anyhow!("{e}"))
@@ -3094,52 +2648,6 @@ impl RenderingParameters {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn live_resize_keeps_the_surface_while_the_drawable_fits() {
-        let size = |w, h| Size { width: DevicePixels(w), height: DevicePixels(h) };
-        let surface = (1300, 900);
-        // Shrinking and growing inside the slack never reconfigures, however many steps it takes.
-        for step in 0..=LIVE_RESIZE_SLACK as i32 {
-            assert_eq!(live_surface_size(size(1300 - step, 900 - step), surface, 8192), surface);
-        }
-        // Past the slack below, or any growth past the surface, asks for headroom around the drawable.
-        let slack = LIVE_RESIZE_SLACK as i32;
-        assert_eq!(
-            live_surface_size(size(1300 - slack - 1, 900), surface, 8192),
-            (1300 - LIVE_RESIZE_SLACK - 1 + LIVE_RESIZE_SLACK / 2, 900)
-        );
-        assert_eq!(live_surface_size(size(1301, 900), surface, 8192), (1301 + LIVE_RESIZE_SLACK / 2, 900));
-        // Growth is capped by the GPU's limit, and a zero-sized drawable still gets a surface.
-        assert_eq!(live_surface_size(size(8000, 900), surface, 8192).0, 8192);
-        assert_eq!(live_surface_size(size(0, 0), (1, 1), 8192), (1, 1));
-    }
-
-    #[test]
-    fn live_resize_steps_reconfigure_once_per_slack() {
-        let size = |w| Size { width: DevicePixels(w), height: DevicePixels(600) };
-        let mut surface = (800, 600);
-        let mut reconfigures = 0;
-        // A drag that grows the window one pixel per frame for 2000 frames.
-        for width in 800..2800 {
-            let wanted = live_surface_size(size(width), surface, 8192);
-            if wanted != surface {
-                surface = wanted;
-                reconfigures += 1;
-            }
-        }
-        assert!(reconfigures <= 2000 / (LIVE_RESIZE_SLACK as i32 / 2) + 1, "{reconfigures} reconfigures");
-    }
-
-    #[test]
-    fn edge_extend_clamps_to_the_drawable_inside_the_frame() {
-        let size = |w, h| Size { width: DevicePixels(w), height: DevicePixels(h) };
-        assert_eq!(edge_extend_params(size(1000, 700), size(1256, 956)), [999, 699, 0, 0]);
-        // A drawable past the frame, or an empty one, still names a pixel of the frame.
-        assert_eq!(edge_extend_params(size(1300, 700), size(1256, 956)), [1255, 699, 0, 0]);
-        assert_eq!(edge_extend_params(size(0, 0), size(1256, 956)), [0, 0, 0, 0]);
-    }
-
     use gpui::{
         BorderStyle, ColorSpace, ContentMask, Corners, Edges, Hsla, MonochromeSprite,
         PolychromeSprite, Quad, Shadow, Size, SubpixelSprite, Underline, linear_color_stop,
@@ -3453,32 +2961,4 @@ mod tests {
             ]
         );
     }
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "ios")))]
-fn surface_sprites(scene: &Scene) -> Vec<gpui::PolychromeSprite> {
-    scene
-        .surfaces
-        .iter()
-        .map(|surface| gpui::PolychromeSprite {
-            order: surface.order,
-            pad: 0,
-            tile: gpui::AtlasTile {
-                texture_id: AtlasTextureId { index: 0, kind: gpui::AtlasTextureKind::Polychrome },
-                tile_id: gpui::TileId(0),
-                padding: 0,
-                bounds: Bounds { origin: Point::default(), size: surface.texture.size },
-            },
-            grayscale: false.into(),
-            opacity: 1.0,
-            bounds: surface.bounds,
-            content_mask: surface.content_mask.clone(),
-            corner_radii: surface.corner_radii,
-        })
-        .collect()
-}
-
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-fn surface_sprites(_scene: &Scene) -> Vec<gpui::PolychromeSprite> {
-    Vec::new()
 }

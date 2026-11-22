@@ -43,4 +43,4 @@
 0044-gpui_linux-read-the-clipboard-from-the-data-control-.patch
 0045-gpui_linux-tell-which-selection-a-clipboard-read-cam.patch
 0035-gpui-PlatformDisplay-scale_factor-a-Wayland-output-s.patch
-0047-gpui_wgpu-hold-a-frame-for-the-embedding-application.patch
+0047-gpui_wgpu-hold-the-GPU-for-the-embedding-application.patch

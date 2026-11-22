@@ -277,6 +277,14 @@ pub struct WgpuRenderer {
     /// Whether the surface can be copied from, which backdrops need: it is configured so the
     /// first time a frame draws one.
     surface_copy_src: bool,
+    /// The embedding application's hold while the fields above drop. Last, so it drops last.
+    drop_hold: crate::wgpu_context::DropHold,
+}
+
+impl Drop for WgpuRenderer {
+    fn drop(&mut self) {
+        self.drop_hold.take();
+    }
 }
 
 /// How far a live resize lets the surface outgrow the drawable before it reconfigures, in device
@@ -794,6 +802,7 @@ impl WgpuRenderer {
             last_surface_error: None,
             needs_redraw: false,
             surface_copy_src,
+            drop_hold: Default::default(),
         })
     }
 }
@@ -1370,6 +1379,7 @@ impl WgpuRenderer {
     }
 
     fn configure_surface(&mut self, width: u32, height: u32) {
+        let _hold = crate::wgpu_context::frame_hold();
         let clamped_width = width.min(self.max_texture_size);
         let clamped_height = height.min(self.max_texture_size);
         if clamped_width.max(1) == self.surface_config.width
