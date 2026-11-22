@@ -275,8 +275,9 @@ pub struct WaylandWindowState {
     /// window's exact size.
     viewport_source: Option<Size<DevicePixels>>,
     last_presentation: Option<gpui::PresentationTime>,
-    /// Set by the first `enter` or scale event: the scale is the output's from then on.
-    on_output: bool,
+    /// The scale protocol in use (fractional scale, else the preferred buffer scale, else the
+    /// entered outputs' scale) has applied a scale. With `outputs` it makes the window placed.
+    scaled: bool,
     in_progress_window_controls: Option<WindowControls>,
     window_controls: WindowControls,
     client_inset: Option<Pixels>,
@@ -826,7 +827,7 @@ impl WaylandWindowState {
             live_resize: false,
             viewport_source: None,
             last_presentation: None,
-            on_output: false,
+            scaled: false,
             client,
             appearance,
             handle,
@@ -859,6 +860,13 @@ impl WaylandWindowState {
         if let Some(renderer) = &mut self.renderer {
             renderer.set_subpixel_layout(is_bgr);
         }
+    }
+
+    /// Whether the window takes its scale from the outputs it entered: the compositor offers
+    /// neither fractional scale nor `preferred_buffer_scale`.
+    fn scale_from_outputs(&self) -> bool {
+        self.globals.fractional_scale_manager.is_none()
+            && self.surface.version() < wl_surface::EVT_PREFERRED_BUFFER_SCALE_SINCE
     }
 
     pub fn primary_output_scale(&mut self) -> i32 {
@@ -1444,8 +1452,8 @@ impl WaylandWindowStatePtr {
 
     pub fn handle_fractional_scale_event(&self, event: wp_fractional_scale_v1::Event) {
         if let wp_fractional_scale_v1::Event::PreferredScale { scale } = event {
-            self.state.borrow_mut().on_output = true;
             self.rescale(scale as f32 / 120.0);
+            self.state.borrow_mut().scaled = true;
             self.request_redraw();
         }
     }
@@ -1649,7 +1657,6 @@ impl WaylandWindowStatePtr {
                 };
 
                 state.outputs.insert(id, output.clone());
-                state.on_output = true;
 
                 let previous_display = state.display.as_ref().map(|(id, _)| id.clone());
                 let scale = state.primary_output_scale();
@@ -1657,11 +1664,11 @@ impl WaylandWindowStatePtr {
                     state.display.as_ref().map(|(id, _)| id) != previous_display.as_ref();
                 state.update_subpixel_layout();
 
-                // We use `PreferredBufferScale` instead to set the scale if it's available
-                if state.surface.version() < wl_surface::EVT_PREFERRED_BUFFER_SCALE_SINCE {
+                if state.scale_from_outputs() {
                     state.surface.set_buffer_scale(scale);
                     drop(state);
                     self.rescale(scale as f32);
+                    self.state.borrow_mut().scaled = true;
                 } else {
                     drop(state);
                 }
@@ -1679,8 +1686,8 @@ impl WaylandWindowStatePtr {
                     state.display.as_ref().map(|(id, _)| id) != previous_display.as_ref();
                 state.update_subpixel_layout();
 
-                // We use `PreferredBufferScale` instead to set the scale if it's available
-                if state.surface.version() < wl_surface::EVT_PREFERRED_BUFFER_SCALE_SINCE {
+                // Off every output the window keeps its last scale until an output gives it one.
+                if state.scale_from_outputs() && !state.outputs.is_empty() {
                     state.surface.set_buffer_scale(scale);
                     drop(state);
                     self.rescale(scale as f32);
@@ -1693,12 +1700,12 @@ impl WaylandWindowStatePtr {
                 self.request_redraw();
             }
             wl_surface::Event::PreferredBufferScale { factor } => {
-                state.on_output = true;
                 // We use `WpFractionalScale` instead to set the scale if it's available
                 if state.globals.fractional_scale_manager.is_none() {
                     state.surface.set_buffer_scale(factor);
                     drop(state);
                     self.rescale(factor as f32);
+                    self.state.borrow_mut().scaled = true;
                     self.request_redraw();
                 }
             }
@@ -2544,8 +2551,13 @@ impl PlatformWindow for WaylandWindow {
         self.borrow().last_presentation
     }
 
-    fn is_on_output(&self) -> bool {
-        self.borrow().on_output
+    fn output_placement(&self) -> gpui::OutputPlacement {
+        let state = self.borrow();
+        if state.scaled && !state.outputs.is_empty() {
+            gpui::OutputPlacement::Placed
+        } else {
+            gpui::OutputPlacement::Pending
+        }
     }
 
     fn gpu_specs(&self) -> Option<GpuSpecs> {

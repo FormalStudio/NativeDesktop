@@ -845,6 +845,17 @@ pub enum Decorations {
     },
 }
 
+/// Where a window stands with the output it shows on.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum OutputPlacement {
+    /// Not on an output yet, or its scale from the compositor is still to come.
+    Pending,
+    /// On an output, and `scale_factor` is the scale the compositor asked for.
+    Placed,
+    /// Never on an output: a headless or test window.
+    Offscreen,
+}
+
 /// A configure from the compositor (Wayland `xdg_surface.configure`, X11 `ConfigureNotify`),
 /// reported once per configure as it arrives, in order, before the window applies it. Sizes are
 /// window geometry: the window without its client inset.
@@ -1447,10 +1458,10 @@ pub trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     }
     fn set_client_inset(&self, _inset: Pixels) {}
     fn on_configure(&self, _callback: Box<dyn FnMut(Configure)>) {}
-    /// Whether the compositor has placed the window on an output: it entered one or was told
-    /// its scale (Wayland). Elsewhere a window is on its screen once created.
-    fn is_on_output(&self) -> bool {
-        true
+    /// Whether `scale_factor` is the scale of the output the window shows on. A window is on its
+    /// screen once created, except under Wayland, where the compositor places it later.
+    fn output_placement(&self) -> OutputPlacement {
+        OutputPlacement::Placed
     }
     fn set_client_corner_radii(&self, _radii: Corners<Pixels>) {}
     fn gpu_specs(&self) -> Option<GpuSpecs>;

@@ -631,6 +631,10 @@ impl PlatformWindow for TestWindow {
 
     fn update_ime_position(&self, _bounds: Bounds<Pixels>) {}
 
+    fn output_placement(&self) -> crate::OutputPlacement {
+        crate::OutputPlacement::Offscreen
+    }
+
     fn gpu_specs(&self) -> Option<GpuSpecs> {
         None
     }
