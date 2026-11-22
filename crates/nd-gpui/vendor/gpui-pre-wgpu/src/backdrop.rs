@@ -48,7 +48,22 @@ struct Params {
     has_clamp: u32,
     clamp_low: f32,
     clamp_high: f32,
-    pad0: u32,
+    // Tone the blur by its luma instead of saturating it: g0 + g1 L + g2 L^2 + (k0 + k1 L)(c - L).
+    has_tone: u32,
+    tone_g0: f32,
+    tone_g1: f32,
+    tone_g2: f32,
+    tone_k0: f32,
+    tone_k1: f32,
+    // Light added at the edge and the blur read further out there (BackdropFilter::edge).
+    has_edge: u32,
+    edge_light: f32,
+    edge_bottom: f32,
+    edge_light_width: f32,
+    edge_bend: f32,
+    edge_bend_width: f32,
+    // Composite: the share of the unblurred region (`sharp_source`) mixed into the blur.
+    sharp: f32,
     pad1: u32,
     pad2: u32,
 }
@@ -56,6 +71,8 @@ struct Params {
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var source: texture_2d<f32>;
 @group(0) @binding(2) var source_sampler: sampler;
+// The regions as copied out of the frame, before the downsample.
+@group(0) @binding(3) var sharp_source: texture_2d<f32>;
 @group(1) @binding(0) var clip: texture_2d<f32>;
 
 struct Varyings {
@@ -87,8 +104,7 @@ fn vs_composite(@builtin(vertex_index) index: u32) -> Varyings {
     return out;
 }
 
-fn sample_clamped(p: vec2<f32>, lo: vec2<f32>, hi: vec2<f32>) -> vec4<f32> {
-    let size = vec2<f32>(textureDimensions(source));
+fn fold(p: vec2<f32>, lo: vec2<f32>, hi: vec2<f32>) -> vec2<f32> {
     var q = p;
     if (params.mirror != 0u) {
         // Reflected however far past the edge the blur reaches, so a region narrower than
@@ -98,8 +114,12 @@ fn sample_clamped(p: vec2<f32>, lo: vec2<f32>, hi: vec2<f32>) -> vec4<f32> {
         let m = d - 2.0 * span * floor(d / (2.0 * span));
         q = lo + span - abs(span - m);
     }
-    q = clamp(q, lo + 0.5, hi - 0.5);
-    return textureSampleLevel(source, source_sampler, q / size, 0.0);
+    return clamp(q, lo + 0.5, hi - 0.5);
+}
+
+fn sample_clamped(p: vec2<f32>, lo: vec2<f32>, hi: vec2<f32>) -> vec4<f32> {
+    let size = vec2<f32>(textureDimensions(source));
+    return textureSampleLevel(source, source_sampler, fold(p, lo, hi) / size, 0.0);
 }
 
 @fragment
@@ -173,13 +193,41 @@ fn fs_composite(in: Varyings) -> @location(0) vec4<f32> {
         return vec4<f32>(0.0, 0.0, 0.0, coverage * params.opacity);
     }
 
+    var normal = vec2<f32>(0.0);
+    if (params.has_edge != 0u || params.highlight > 0.0) {
+        let e = 0.5;
+        normal = normalize(vec2<f32>(
+            rounded_rect_sdf(p + vec2<f32>(e, 0.0)) - rounded_rect_sdf(p - vec2<f32>(e, 0.0)),
+            rounded_rect_sdf(p + vec2<f32>(0.0, e)) - rounded_rect_sdf(p - vec2<f32>(0.0, e))
+        ) + vec2<f32>(1e-6));
+    }
+    let depth = max(-sdf, 0.0);
+
     var color = vec4<f32>(0.0);
     if (params.mode == 0u && params.has_source != 0u) {
-        let blurred = params.dst_origin + (p - params.src_origin) / params.factor;
+        var at = p;
+        if (params.has_edge != 0u && params.edge_bend != 0.0) {
+            at += normal * params.edge_bend * exp(-depth / max(params.edge_bend_width, 1e-3));
+        }
+        let blurred = params.dst_origin + (at - params.src_origin) / params.factor;
         color = sample_clamped(blurred, params.dst_origin, params.dst_origin + params.dst_size);
+        if (params.sharp > 0.0) {
+            let size = vec2<f32>(textureDimensions(sharp_source));
+            let q = fold(at, params.src_origin, params.src_origin + params.src_size);
+            color = mix(color, textureSampleLevel(sharp_source, source_sampler, q / size, 0.0), params.sharp);
+        }
         let luma = dot(color.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
-        let saturated = mix(vec3<f32>(luma), color.rgb, params.saturation);
-        color = vec4<f32>(select(max(saturated, vec3<f32>(0.0)), saturated, params.has_clamp != 0u), color.a);
+        if (params.has_tone != 0u) {
+            // The curve is not linear, so it takes the straight colour.
+            let a = max(color.a, 1e-6);
+            let l = luma / a;
+            let g = params.tone_g0 + l * (params.tone_g1 + l * params.tone_g2);
+            let toned = vec3<f32>(g) + (params.tone_k0 + params.tone_k1 * l) * (color.rgb / a - vec3<f32>(l));
+            color = vec4<f32>(saturate(toned) * color.a, color.a);
+        } else {
+            let saturated = mix(vec3<f32>(luma), color.rgb, params.saturation);
+            color = vec4<f32>(select(max(saturated, vec3<f32>(0.0)), saturated, params.has_clamp != 0u), color.a);
+        }
     }
     let tint = params.tint;
     color = vec4<f32>(tint.rgb * tint.a + color.rgb * (1.0 - tint.a), tint.a + color.a * (1.0 - tint.a));
@@ -191,12 +239,15 @@ fn fs_composite(in: Varyings) -> @location(0) vec4<f32> {
         color = vec4<f32>(min(color.rgb, vec3<f32>(color.a)), color.a);
     }
 
+    if (params.has_edge != 0u && params.edge_light > 0.0) {
+        // Added, not laid over: the Mac's edge brightens dark and light glass by the same levels.
+        let ny2 = normal.y * normal.y;
+        let facing = ny2 * ny2 * select(1.0, params.edge_bottom, normal.y > 0.0);
+        let add = params.edge_light * facing * exp(-depth / max(params.edge_light_width, 1e-3));
+        color = vec4<f32>(min(color.rgb + vec3<f32>(add * color.a), vec3<f32>(color.a)), color.a);
+    }
+
     if (params.highlight > 0.0 && params.highlight_width > 0.0) {
-        let e = 0.5;
-        let normal = normalize(vec2<f32>(
-            rounded_rect_sdf(p + vec2<f32>(e, 0.0)) - rounded_rect_sdf(p - vec2<f32>(e, 0.0)),
-            rounded_rect_sdf(p + vec2<f32>(0.0, e)) - rounded_rect_sdf(p - vec2<f32>(0.0, e))
-        ) + vec2<f32>(1e-6));
         let rim = 1.0 - smoothstep(0.0, params.highlight_width, -sdf);
         let facing = dot(normal, vec2<f32>(0.25881905, -0.96592583));
         let light = select(0.35, 1.0, facing > 0.0) * facing * facing;
@@ -237,10 +288,15 @@ struct Params {
     has_clamp: u32,
     clamp_low: f32,
     clamp_high: f32,
-    pad: [u32; 3],
+    has_tone: u32,
+    tone: [f32; 5],
+    has_edge: u32,
+    edge: [f32; 5],
+    sharp: f32,
+    pad: [u32; 2],
 }
 
-const _: () = assert!(std::mem::offset_of!(Params, radii) == 96 && std::mem::size_of::<Params>() == 192);
+const _: () = assert!(std::mem::offset_of!(Params, radii) == 96 && std::mem::size_of::<Params>() == 240);
 
 /// A backdrop's sample region in whole frame pixels and the factor it is downsampled by.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -337,6 +393,16 @@ impl Backdrops {
                     binding: 2,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
                     count: None,
                 },
             ],
@@ -447,7 +513,7 @@ impl Backdrops {
                 view_formats: &[],
             })
             .create_view(&wgpu::TextureViewDescriptor::default());
-        let placeholder = bind_group(device, &layout, &params, &sampler, &placeholder_view);
+        let placeholder = bind_group(device, &layout, &params, &sampler, &placeholder_view, &placeholder_view);
         let no_clip = clip_bind_group(device, &clip_layout, &clip_texture(device, 1, 1));
         Self {
             format,
@@ -482,6 +548,7 @@ impl Backdrops {
                 &self.layout,
                 &self.params,
                 &self.sampler,
+                &self.placeholder_view,
                 &self.placeholder_view,
             );
             self.scratch = None;
@@ -525,9 +592,9 @@ impl Backdrops {
             let view = |t: &wgpu::Texture| t.create_view(&wgpu::TextureViewDescriptor::default());
             let (copy_view, a_view, b_view) = (view(&copy), view(&a), view(&b));
             self.scratch = Some(Scratch {
-                from_copy: self.bind_group(device, &copy_view),
-                from_a: self.bind_group(device, &a_view),
-                from_b: self.bind_group(device, &b_view),
+                from_copy: self.bind_group(device, &copy_view, &copy_view),
+                from_a: self.bind_group(device, &a_view, &copy_view),
+                from_b: self.bind_group(device, &b_view, &copy_view),
                 copy,
                 a_view,
                 b_view,
@@ -535,8 +602,9 @@ impl Backdrops {
         }
     }
 
-    fn bind_group(&self, device: &wgpu::Device, view: &wgpu::TextureView) -> wgpu::BindGroup {
-        bind_group(device, &self.layout, &self.params, &self.sampler, view)
+    /// Reading `view`, with the copy out of the frame as the composite's unblurred source.
+    fn bind_group(&self, device: &wgpu::Device, view: &wgpu::TextureView, copy: &wgpu::TextureView) -> wgpu::BindGroup {
+        bind_group(device, &self.layout, &self.params, &self.sampler, view, copy)
     }
 
     /// Blurs the regions of `backdrops` out of `frame` into the scratch textures, ready for
@@ -639,11 +707,17 @@ impl Backdrops {
                 has_clamp: backdrop.clamp.is_some() as u32,
                 clamp_low: backdrop.clamp.map_or(0., |c| c[0]),
                 clamp_high: backdrop.clamp.map_or(1., |c| c[1]),
+                has_tone: backdrop.tone.is_some() as u32,
+                tone: backdrop.tone.unwrap_or_default(),
+                has_edge: backdrop.edge.is_some() as u32,
+                edge: backdrop.edge.unwrap_or_default(),
                 ..base
             };
             if let Some(r) = region {
                 let (rw, rh) = r.reduced();
                 p.src_origin = [r.x as f32, r.y as f32];
+                p.src_size = [r.width as f32, r.height as f32];
+                p.sharp = backdrop.sharp.clamp(0., 1.);
                 p.dst_origin = p.src_origin;
                 p.dst_size = [rw as f32, rh as f32];
                 p.factor = r.factor as f32;
@@ -774,6 +848,7 @@ fn bind_group(
     params: &wgpu::Buffer,
     sampler: &wgpu::Sampler,
     view: &wgpu::TextureView,
+    sharp: &wgpu::TextureView,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("backdrop_bind_group"),
@@ -794,6 +869,10 @@ fn bind_group(
             wgpu::BindGroupEntry {
                 binding: 2,
                 resource: wgpu::BindingResource::Sampler(sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(sharp),
             },
         ],
     })
@@ -933,16 +1012,55 @@ mod tests {
             mask: 0,
             mirror: true,
             clamp: None,
+            tone: None,
+            edge: None,
+            sharp: 0.,
         };
         let out = draw(w, h, &pixels, backdrop)?;
         Some((4..4 + width).map(|x| out[((3 * w + x) * 4) as usize]).collect())
     }
 
+    /// A 32 x 8 frame white left of x = 16 and black right of it under a backdrop over all of
+    /// it, blurred with sigma 60 and reflected at its edges, `sharp` of it unblurred; the red
+    /// of row 4.
+    fn sharpened(sharp: f32) -> Option<Vec<u8>> {
+        let (w, h) = (32, 8);
+        let pixels: Vec<u8> =
+            (0..h).flat_map(|_| (0..w).flat_map(|x| if x < 16 { [255; 4] } else { [0, 0, 0, 255] })).collect();
+        let all = Bounds { origin: point(px(0.), px(0.)), size: size(px(w as f32), px(h as f32)) }.scale(1.);
+        let backdrop = Backdrop {
+            order: 0,
+            source: BackdropSource::Window,
+            bounds: all,
+            content_mask: ContentMask { bounds: all },
+            corner_radii: Corners::default(),
+            blur_radius: ScaledPixels(60.),
+            saturation: 1.,
+            tint: Hsla::transparent_black(),
+            highlight: 0.,
+            highlight_width: ScaledPixels(0.),
+            sample_limit: Some(all),
+            opacity: 1.,
+            fallback: Hsla::transparent_black(),
+            mask: 0,
+            mirror: true,
+            clamp: None,
+            tone: None,
+            edge: None,
+            sharp,
+        };
+        let out = draw(w, h, &pixels, backdrop)?;
+        Some((0..w).map(|x| out[((4 * w + x) * 4) as usize]).collect())
+    }
+
     /// Opaque red under dark regular glass (saturation 1.5, tint (75, 73, 68) at 0.58), 8 x 8.
-    fn glass_over_red() -> Option<[u8; 4]> {
+    fn glass_over_red(tone: Option<[f32; 5]>) -> Option<[u8; 4]> {
         let pixels: Vec<u8> = (0..64).flat_map(|_| [255, 0, 0, 255]).collect();
         let all = Bounds { origin: point(px(0.), px(0.)), size: size(px(8.), px(8.)) }.scale(1.);
-        let tint = Rgba { r: 75. / 255., g: 73. / 255., b: 68. / 255., a: 0.58 };
+        let tint = match tone {
+            Some(_) => Rgba { r: 0., g: 0., b: 0., a: 0. },
+            None => Rgba { r: 75. / 255., g: 73. / 255., b: 68. / 255., a: 0.58 },
+        };
         let backdrop = Backdrop {
             order: 0,
             source: BackdropSource::Window,
@@ -960,6 +1078,9 @@ mod tests {
             mask: 0,
             mirror: false,
             clamp: None,
+            tone,
+            edge: None,
+            sharp: 0.,
         };
         let out = draw(8, 8, &pixels, backdrop)?;
         let i = (4 * 8 + 4) * 4;
@@ -970,7 +1091,7 @@ mod tests {
     // lifts the tinted result, and only then is it bounded by alpha.
     #[test]
     fn a_saturated_backdrop_is_bounded_by_alpha_after_its_tint() {
-        let Some(got) = glass_over_red() else {
+        let Some(got) = glass_over_red(None) else {
             eprintln!("no wgpu adapter, skipped");
             return;
         };
@@ -992,5 +1113,87 @@ mod tests {
                 assert!((v as i32 - want).abs() <= 1, "{width} px: {v}, want {want}");
             }
         }
+    }
+
+    // macOS's dark regular glass over opaque red, as atoll fits it: red's luma is low, so the
+    // curve lifts it little and its chroma gains enough to keep red full. The capture
+    // compositor asserts the same value.
+    #[test]
+    fn a_toned_backdrop_keeps_a_saturated_red_full() {
+        let tone = [31.1 / 255., 255.4 / 255., -127. / 255., 1.305, -0.538];
+        let Some(got) = glass_over_red(Some(tone)) else {
+            eprintln!("no wgpu adapter, skipped");
+            return;
+        };
+        for (v, want) in got.into_iter().zip([255, 15, 15, 255]) {
+            assert!((v as i32 - want).abs() <= 1, "{got:?}, want [255, 15, 15, 255]");
+        }
+    }
+
+    /// An unblurred 8 x 8 backdrop with 4 px corners at (4, 4) in a 16 x 16 frame whose rows
+    /// above `white_above` are white and the rest grey 128, its edge `edge`; the red of each pixel.
+    fn edged(white_above: u32, edge: [f32; 5]) -> Option<Vec<u8>> {
+        let pixels: Vec<u8> = (0..16)
+            .flat_map(|y| (0..16).flat_map(move |_| if y < white_above { [255; 4] } else { [128, 128, 128, 255] }))
+            .collect();
+        let bounds = Bounds { origin: point(px(4.), px(4.)), size: size(px(8.), px(8.)) }.scale(1.);
+        let frame = Bounds { origin: point(px(0.), px(0.)), size: size(px(16.), px(16.)) }.scale(1.);
+        let backdrop = Backdrop {
+            order: 0,
+            source: BackdropSource::Window,
+            bounds,
+            content_mask: ContentMask { bounds: frame },
+            corner_radii: Corners::all(ScaledPixels(4.)),
+            blur_radius: ScaledPixels(0.),
+            saturation: 1.,
+            tint: Hsla::transparent_black(),
+            highlight: 0.,
+            highlight_width: ScaledPixels(0.),
+            sample_limit: None,
+            opacity: 1.,
+            fallback: Hsla::transparent_black(),
+            mask: 0,
+            mirror: false,
+            clamp: None,
+            tone: None,
+            edge: Some(edge),
+            sharp: 0.,
+        };
+        let out = draw(16, 16, &pixels, backdrop)?;
+        Some(out.chunks(4).map(|p| p[0]).collect())
+    }
+
+    // The capture compositor asserts the same values.
+    #[test]
+    fn an_edged_backdrop_lights_its_top_and_bottom_and_bends_in_what_lies_outside() {
+        let Some(lit) = edged(0, [0.25, 0.5, 1., 0., 1.]) else {
+            eprintln!("no wgpu adapter, skipped");
+            return;
+        };
+        let at = |v: &[u8], x: usize, y: usize| v[y * 16 + x] as i32;
+        // Half a pixel in (96% covered): 0.25 e^-0.46 of white added at the top, half that at
+        // the bottom, nothing at the sides or three pixels in.
+        for (x, y, want) in [(8, 4, 165), (8, 11, 147), (4, 8, 128), (8, 8, 128)] {
+            assert!((at(&lit, x, y) - want).abs() <= 1, "({x}, {y}): {}, want {want}", at(&lit, x, y));
+        }
+        // The top row reads 1.3 px further up, in the white; three rows in it reads grey.
+        let Some(bent) = edged(4, [0., 1., 1., 2., 1.]) else { return };
+        assert!((at(&bent, 8, 4) - 250).abs() <= 1, "{}", at(&bent, 8, 4));
+        assert_eq!(at(&bent, 8, 7), 128);
+    }
+
+    // The capture compositor asserts the same values.
+    #[test]
+    fn a_sharpened_backdrop_keeps_its_share_of_what_lies_behind_unblurred() {
+        let Some(half) = sharpened(0.5) else {
+            eprintln!("no wgpu adapter, skipped");
+            return;
+        };
+        // The blur all but averages the two halves to 128; half of each pixel stays as it was.
+        for (x, want) in [(2, 191), (13, 191), (18, 64), (29, 64)] {
+            assert!((half[x] as i32 - want).abs() <= 2, "x {x}: {}, want {want}", half[x]);
+        }
+        let Some(none) = sharpened(0.) else { return };
+        assert!(none.iter().all(|&v| (v as i32 - 128).abs() <= 2), "{none:?}");
     }
 }

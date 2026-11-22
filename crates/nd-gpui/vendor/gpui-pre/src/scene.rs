@@ -702,6 +702,12 @@ pub struct Backdrop {
     pub mirror: bool,
     /// From [`BackdropFilter::clamp`]; Metal and Direct3D clamp the saturated blur to 0.
     pub clamp: Option<[f32; 2]>,
+    /// From [`BackdropFilter::tone`]; Metal and Direct3D saturate instead.
+    pub tone: Option<[f32; 5]>,
+    /// From [`BackdropFilter::edge`], its lengths scaled; Metal and Direct3D leave the edge plain.
+    pub edge: Option<[f32; 5]>,
+    /// From [`BackdropFilter::sharp`]; Metal and Direct3D blur all of it.
+    pub sharp: f32,
 }
 
 /// Coverage a backdrop is multiplied by, for a clip a content mask cannot hold (a circle, a
@@ -723,7 +729,7 @@ impl Backdrop {
         let sample = self
             .bounds
             .intersect(&self.content_mask.bounds)
-            .dilate(self.blur_radius * 3.);
+            .dilate(ScaledPixels(self.blur_radius.0 * 3. + self.edge.map_or(0., |e| e[3].abs().ceil())));
         match self.sample_limit {
             Some(limit) => sample.intersect(&limit),
             None => sample,
@@ -1182,6 +1188,9 @@ mod tests {
             mask: 0,
             mirror: false,
             clamp: None,
+            tone: None,
+            edge: None,
+            sharp: 0.,
         }
     }
 

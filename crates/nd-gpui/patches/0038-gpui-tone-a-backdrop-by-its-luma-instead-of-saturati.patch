@@ -1,0 +1,236 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: FormalSnake <kyaniserni@gmail.com>
+Date: Thu, 12 Nov 2026 22:42:07 +0000
+Subject: [PATCH 33/33] gpui: tone a backdrop by its luma instead of saturating
+ it, as macOS's glass does
+
+---
+ crates/gpui/src/scene.rs                |  3 ++
+ crates/gpui/src/style.rs                | 11 +++++
+ crates/gpui/src/window.rs               |  1 +
+ crates/gpui_apple/src/metal_renderer.rs |  1 +
+ crates/gpui_wgpu/src/backdrop.rs        | 56 +++++++++++++++++++++----
+ crates/gpui_wgpu/src/wgpu_renderer.rs   |  1 +
+ 6 files changed, 64 insertions(+), 9 deletions(-)
+
+diff --git a/crates/gpui/src/scene.rs b/crates/gpui/src/scene.rs
+index ff69c9dadd..2889e36a3f 100644
+--- a/crates/gpui/src/scene.rs
++++ b/crates/gpui/src/scene.rs
+@@ -702,6 +702,8 @@ pub struct Backdrop {
+     pub mirror: bool,
+     /// From [`BackdropFilter::clamp`]; Metal and Direct3D clamp the saturated blur to 0.
+     pub clamp: Option<[f32; 2]>,
++    /// From [`BackdropFilter::tone`]; Metal and Direct3D saturate instead.
++    pub tone: Option<[f32; 5]>,
+ }
+ 
+ /// Coverage a backdrop is multiplied by, for a clip a content mask cannot hold (a circle, a
+@@ -1182,6 +1184,7 @@ mod tests {
+             mask: 0,
+             mirror: false,
+             clamp: None,
++            tone: None,
+         }
+     }
+ 
+diff --git a/crates/gpui/src/style.rs b/crates/gpui/src/style.rs
+index 2e5d0f219c..806912ba41 100644
+--- a/crates/gpui/src/style.rs
++++ b/crates/gpui/src/style.rs
+@@ -377,6 +377,10 @@ pub struct BackdropFilter {
+     /// Leaves the saturated blur unclamped and clamps each channel of the tinted result to
+     /// this range (sRGB) instead, as macOS's materials do.
+     pub clamp: Option<[f32; 2]>,
++    /// Replaces the saturation, as macOS's glass does: with L the blur's luma (Rec. 709 on its
++    /// sRGB values), `[g0, g1, g2, k0, k1]` lays each channel c at
++    /// `g0 + g1 L + g2 L² + (k0 + k1 L)(c - L)`, clamped to 0..1.
++    pub tone: Option<[f32; 5]>,
+ }
+ 
+ impl Default for BackdropFilter {
+@@ -392,6 +396,7 @@ impl Default for BackdropFilter {
+             within: None,
+             mirror: false,
+             clamp: None,
++            tone: None,
+         }
+     }
+ }
+@@ -453,6 +458,12 @@ impl BackdropFilter {
+         self.clamp = Some([low, high]);
+         self
+     }
++
++    /// Tones the blur by its luma instead of saturating it, as [`Self::tone`] describes.
++    pub fn toned(mut self, tone: [f32; 5]) -> Self {
++        self.tone = Some(tone);
++        self
++    }
+ }
+ 
+ /// The possible values of the box-shadow property
+diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
+index 81c78739b4..df1f0d4968 100644
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -5086,6 +5086,7 @@ impl Window {
+             mask,
+             mirror: filter.mirror,
+             clamp: filter.clamp,
++            tone: filter.tone,
+         });
+     }
+ 
+diff --git a/crates/gpui_apple/src/metal_renderer.rs b/crates/gpui_apple/src/metal_renderer.rs
+index ff38fe469e..e18e3ffcd9 100644
+--- a/crates/gpui_apple/src/metal_renderer.rs
++++ b/crates/gpui_apple/src/metal_renderer.rs
+@@ -1992,6 +1992,7 @@ mod tests {
+             mask: 0,
+             mirror: false,
+             clamp: None,
++            tone: None,
+         }
+     }
+ 
+diff --git a/crates/gpui_wgpu/src/backdrop.rs b/crates/gpui_wgpu/src/backdrop.rs
+index 8eec7fe374..f58b85fef1 100644
+--- a/crates/gpui_wgpu/src/backdrop.rs
++++ b/crates/gpui_wgpu/src/backdrop.rs
+@@ -48,9 +48,14 @@ struct Params {
+     has_clamp: u32,
+     clamp_low: f32,
+     clamp_high: f32,
++    // Tone the blur by its luma instead of saturating it: g0 + g1 L + g2 L^2 + (k0 + k1 L)(c - L).
++    has_tone: u32,
++    tone_g0: f32,
++    tone_g1: f32,
++    tone_g2: f32,
++    tone_k0: f32,
++    tone_k1: f32,
+     pad0: u32,
+-    pad1: u32,
+-    pad2: u32,
+ }
+ 
+ @group(0) @binding(0) var<uniform> params: Params;
+@@ -178,8 +183,17 @@ fn fs_composite(in: Varyings) -> @location(0) vec4<f32> {
+         let blurred = params.dst_origin + (p - params.src_origin) / params.factor;
+         color = sample_clamped(blurred, params.dst_origin, params.dst_origin + params.dst_size);
+         let luma = dot(color.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+-        let saturated = mix(vec3<f32>(luma), color.rgb, params.saturation);
+-        color = vec4<f32>(select(max(saturated, vec3<f32>(0.0)), saturated, params.has_clamp != 0u), color.a);
++        if (params.has_tone != 0u) {
++            // The curve is not linear, so it takes the straight colour.
++            let a = max(color.a, 1e-6);
++            let l = luma / a;
++            let g = params.tone_g0 + l * (params.tone_g1 + l * params.tone_g2);
++            let toned = vec3<f32>(g) + (params.tone_k0 + params.tone_k1 * l) * (color.rgb / a - vec3<f32>(l));
++            color = vec4<f32>(saturate(toned) * color.a, color.a);
++        } else {
++            let saturated = mix(vec3<f32>(luma), color.rgb, params.saturation);
++            color = vec4<f32>(select(max(saturated, vec3<f32>(0.0)), saturated, params.has_clamp != 0u), color.a);
++        }
+     }
+     let tint = params.tint;
+     color = vec4<f32>(tint.rgb * tint.a + color.rgb * (1.0 - tint.a), tint.a + color.a * (1.0 - tint.a));
+@@ -237,10 +251,12 @@ struct Params {
+     has_clamp: u32,
+     clamp_low: f32,
+     clamp_high: f32,
+-    pad: [u32; 3],
++    has_tone: u32,
++    tone: [f32; 5],
++    pad: u32,
+ }
+ 
+-const _: () = assert!(std::mem::offset_of!(Params, radii) == 96 && std::mem::size_of::<Params>() == 192);
++const _: () = assert!(std::mem::offset_of!(Params, radii) == 96 && std::mem::size_of::<Params>() == 208);
+ 
+ /// A backdrop's sample region in whole frame pixels and the factor it is downsampled by.
+ #[derive(Clone, Copy, Debug, PartialEq)]
+@@ -639,6 +655,8 @@ impl Backdrops {
+                 has_clamp: backdrop.clamp.is_some() as u32,
+                 clamp_low: backdrop.clamp.map_or(0., |c| c[0]),
+                 clamp_high: backdrop.clamp.map_or(1., |c| c[1]),
++                has_tone: backdrop.tone.is_some() as u32,
++                tone: backdrop.tone.unwrap_or_default(),
+                 ..base
+             };
+             if let Some(r) = region {
+@@ -933,16 +951,20 @@ mod tests {
+             mask: 0,
+             mirror: true,
+             clamp: None,
++            tone: None,
+         };
+         let out = draw(w, h, &pixels, backdrop)?;
+         Some((4..4 + width).map(|x| out[((3 * w + x) * 4) as usize]).collect())
+     }
+ 
+     /// Opaque red under dark regular glass (saturation 1.5, tint (75, 73, 68) at 0.58), 8 x 8.
+-    fn glass_over_red() -> Option<[u8; 4]> {
++    fn glass_over_red(tone: Option<[f32; 5]>) -> Option<[u8; 4]> {
+         let pixels: Vec<u8> = (0..64).flat_map(|_| [255, 0, 0, 255]).collect();
+         let all = Bounds { origin: point(px(0.), px(0.)), size: size(px(8.), px(8.)) }.scale(1.);
+-        let tint = Rgba { r: 75. / 255., g: 73. / 255., b: 68. / 255., a: 0.58 };
++        let tint = match tone {
++            Some(_) => Rgba { r: 0., g: 0., b: 0., a: 0. },
++            None => Rgba { r: 75. / 255., g: 73. / 255., b: 68. / 255., a: 0.58 },
++        };
+         let backdrop = Backdrop {
+             order: 0,
+             source: BackdropSource::Window,
+@@ -960,6 +982,7 @@ mod tests {
+             mask: 0,
+             mirror: false,
+             clamp: None,
++            tone,
+         };
+         let out = draw(8, 8, &pixels, backdrop)?;
+         let i = (4 * 8 + 4) * 4;
+@@ -970,7 +993,7 @@ mod tests {
+     // lifts the tinted result, and only then is it bounded by alpha.
+     #[test]
+     fn a_saturated_backdrop_is_bounded_by_alpha_after_its_tint() {
+-        let Some(got) = glass_over_red() else {
++        let Some(got) = glass_over_red(None) else {
+             eprintln!("no wgpu adapter, skipped");
+             return;
+         };
+@@ -993,4 +1016,19 @@ mod tests {
+             }
+         }
+     }
++
++    // macOS's dark regular glass over opaque red, as atoll fits it: red's luma is low, so the
++    // curve lifts it little and its chroma gains enough to keep red full. The capture
++    // compositor asserts the same value.
++    #[test]
++    fn a_toned_backdrop_keeps_a_saturated_red_full() {
++        let tone = [31.1 / 255., 255.4 / 255., -127. / 255., 1.305, -0.538];
++        let Some(got) = glass_over_red(Some(tone)) else {
++            eprintln!("no wgpu adapter, skipped");
++            return;
++        };
++        for (v, want) in got.into_iter().zip([255, 15, 15, 255]) {
++            assert!((v as i32 - want).abs() <= 1, "{got:?}, want [255, 15, 15, 255]");
++        }
++    }
+ }
+diff --git a/crates/gpui_wgpu/src/wgpu_renderer.rs b/crates/gpui_wgpu/src/wgpu_renderer.rs
+index be4d288c49..29811bba51 100644
+--- a/crates/gpui_wgpu/src/wgpu_renderer.rs
++++ b/crates/gpui_wgpu/src/wgpu_renderer.rs
+@@ -3402,6 +3402,7 @@ mod tests {
+             mask: 0,
+             mirror: false,
+             clamp: None,
++            tone: None,
+         }
+     }
+ 
+-- 
+2.56.0
+

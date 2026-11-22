@@ -34,5 +34,8 @@
 0032-gpui-mirror-a-backdrop-s-sample-region-at-its-edge-a.patch
 0033-gpui-report-the-tiled-sides-under-server-side-decorat.patch
 0034-gpui-default-a-window-s-tiling-to-what-its-client-sid.patch
+0038-gpui-tone-a-backdrop-by-its-luma-instead-of-saturati.patch
+0039-gpui-light-a-backdrop-s-edge-and-bend-its-blur-in-th.patch
+0040-gpui-mix-a-share-of-a-backdrop-s-unblurred-region-in.patch
 0041-gpui_linux-read-plain-text-plain-and-count-clipboard-selec.patch
 0042-gpui_linux-take-window-focus-from-xdg_toplevel-activated.patch

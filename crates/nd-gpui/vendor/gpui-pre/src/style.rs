@@ -377,6 +377,19 @@ pub struct BackdropFilter {
     /// Leaves the saturated blur unclamped and clamps each channel of the tinted result to
     /// this range (sRGB) instead, as macOS's materials do.
     pub clamp: Option<[f32; 2]>,
+    /// Replaces the saturation, as macOS's glass does: with L the blur's luma (Rec. 709 on its
+    /// sRGB values), `[g0, g1, g2, k0, k1]` lays each channel c at
+    /// `g0 + g1 L + g2 L² + (k0 + k1 L)(c - L)`, clamped to 0..1.
+    pub tone: Option<[f32; 5]>,
+    /// The edge of macOS's Liquid Glass: `[light, bottom, light_width, bend, bend_width]`. White
+    /// `light` is added at the edge, falling off as `exp(-depth / light_width)` inward and
+    /// weighted by the edge normal's vertical part to the fourth power, by `bottom` where the
+    /// edge faces down. The blur is read `bend · exp(-depth / bend_width)` further out along the
+    /// normal, so the backdrop bends in at the edge. Widths and `bend` in pixels.
+    pub edge: Option<[f32; 5]>,
+    /// The share of the unblurred backdrop mixed into the blur before the tone or saturation:
+    /// macOS's Liquid Glass keeps what lies behind it sharp under a wide blur.
+    pub sharp: f32,
 }
 
 impl Default for BackdropFilter {
@@ -392,6 +405,9 @@ impl Default for BackdropFilter {
             within: None,
             mirror: false,
             clamp: None,
+            tone: None,
+            edge: None,
+            sharp: 0.,
         }
     }
 }
@@ -451,6 +467,24 @@ impl BackdropFilter {
     /// Clamps the tinted result to `low..=high` instead of the saturated blur to 0.
     pub fn clamped(mut self, low: f32, high: f32) -> Self {
         self.clamp = Some([low, high]);
+        self
+    }
+
+    /// Tones the blur by its luma instead of saturating it, as [`Self::tone`] describes.
+    pub fn toned(mut self, tone: [f32; 5]) -> Self {
+        self.tone = Some(tone);
+        self
+    }
+
+    /// Lights and bends the edge as [`Self::edge`] describes.
+    pub fn edged(mut self, edge: [f32; 5]) -> Self {
+        self.edge = Some(edge);
+        self
+    }
+
+    /// Mixes [`Self::sharp`] of the unblurred backdrop into the blur.
+    pub fn sharpened(mut self, sharp: f32) -> Self {
+        self.sharp = sharp;
         self
     }
 }
