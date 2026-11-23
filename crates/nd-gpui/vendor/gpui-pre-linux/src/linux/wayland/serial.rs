@@ -93,16 +93,23 @@ impl SerialTracker {
             .map(|press| SelectionSerial(press.serial))
     }
 
-    /// Returns the latest press if a still-alive surface had focus when it arrived.
-    pub fn activation_context(&self) -> Option<ActivationContext> {
+    /// Returns the latest press with the surface that had focus when it arrived, or, when
+    /// that surface is gone, `focused`: the app's surface the compositor has given the
+    /// keyboard since. A press that closed its window (an alert's Return) still lets the
+    /// app bring another window forward, as compositors grant on the serial.
+    pub fn activation_context(
+        &self,
+        focused: Option<wl_surface::WlSurface>,
+    ) -> Option<ActivationContext> {
         let press = self.latest_press.as_ref()?;
         let surface = press
             .focused_surface
-            .as_ref()
-            .filter(|surface| surface.is_alive())?;
+            .clone()
+            .filter(|surface| surface.is_alive())
+            .or_else(|| focused.filter(|surface| surface.is_alive()))?;
         Some(ActivationContext {
             serial: press.serial,
-            requesting_surface: surface.clone(),
+            requesting_surface: surface,
         })
     }
 }

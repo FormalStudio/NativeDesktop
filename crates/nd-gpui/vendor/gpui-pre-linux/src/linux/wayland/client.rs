@@ -610,6 +610,18 @@ pub(crate) enum PendingActivation {
 }
 
 impl WaylandClientState {
+    /// The latest press to name in an activation token; past a closed surface, the
+    /// keyboard-focused one or else `own`, the surface the token is for.
+    fn activation_context(&self, own: Option<wl_surface::WlSurface>) -> Option<ActivationContext> {
+        let focused = self
+            .keyboard_focused_window
+            .as_ref()
+            .map(|w| w.surface())
+            .filter(|surface| surface.is_alive())
+            .or(own);
+        self.serial_tracker.activation_context(focused)
+    }
+
     fn consume_startup_activation_token(&mut self, surface: &wl_surface::WlSurface) {
         let Some(startup_activation_token) = self.startup_activation_token.take() else {
             return;
@@ -712,12 +724,8 @@ impl WaylandClientStatePtr {
         self.0.upgrade().unwrap().borrow().serial_tracker.get(kind)
     }
 
-    pub fn activation_context(&self) -> Option<ActivationContext> {
-        self.0
-            .upgrade()?
-            .borrow()
-            .serial_tracker
-            .activation_context()
+    pub fn activation_context(&self, own: &wl_surface::WlSurface) -> Option<ActivationContext> {
+        self.0.upgrade()?.borrow().activation_context(Some(own.clone()))
     }
 
     pub fn start_external_drag(
@@ -1619,10 +1627,9 @@ impl WaylandConnection {
 
     pub(crate) fn open_uri(&self, uri: &str) {
         let state = self.0.borrow();
-        if let (Some(activation), Some(context)) = (
-            state.globals.activation.clone(),
-            state.serial_tracker.activation_context(),
-        ) {
+        if let (Some(activation), Some(context)) =
+            (state.globals.activation.clone(), state.activation_context(None))
+        {
             let token = activation
                 .get_activation_token(&state.globals.qh, PendingActivation::Uri(uri.to_string()));
             token.set_serial(context.serial.as_raw(), &state.wl_seat);
@@ -1636,10 +1643,9 @@ impl WaylandConnection {
 
     pub(crate) fn reveal_path(&self, path: PathBuf) {
         let state = self.0.borrow();
-        if let (Some(activation), Some(context)) = (
-            state.globals.activation.clone(),
-            state.serial_tracker.activation_context(),
-        ) {
+        if let (Some(activation), Some(context)) =
+            (state.globals.activation.clone(), state.activation_context(None))
+        {
             let token =
                 activation.get_activation_token(&state.globals.qh, PendingActivation::Path(path));
             token.set_serial(context.serial.as_raw(), &state.wl_seat);

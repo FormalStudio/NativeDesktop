@@ -2183,7 +2183,7 @@ impl PlatformWindow for WaylandWindow {
             // Without a recent press the compositor won't grant focus, but still request a
             // token: KWin and Mutter mark the window as demanding attention and end their
             // launch feedback once the token is passed to `activate`.
-            if let Some(context) = state.client.activation_context() {
+            if let Some(context) = state.client.activation_context(&state.surface) {
                 token.set_serial(context.serial.as_raw(), &state.globals.seat);
                 token.set_surface(&context.requesting_surface);
             } else {
