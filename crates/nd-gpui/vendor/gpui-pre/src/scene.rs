@@ -776,6 +776,20 @@ pub enum BorderStyle {
     Dashed = 1,
 }
 
+/// The shape a window draws its rounded corners in (`Window::set_corner_curve`).
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u32)]
+pub enum CornerCurve {
+    /// A quarter circle of the corner radius.
+    #[default]
+    Circular = 0,
+    /// macOS's continuous corner: it reaches further along each edge than a
+    /// circle of the same radius and bends into the edge without a kink in
+    /// curvature. A corner without room for that extent falls back toward the
+    /// circle, so discs and capsules stay round.
+    Continuous = 1,
+}
+
 /// A data type representing a 2 dimensional transformation that can be applied to an element.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[repr(C)]

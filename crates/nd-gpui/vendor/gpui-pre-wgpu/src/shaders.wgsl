@@ -80,7 +80,8 @@ fn apply_contrast_and_gamma_correction3(sample: vec3<f32>, color: vec3<f32>, enh
 struct GlobalParams {
     viewport_size: vec2<f32>,
     premultiplied_alpha: u32,
-    pad: u32,
+    // 1 draws every rounded corner continuous (`CornerCurve::Continuous`).
+    corner_curve: u32,
 }
 
 struct GammaParams {
@@ -354,36 +355,39 @@ fn pick_corner_radius(center_to_point: vec2<f32>, radii: Corners) -> f32 {
     }
 }
 
+// The radii of the corners sharing the nearest corner's horizontal and its
+// vertical edge.
+fn pick_corner_neighbours(center_to_point: vec2<f32>, radii: Corners) -> vec2<f32> {
+    if (center_to_point.x < 0.0) {
+        if (center_to_point.y < 0.0) {
+            return vec2<f32>(radii.top_right, radii.bottom_left);
+        } else {
+            return vec2<f32>(radii.bottom_right, radii.top_left);
+        }
+    } else {
+        if (center_to_point.y < 0.0) {
+            return vec2<f32>(radii.top_left, radii.bottom_right);
+        } else {
+            return vec2<f32>(radii.bottom_left, radii.top_right);
+        }
+    }
+}
+
 // Signed distance of the point to the quad's border - positive outside the
 // border, and negative inside.
 //
-// See comments on similar code using `quad_sdf_impl` in `fs_quad` for
+// See comments on similar code using `corner_sdf` in `fs_quad` for
 // explanation.
 fn quad_sdf(point: vec2<f32>, bounds: Bounds, corner_radii: Corners) -> f32 {
     let half_size = bounds.size / 2.0;
     let center = bounds.origin + half_size;
     let center_to_point = point - center;
     let corner_radius = pick_corner_radius(center_to_point, corner_radii);
+    let corner = corner_shape(corner_radius, pick_corner_neighbours(center_to_point, corner_radii),
+        bounds.size, globals.corner_curve != 0u);
     let corner_to_point = abs(center_to_point) - half_size;
-    let corner_center_to_point = corner_to_point + corner_radius;
-    return quad_sdf_impl(corner_center_to_point, corner_radius);
-}
-
-fn quad_sdf_impl(corner_center_to_point: vec2<f32>, corner_radius: f32) -> f32 {
-    if (corner_radius == 0.0) {
-        // Fast path for unrounded corners.
-        return max(corner_center_to_point.x, corner_center_to_point.y);
-    } else {
-        // Signed distance of the point from a quad that is inset by corner_radius.
-        // It is negative inside this quad, and positive outside.
-        let signed_distance_to_inset_quad =
-            // 0 inside the inset quad, and positive outside.
-            length(max(vec2<f32>(0.0), corner_center_to_point)) +
-            // 0 outside the inset quad, and negative inside.
-            min(0.0, max(corner_center_to_point.x, corner_center_to_point.y));
-
-        return signed_distance_to_inset_quad - corner_radius;
-    }
+    let corner_center_to_point = corner_to_point + corner.extent;
+    return corner_sdf(corner_center_to_point, corner);
 }
 
 // Abstract away the final color transformation based on the
@@ -596,8 +600,10 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
     // minimum distance between the center of the pixel and the edge.
     let antialias_threshold = 0.5;
 
-    // Radius of the nearest corner
+    // Radius of the nearest corner, and the shape the window draws it in
     let corner_radius = pick_corner_radius(center_to_point, quad.corner_radii);
+    let corner = corner_shape(corner_radius, pick_corner_neighbours(center_to_point, quad.corner_radii),
+        size, globals.corner_curve != 0u);
 
     // Width of the nearest borders
     let border = vec2<f32>(
@@ -620,9 +626,9 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
     // the point into the bottom right quadrant. Both components are <= 0.
     let corner_to_point = abs(center_to_point) - half_size;
 
-    // Vector from the point to the center of the rounded corner's circle, also
+    // Vector from the point to the center of the rounded corner, also
     // mirrored into bottom right quadrant.
-    let corner_center_to_point = corner_to_point + corner_radius;
+    let corner_center_to_point = corner_to_point + corner.extent;
 
     // Whether the nearest point on the border is rounded
     let is_near_rounded_corner =
@@ -655,7 +661,7 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
 
     // Signed distance of the point to the outside edge of the quad's border. It
     // is positive outside this edge, and negative inside.
-    let outer_sdf = quad_sdf_impl(corner_center_to_point, corner_radius);
+    let outer_sdf = corner_sdf(corner_center_to_point, corner);
 
     // Approximate signed distance of the point to the inside edge of the quad's
     // border. It is negative outside this edge (within the border), and
@@ -674,11 +680,13 @@ fn fs_quad(input: QuadVarying) -> @location(0) vec4<f32> {
         // Fast path for points that must be outside the inner edge.
         inner_sdf = -1.0;
     } else if (reduced_border.x == reduced_border.y) {
-        // Fast path for circular inner edge.
+        // Fast path for an inner edge parallel to the outer one.
         inner_sdf = -(outer_sdf + reduced_border.x);
-    } else {
-        let ellipse_radii = max(vec2<f32>(0.0), corner_radius - reduced_border);
+    } else if (corner.exponent == 2.0) {
+        let ellipse_radii = max(vec2<f32>(0.0), corner.extent - reduced_border);
         inner_sdf = quarter_ellipse_sdf(corner_center_to_point, ellipse_radii);
+    } else {
+        inner_sdf = corner_inner_sdf(corner_center_to_point, corner.extent - reduced_border, corner.exponent);
     }
 
     // Negative when inside the border

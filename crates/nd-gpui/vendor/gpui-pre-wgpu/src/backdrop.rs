@@ -10,9 +10,9 @@
 use std::num::NonZeroU64;
 
 use bytemuck::{Pod, Zeroable};
-use gpui::{Backdrop, BackdropMask, BackdropSource, Rgba, ScaledPixels};
+use gpui::{Backdrop, BackdropMask, BackdropSource, CornerCurve, Rgba, ScaledPixels};
 
-pub(crate) const SHADER: &str = r#"
+pub(crate) const SHADER: &str = concat!(include_str!("corners.wgsl"), r#"
 // Every vec4 on a 16-byte boundary, so the layout is the same under WGSL's, HLSL's and C's rules.
 struct Params {
     target_size: vec2<f32>,
@@ -64,8 +64,9 @@ struct Params {
     edge_bend_width: f32,
     // Composite: the share of the unblurred region (`sharp_source`) mixed into the blur.
     sharp: f32,
+    // Composite: 1 draws the shape's corners continuous (`CornerCurve::Continuous`).
+    corner_curve: u32,
     pad1: u32,
-    pad2: u32,
 }
 
 @group(0) @binding(0) var<uniform> params: Params;
@@ -162,15 +163,20 @@ fn rounded_rect_sdf(p: vec2<f32>) -> f32 {
     let half_size = params.bounds_size * 0.5;
     let center = params.bounds_origin + half_size;
     let d = p - center;
+    // radii: top left, top right, bottom right, bottom left; `neighbours` the
+    // corners sharing this one's horizontal and vertical edge.
     var radius: f32;
+    var neighbours: vec2<f32>;
     if (d.x < 0.0) {
         radius = select(params.radii.w, params.radii.x, d.y < 0.0);
+        neighbours = select(params.radii.zx, params.radii.yw, d.y < 0.0);
     } else {
         radius = select(params.radii.z, params.radii.y, d.y < 0.0);
+        neighbours = select(params.radii.wy, params.radii.xz, d.y < 0.0);
     }
     radius = min(radius, min(half_size.x, half_size.y));
-    let q = abs(d) - half_size + radius;
-    return length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - radius;
+    let corner = corner_shape(radius, neighbours, params.bounds_size, params.corner_curve != 0u);
+    return corner_sdf(abs(d) - half_size + corner.extent, corner);
 }
 
 @fragment
@@ -256,7 +262,7 @@ fn fs_composite(in: Varyings) -> @location(0) vec4<f32> {
     }
     return color * coverage * params.opacity;
 }
-"#;
+"#);
 
 #[derive(Clone, Copy, Pod, Zeroable)]
 #[repr(C)]
@@ -293,7 +299,8 @@ struct Params {
     has_edge: u32,
     edge: [f32; 5],
     sharp: f32,
-    pad: [u32; 2],
+    corner_curve: u32,
+    pad: u32,
 }
 
 const _: () = assert!(std::mem::offset_of!(Params, radii) == 96 && std::mem::size_of::<Params>() == 240);
@@ -617,6 +624,7 @@ impl Backdrops {
         frame: &wgpu::Texture,
         backdrops: &[Backdrop],
         masks: &[BackdropMask<ScaledPixels>],
+        corner_curve: CornerCurve,
     ) -> Prepared {
         let size = (frame.width(), frame.height());
         let has_source = frame.usage().contains(wgpu::TextureUsages::COPY_SRC);
@@ -711,6 +719,7 @@ impl Backdrops {
                 tone: backdrop.tone.unwrap_or_default(),
                 has_edge: backdrop.edge.is_some() as u32,
                 edge: backdrop.edge.unwrap_or_default(),
+                corner_curve: corner_curve as u32,
                 ..base
             };
             if let Some(r) = region {
@@ -948,7 +957,8 @@ mod tests {
         let mut backdrops = Backdrops::new(&device, FORMAT);
         backdrops.begin_frame(&device, &[backdrop]);
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-        let prepared = backdrops.prepare(&device, &queue, &mut encoder, &frame, &[backdrop], &[]);
+        let prepared =
+            backdrops.prepare(&device, &queue, &mut encoder, &frame, &[backdrop], &[], CornerCurve::Circular);
         {
             let view = frame.create_view(&wgpu::TextureViewDescriptor::default());
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {

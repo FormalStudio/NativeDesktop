@@ -1917,6 +1917,12 @@ impl PlatformWindow for X11Window {
         self.0.state.borrow().decorations()
     }
 
+    fn set_corner_curve(&self, curve: gpui::CornerCurve) {
+        if let Some(renderer) = &mut self.0.state.borrow_mut().renderer {
+            renderer.set_corner_curve(curve);
+        }
+    }
+
     fn set_client_inset(&self, inset: Pixels) {
         let mut state = self.0.state.borrow_mut();
 
