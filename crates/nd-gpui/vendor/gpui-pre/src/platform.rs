@@ -1865,6 +1865,14 @@ pub trait PlatformAtlas {
     ) -> Result<Option<AtlasTile>>;
     fn remove(&self, key: &AtlasKey);
 
+    /// Replaces the pixels of `bounds`, relative to `key`'s tile, with `bytes`: rows of
+    /// `bounds.size.width` pixels, laid out as the tile was inserted. Returns false when `key`
+    /// has no tile, `bounds` leaves it, or the atlas cannot write part of a tile; the tile is
+    /// then as it was.
+    fn update(&self, _key: &AtlasKey, _bounds: Bounds<DevicePixels>, _bytes: &[u8]) -> bool {
+        false
+    }
+
     #[cfg(any(test, feature = "test-support", feature = "bench-support"))]
     fn contains(&self, _key: &AtlasKey) -> bool {
         false
@@ -1881,6 +1889,13 @@ pub trait AtlasBackend {
     ) -> Result<AtlasTile>;
 
     fn remove(&mut self, tile: AtlasTile);
+
+    /// Writes `bytes` over `bounds` of `tile`'s texture; `bounds` lies inside the tile, in the
+    /// texture's coordinates. Returns false when the backend cannot, or `bytes` is not
+    /// `bounds` worth of the texture's pixels.
+    fn update(&mut self, _tile: AtlasTile, _bounds: Bounds<DevicePixels>, _bytes: &[u8]) -> bool {
+        false
+    }
 }
 
 #[doc(hidden)]
@@ -1940,6 +1955,23 @@ impl<Backend: AtlasBackend> AtlasState<Backend> {
             self.backend.remove(tile);
         }
     }
+
+    pub fn update(&mut self, key: &AtlasKey, bounds: Bounds<DevicePixels>, bytes: &[u8]) -> bool {
+        let Some(tile) = self.tiles_by_key.get(key).copied() else {
+            return false;
+        };
+        let (x, y) = (bounds.origin.x.0, bounds.origin.y.0);
+        let (w, h) = (bounds.size.width.0, bounds.size.height.0);
+        let size = tile.bounds.size;
+        if x < 0 || y < 0 || w <= 0 || h <= 0 || x + w > size.width.0 || y + h > size.height.0 {
+            return false;
+        }
+        let at = Bounds {
+            origin: tile.bounds.origin + bounds.origin,
+            size: bounds.size,
+        };
+        self.backend.update(tile, at, bytes)
+    }
 }
 
 /// A sprite atlas for windows without a GPU. It hands out uniquely identified
@@ -1980,6 +2012,10 @@ impl AtlasBackend for HeadlessAtlasBackend {
     }
 
     fn remove(&mut self, _tile: AtlasTile) {}
+
+    fn update(&mut self, _tile: AtlasTile, _bounds: Bounds<DevicePixels>, _bytes: &[u8]) -> bool {
+        true
+    }
 }
 
 impl PlatformAtlas for HeadlessAtlas {
@@ -1993,6 +2029,10 @@ impl PlatformAtlas for HeadlessAtlas {
 
     fn remove(&self, key: &AtlasKey) {
         self.0.lock().remove(key);
+    }
+
+    fn update(&self, key: &AtlasKey, bounds: Bounds<DevicePixels>, bytes: &[u8]) -> bool {
+        self.0.lock().update(key, bounds, bytes)
     }
 
     #[cfg(any(test, feature = "test-support", feature = "bench-support"))]
@@ -3741,6 +3781,7 @@ mod atlas_tests {
         insert_calls: u32,
         fail_next_insert: bool,
         removed_tiles: Vec<AtlasTile>,
+        updated_bounds: Vec<Bounds<DevicePixels>>,
     }
 
     impl AtlasBackend for RecordingAtlasBackend {
@@ -3767,6 +3808,11 @@ mod atlas_tests {
 
         fn remove(&mut self, tile: AtlasTile) {
             self.removed_tiles.push(tile);
+        }
+
+        fn update(&mut self, _tile: AtlasTile, bounds: Bounds<DevicePixels>, _bytes: &[u8]) -> bool {
+            self.updated_bounds.push(bounds);
+            true
         }
     }
 
@@ -3841,6 +3887,25 @@ mod atlas_tests {
         assert_eq!(reset_calls, 1);
         assert!(!state.contains(&other_key));
         assert_eq!(state.backend.removed_tiles, vec![tile]);
+        Ok(())
+    }
+
+    #[test]
+    fn update_writes_only_inside_a_cached_tile() -> Result<()> {
+        let mut state = AtlasState::new(RecordingAtlasBackend::default());
+        let key = image_key(1);
+        let rect = |x, y, w, h| Bounds::new(point(DevicePixels(x), DevicePixels(y)), size(DevicePixels(w), DevicePixels(h)));
+        assert!(!state.update(&key, rect(0, 0, 1, 1), &[0; 4]), "no tile yet");
+
+        let four = size(DevicePixels(4), DevicePixels(4));
+        state
+            .get_or_insert_with(key.clone(), &mut || Ok(Some((four, Cow::Owned(vec![0; 64])))))?
+            .context("builder should produce a tile")?;
+        assert!(state.update(&key, rect(1, 2, 3, 2), &[0; 24]));
+        assert!(!state.update(&key, rect(2, 2, 3, 1), &[0; 12]), "past the right edge");
+        assert!(!state.update(&key, rect(0, -1, 1, 1), &[0; 4]), "above the tile");
+        assert!(!state.update(&key, rect(0, 0, 0, 1), &[]), "empty");
+        assert_eq!(state.backend.updated_bounds, vec![rect(1, 2, 3, 2)]);
         Ok(())
     }
 }

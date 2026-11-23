@@ -128,6 +128,11 @@ impl PlatformAtlas for WgpuAtlas {
         let _hold = crate::wgpu_context::frame_hold();
         self.0.lock().remove(key);
     }
+
+    fn update(&self, key: &AtlasKey, bounds: Bounds<DevicePixels>, bytes: &[u8]) -> bool {
+        let _hold = crate::wgpu_context::frame_hold();
+        self.0.lock().update(key, bounds, bytes)
+    }
 }
 
 impl Drop for WgpuAtlas {
@@ -170,6 +175,20 @@ impl AtlasBackend for WgpuAtlasTextures {
                 *texture_slot = Some(texture);
             }
         }
+    }
+
+    fn update(&mut self, tile: AtlasTile, bounds: Bounds<DevicePixels>, bytes: &[u8]) -> bool {
+        let Some(texture) = self.storage.get(tile.texture_id) else {
+            return false;
+        };
+        let pixels = bounds.size.width.0 as usize * bounds.size.height.0 as usize;
+        if bytes.len() != pixels * texture.bytes_per_pixel() as usize {
+            return false;
+        }
+        // Queued behind the tile's own upload, so a tile inserted and updated before the
+        // next frame ends up with the update on top.
+        self.upload_texture(tile.texture_id, bounds, bytes);
+        true
     }
 }
 

@@ -8,7 +8,7 @@ use crate::subscription::SingleSubscriberSet;
 use crate::taffy::TaffyLayoutEngine;
 use crate::{
     Action, AnyDrag, AnyElement, AnyImageCache, AnyTooltip, AnyView, App, AppContext, Arena, Asset,
-    AsyncWindowContext, AtlasTile, AvailableSpace, Backdrop, BackdropFilter, BackdropMask, BackdropSource,
+    AsyncWindowContext, AtlasKey, AtlasTile, AvailableSpace, Backdrop, BackdropFilter, BackdropMask, BackdropSource,
     Background, BorderStyle, Bounds, BoxShadow,
     Capslock, Context, Corners, CursorHideMode, CursorStyle, Decorations, DevicePixels,
     DispatchActionListener, DispatchNodeId, DispatchTree, DisplayId, Edges, Effect, Entity,
@@ -5753,6 +5753,35 @@ impl Window {
         }
 
         Ok(())
+    }
+
+    /// Brings this window's copy of a drawn image up to date after `bounds` of a frame changed
+    /// in place ([`RenderImage::as_bytes_mut`]), uploading only those pixels. An atlas that
+    /// cannot write part of a tile drops it, and the next paint uploads the whole frame.
+    pub fn update_image(&mut self, data: &RenderImage, frame_index: usize, bounds: Bounds<DevicePixels>) {
+        let key: AtlasKey = RenderImageParams {
+            image_id: data.id,
+            frame_index,
+        }
+        .into();
+        let size = data.size(frame_index);
+        let Some(bytes) = data.as_bytes(frame_index) else {
+            return;
+        };
+        let bounds = bounds.intersect(&Bounds::new(point(DevicePixels(0), DevicePixels(0)), size));
+        let (x, y) = (bounds.origin.x.0 as usize, bounds.origin.y.0 as usize);
+        let (w, h) = (bounds.size.width.0 as usize, bounds.size.height.0 as usize);
+        if w == 0 || h == 0 {
+            return;
+        }
+        let stride = size.width.0 as usize * 4;
+        let mut rows = Vec::with_capacity(w * h * 4);
+        for row in bytes.chunks_exact(stride).skip(y).take(h) {
+            rows.extend_from_slice(&row[x * 4..(x + w) * 4]);
+        }
+        if !self.sprite_atlas.update(&key, bounds, &rows) {
+            self.sprite_atlas.remove(&key);
+        }
     }
 
     /// Returns whether every frame of an image is present in the sprite atlas.

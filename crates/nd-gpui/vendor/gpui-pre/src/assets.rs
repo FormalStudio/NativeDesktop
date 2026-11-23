@@ -75,6 +75,15 @@ impl RenderImage {
             .map(|frame| frame.buffer().as_raw().as_slice())
     }
 
+    /// The bytes of a frame, to change in place. A window that has drawn the image keeps
+    /// its own copy; [`Window::update_image`](crate::Window::update_image) brings it up to
+    /// date with what changed.
+    pub fn as_bytes_mut(&mut self, frame_index: usize) -> Option<&mut [u8]> {
+        self.data
+            .get_mut(frame_index)
+            .map(|frame| &mut **frame.buffer_mut())
+    }
+
     /// Get the size of this image, in pixels.
     pub fn size(&self, frame_index: usize) -> Size<DevicePixels> {
         self.data
