@@ -130,6 +130,13 @@ fn window_features(f: &WKWindowFeatures) -> Option<WindowFeatures> {
     (out != WindowFeatures::default()).then_some(out)
 }
 
+/// `scheme://host`, with the port only when it is not the scheme's default.
+fn origin_string(origin: &WKSecurityOrigin) -> String {
+    let (scheme, host, port) = unsafe { (origin.protocol().to_string(), origin.host().to_string(), origin.port()) };
+    let default = matches!((scheme.as_str(), port), ("https", 443) | ("http", 80) | (_, 0));
+    if default { format!("{scheme}://{host}") } else { format!("{scheme}://{host}:{port}") }
+}
+
 /// An alert, confirm or prompt as a sheet on the view's window. `None` is dismissed.
 fn script_panel(
     owner: &WkPage,
@@ -468,11 +475,7 @@ define_class!(
                 WKMediaCaptureType::Microphone => vec![PermissionKind::Microphone],
                 _ => vec![PermissionKind::Camera, PermissionKind::Microphone],
             };
-            let origin = unsafe {
-                let (scheme, host, port) = (origin.protocol().to_string(), origin.host().to_string(), origin.port());
-                let default = matches!((scheme.as_str(), port), ("https", 443) | ("http", 80) | (_, 0));
-                if default { format!("{scheme}://{host}") } else { format!("{scheme}://{host}:{port}") }
-            };
+            let origin = origin_string(origin);
             // Unanswered, WebKit asks the user itself.
             let responder = PermissionResponder(Once::new(PermissionDecision::Dismiss, move |d| {
                 let decision = match d {
@@ -496,8 +499,19 @@ define_class!(
             let body = json(Some(&*unsafe { message.body() }));
             if name == INTERNAL_HANDLER && world == INTERNAL_WORLD {
                 owner.internal_message(&body);
-            } else {
-                owner.page.emit(ScriptMessage { name, world, body });
+                return;
+            }
+            let frame = unsafe { message.frameInfo() };
+            let (origin, main_frame) = unsafe { (origin_string(&frame.securityOrigin()), frame.isMainFrame()) };
+            let message = ScriptMessage { name, world, body, origin, main_frame };
+            let allowed = owner
+                .st
+                .borrow()
+                .handlers
+                .get(&(message.name.clone(), message.world.clone()))
+                .is_some_and(|(_, origins)| message.allowed(origins));
+            if allowed {
+                owner.page.emit(message);
             }
         }
     }

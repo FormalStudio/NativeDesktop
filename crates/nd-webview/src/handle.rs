@@ -399,9 +399,16 @@ impl WebView {
     }
 
     /// Lets pages post to `name` (`window.webkit.messageHandlers.<name>.postMessage(v)`); the
-    /// element hears [`crate::ScriptMessage`].
-    pub fn register_script_message(&self, name: impl Into<String>, world: Option<&str>) {
-        self.send(Command::RegisterScriptMessage { name: name.into(), world: world.map(Into::into) });
+    /// element hears [`crate::ScriptMessage`] from frames whose origin matches one of `origins`
+    /// (`*` globs such as `app://main` or `https://*.example.com`) and drops the rest.
+    pub fn register_script_message(
+        &self,
+        name: impl Into<String>,
+        world: Option<&str>,
+        origins: impl IntoIterator<Item = impl Into<String>>,
+    ) {
+        let origins = origins.into_iter().map(Into::into).collect();
+        self.send(Command::RegisterScriptMessage { name: name.into(), world: world.map(Into::into), origins });
     }
 
     pub fn unregister_script_message(&self, name: impl Into<String>, world: Option<&str>) {

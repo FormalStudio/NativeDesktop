@@ -71,7 +71,8 @@ pub(crate) struct WkPage {
 #[derive(Default)]
 pub(crate) struct State {
     scripts: Vec<UserScript>,
-    handlers: HashMap<(String, String), Retained<WKContentWorld>>,
+    /// Each handler's content world and allowed origins.
+    handlers: HashMap<(String, String), (Retained<WKContentWorld>, Vec<String>)>,
     pub menu_items: Vec<MenuItem>,
     pub suppress_menu: bool,
     count_input: bool,
@@ -562,7 +563,7 @@ impl EngineView for WkPage {
                 self.st.borrow_mut().scripts.retain(|s| world.is_some() && s.world != world);
                 self.rebuild_scripts();
             }
-            Command::RegisterScriptMessage { name, world } => {
+            Command::RegisterScriptMessage { name, world, origins } => {
                 if name == INTERNAL_HANDLER {
                     tracing::warn!("web view: {INTERNAL_HANDLER} is reserved");
                     return;
@@ -570,7 +571,8 @@ impl EngineView for WkPage {
                 let key = (name.clone(), world.clone().unwrap_or_default());
                 let controller = unsafe { web.configuration().userContentController() };
                 let content_world = content_world(self.mtm(), world.as_deref());
-                if self.st.borrow().handlers.contains_key(&key) {
+                if let Some(handler) = self.st.borrow_mut().handlers.get_mut(&key) {
+                    handler.1 = origins;
                     return;
                 }
                 unsafe {
@@ -580,11 +582,11 @@ impl EngineView for WkPage {
                         &ns(&name),
                     )
                 };
-                self.st.borrow_mut().handlers.insert(key, content_world);
+                self.st.borrow_mut().handlers.insert(key, (content_world, origins));
             }
             Command::UnregisterScriptMessage { name, world } => {
                 let key = (name.clone(), world.unwrap_or_default());
-                if let Some(content_world) = self.st.borrow_mut().handlers.remove(&key) {
+                if let Some((content_world, _)) = self.st.borrow_mut().handlers.remove(&key) {
                     let controller = unsafe { web.configuration().userContentController() };
                     unsafe { controller.removeScriptMessageHandlerForName_contentWorld(&ns(&name), &content_world) };
                 }

@@ -185,6 +185,17 @@ pub struct ScriptMessage {
     /// The content world the handler was registered in; empty for the page's own.
     pub world: String,
     pub body: JsValue,
+    /// The security origin of the posting frame, `scheme://host[:port]`.
+    pub origin: String,
+    pub main_frame: bool,
+}
+
+impl ScriptMessage {
+    /// Whether the sender's origin matches one of the handler's `origins` (`*` globs).
+    /// Handlers are exposed to every frame, cross-origin ones and later navigations included.
+    pub fn allowed(&self, origins: &[String]) -> bool {
+        origins.iter().any(|o| crate::menu::glob(o, &self.origin))
+    }
 }
 
 /// A request for a scheme registered with [`crate::register_scheme`]. Answer it through
@@ -358,4 +369,24 @@ pub struct PermissionRequest {
     pub origin: String,
     pub kinds: Vec<PermissionKind>,
     pub responder: PermissionResponder,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn from(origin: &str) -> ScriptMessage {
+        let body = JsValue::Null;
+        ScriptMessage { name: "bridge".into(), world: String::new(), body, origin: origin.into(), main_frame: true }
+    }
+
+    #[test]
+    fn script_messages_pass_only_from_allowed_origins() {
+        let origins = ["app://main".to_owned(), "https://*.example.com".to_owned()];
+        assert!(from("app://main").allowed(&origins));
+        assert!(from("https://www.example.com").allowed(&origins));
+        assert!(!from("https://evil.com").allowed(&origins));
+        assert!(!from("https://example.com.evil.com").allowed(&origins));
+        assert!(!from("app://main").allowed(&[]));
+    }
 }

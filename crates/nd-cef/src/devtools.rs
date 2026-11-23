@@ -21,8 +21,8 @@ pub(crate) struct Devtools {
     pending: RefCell<HashMap<i32, Reply>>,
     registration: RefCell<Option<Registration>>,
     host: RefCell<Option<BrowserHost>>,
-    /// Execution contexts by id: (frame id, world name, is the frame's page world).
-    contexts: RefCell<HashMap<i64, (String, String, bool)>>,
+    /// Execution contexts by id: (frame id, world name, is the frame's page world, origin).
+    contexts: RefCell<HashMap<i64, (String, String, bool, String)>>,
     main_frame: RefCell<String>,
     /// Bindings added, by world ("" for the page's).
     bound: RefCell<Vec<String>>,
@@ -83,15 +83,16 @@ impl Devtools {
         }
     }
 
-    /// Protocol events; returns a binding call as (world, payload).
-    pub(crate) fn event(&self, method: &str, params: &Value) -> Option<(String, String)> {
+    /// Protocol events; returns a binding call as (world, origin, from the main frame, payload).
+    pub(crate) fn event(&self, method: &str, params: &Value) -> Option<(String, String, bool, String)> {
         match method {
             "Runtime.executionContextCreated" => {
                 let c = &params["context"];
                 let (Some(id), Some(frame)) = (c["id"].as_i64(), c["auxData"]["frameId"].as_str()) else { return None };
                 let name = c["name"].as_str().unwrap_or_default().to_owned();
                 let default = c["auxData"]["isDefault"].as_bool().unwrap_or(false);
-                self.contexts.borrow_mut().insert(id, (frame.to_owned(), name, default));
+                let origin = c["origin"].as_str().unwrap_or_default().to_owned();
+                self.contexts.borrow_mut().insert(id, (frame.to_owned(), name, default, origin));
             }
             "Runtime.executionContextDestroyed" => {
                 if let Some(id) = params["executionContextId"].as_i64() {
@@ -109,13 +110,11 @@ impl Devtools {
             }
             "Runtime.bindingCalled" if params["name"].as_str() == Some(BINDING) => {
                 let context = params["executionContextId"].as_i64().unwrap_or_default();
-                let world = self
-                    .contexts
-                    .borrow()
-                    .get(&context)
-                    .map(|(_, name, default)| if *default { String::new() } else { name.clone() })
-                    .unwrap_or_default();
-                return Some((world, params["payload"].as_str().unwrap_or_default().to_owned()));
+                let contexts = self.contexts.borrow();
+                let Some((frame, name, default, origin)) = contexts.get(&context) else { return None };
+                let world = if *default { String::new() } else { name.clone() };
+                let main = *frame == *self.main_frame.borrow();
+                return Some((world, origin.clone(), main, params["payload"].as_str().unwrap_or_default().to_owned()));
             }
             _ => {}
         }
@@ -149,7 +148,7 @@ impl Devtools {
             .contexts
             .borrow()
             .iter()
-            .find(|(_, (frame, name, default))| *frame == main && name == world && !default)
+            .find(|(_, (frame, name, default, _))| *frame == main && name == world && !default)
             .map(|(id, _)| *id);
         if let Some(id) = found {
             then(Ok(Some(id)));
@@ -290,8 +289,8 @@ wrap_dev_tools_message_observer! {
             let Some(page) = page::get(self.id) else { return };
             let method = method.map(|m| m.to_string()).unwrap_or_default();
             let params: Value = params.and_then(|p| serde_json::from_slice(p).ok()).unwrap_or(Value::Null);
-            if let Some((world, payload)) = page.devtools.event(&method, &params) {
-                page.script_message(world, &payload);
+            if let Some((world, origin, main_frame, payload)) = page.devtools.event(&method, &params) {
+                page.script_message(world, origin, main_frame, &payload);
             }
         }
     }

@@ -75,7 +75,8 @@ struct State {
     /// Counting was asked for before the browser existed (a Chrome-style page's comes later).
     count_input_queued: bool,
     scripts: Vec<(UserScript, Option<String>)>,
-    handlers: HashMap<(String, String), Option<String>>,
+    /// Each handler's user script identifier and allowed origins.
+    handlers: HashMap<(String, String), (Option<String>, Vec<String>)>,
     find: Option<(String, FindOptions)>,
     committed_url: String,
     last_secure: Option<(bool, bool)>,
@@ -250,7 +251,7 @@ impl CefPage {
     }
 
     /// A post through [`devtools::BINDING`].
-    pub(crate) fn script_message(&self, world: String, payload: &str) {
+    pub(crate) fn script_message(&self, world: String, origin: String, main_frame: bool, payload: &str) {
         let Ok(v) = serde_json::from_str::<serde_json::Value>(payload) else { return };
         let name = v["name"].as_str().unwrap_or_default().to_owned();
         let body = v["body"].clone();
@@ -261,12 +262,20 @@ impl CefPage {
             }
             return;
         }
-        if world.is_empty() && crate::extensions::view_popup_message(&self.page, &name, &body) {
+        let message = ScriptMessage { name, world, body, origin, main_frame };
+        let allowed = self
+            .st
+            .borrow()
+            .handlers
+            .get(&(message.name.clone(), message.world.clone()))
+            .is_some_and(|(_, origins)| message.allowed(origins));
+        if !allowed {
             return;
         }
-        if self.st.borrow().handlers.contains_key(&(name.clone(), world.clone())) {
-            self.page.emit(ScriptMessage { name, world, body });
+        if message.world.is_empty() && crate::extensions::view_popup_message(&self.page, &message.name, &message.body) {
+            return;
         }
+        self.page.emit(message);
     }
 
     pub(crate) fn loading_state(&self, loading: bool, back: bool, forward: bool) {
@@ -867,17 +876,18 @@ impl CefPage {
                     }
                 }
             }
-            Command::RegisterScriptMessage { name, world } => {
+            Command::RegisterScriptMessage { name, world, origins } => {
                 if name == nd_webview::script::INTERNAL_HANDLER {
                     tracing::warn!("nd-cef: {name} is reserved");
                     return;
                 }
                 let world = world.unwrap_or_default();
                 let key = (name.clone(), world.clone());
-                if self.st.borrow().handlers.contains_key(&key) {
+                if let Some(handler) = self.st.borrow_mut().handlers.get_mut(&key) {
+                    handler.1 = origins;
                     return;
                 }
-                self.st.borrow_mut().handlers.insert(key.clone(), None);
+                self.st.borrow_mut().handlers.insert(key.clone(), (None, origins));
                 self.devtools.bind(&world);
                 let shim = devtools::handler_shim(&name);
                 let id = self.id;
@@ -885,14 +895,14 @@ impl CefPage {
                     if let Some(p) = get(id)
                         && let Some(slot) = p.st.borrow_mut().handlers.get_mut(&key)
                     {
-                        *slot = identifier;
+                        slot.0 = identifier;
                     }
                 });
                 self.devtools.evaluate(&shim, Some(&world), |_| {});
             }
             Command::UnregisterScriptMessage { name, world } => {
                 let world = world.unwrap_or_default();
-                if let Some(identifier) = self.st.borrow_mut().handlers.remove(&(name.clone(), world.clone())) {
+                if let Some((identifier, _)) = self.st.borrow_mut().handlers.remove(&(name.clone(), world.clone())) {
                     if let Some(identifier) = identifier {
                         self.devtools.remove_script(&identifier);
                     }

@@ -1283,7 +1283,7 @@ fn run_action_in_view(page: &CefPage, id: String, anchor: Anchor, done: Then<Act
                     .at_start()
                     .allow([format!("chrome-extension://{id}/*")]);
                 // The handler first: the shim posts to it as soon as it runs.
-                view.register_script_message(VIEW_POPUP_MESSAGE, None);
+                view.register_script_message(VIEW_POPUP_MESSAGE, None, [format!("chrome-extension://{id}")]);
                 view.add_user_script(shim);
                 view.load(url);
                 ST.with(|s| {

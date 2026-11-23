@@ -105,9 +105,11 @@ before you create the first page, and then answer it through `on_scheme_request`
 ## Scripts and messages
 
 `add_user_script(UserScript::new(id, source))` injects a script into every page load, optionally
-in an isolated world. `register_script_message("name", None)` lets the page call
+in an isolated world. `register_script_message("name", None, ["app://main"])` lets the page call
 `window.webkit.messageHandlers.name.postMessage(value)` on both engines, and
-`on_script_message` receives the `ScriptMessage { name, body, .. }` as JSON.
+`on_script_message` receives the `ScriptMessage { name, body, origin, main_frame, .. }` with the
+body as JSON. Every frame can reach a handler, so only senders whose origin matches one of the
+listed `*` globs get through.
 
 ## Context menus
 

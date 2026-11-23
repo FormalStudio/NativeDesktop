@@ -184,6 +184,7 @@ pub enum Command {
     RegisterScriptMessage {
         name: String,
         world: Option<String>,
+        origins: Vec<String>,
     },
     UnregisterScriptMessage {
         name: String,

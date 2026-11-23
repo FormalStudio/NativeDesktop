@@ -189,7 +189,7 @@ fn steps() -> Vec<Step> {
             name: "script-message",
             only: &[],
             run: |d, cx| {
-                d.page.register_script_message("bridge", None);
+                d.page.register_script_message("bridge", None, [d.base.clone()]);
                 d.js("post", "window.webkit.messageHandlers.bridge.postMessage({a: 1}); 0", None, cx);
             },
             done: |d| d.saw(r#"script bridge {"a":1}"#),
