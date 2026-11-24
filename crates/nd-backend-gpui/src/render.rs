@@ -311,6 +311,8 @@ pub struct Look {
     pub control: Hsla,
     pub control_hover: Hsla,
     pub control_active: Hsla,
+    /// A subtle button's pressed fill, which a Windows caption button takes.
+    pub subtle_active: Hsla,
     pub border: Hsla,
     pub close_hover: Hsla,
 }
@@ -324,6 +326,7 @@ impl Look {
             control,
             control_hover: theme.hover(control),
             control_active: theme.pressed(control),
+            subtle_active: crate::forms::FormLook::of(theme).subtle_active,
             border: theme.border.subtle,
             close_hover: theme.danger,
         }

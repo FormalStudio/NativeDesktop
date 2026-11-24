@@ -264,7 +264,8 @@ fn caption_button(which: CaptionButton, state: CaptionState, look: Look, maximiz
     let (bg, fg) = match (close, pressed, hovered) {
         (true, true, _) => (red.opacity(0.9), gpui::white()),
         (true, false, true) => (red, gpui::white()),
-        (false, true, _) => (look.control_active, look.text),
+        // Lighter than hover, as Explorer's caption buttons press.
+        (false, true, _) => (look.subtle_active, look.text),
         (false, false, true) => (look.control_hover, look.text),
         _ => (gpui::transparent_black(), look.text),
     };
