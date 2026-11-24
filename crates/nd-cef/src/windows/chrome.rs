@@ -108,6 +108,11 @@ unsafe extern "system" fn def_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
 }
 
+/// A parent for a browser of nd-cef's own that is never shown.
+pub(crate) fn hidden_parent() -> cef::sys::HWND {
+    cef::sys::HWND(parking().map_or(std::ptr::null_mut(), |h| h.0.cast()))
+}
+
 /// The hidden top-level window containers and closing Chromium windows wait under.
 fn parking() -> Result<HWND, String> {
     if let Some(hwnd) = PARKING.with(Cell::get) {

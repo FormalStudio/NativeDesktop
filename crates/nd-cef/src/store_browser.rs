@@ -17,6 +17,12 @@ fn download_dir() -> std::path::PathBuf {
 pub(crate) fn create(url: &str) -> Result<Browser, String> {
     let info =
         WindowInfo { windowless_rendering_enabled: 1, runtime_style: RuntimeStyle::ALLOY, ..WindowInfo::default() };
+    // Windowless pages have no `aura::Window` on Windows, and Chromium parents the install
+    // prompt to one all the same, then crashes reading it. A windowed page under the hidden
+    // parking window has one and is never seen.
+    #[cfg(windows)]
+    let info = WindowInfo { windowless_rendering_enabled: 0, ..info }
+        .set_as_child(crate::platform::chrome::hidden_parent(), &Rect { x: 0, y: 0, width: 800, height: 600 });
     let settings = BrowserSettings { windowless_frame_rate: 1, ..BrowserSettings::default() };
     let mut client = StoreClient::new();
     browser_host_create_browser_sync(
@@ -91,7 +97,7 @@ wrap_download_handler! {
             // Chromium interrupts a download to a path with `..` in it, and a profile path can
             // have one.
             let dir = download_dir();
-            let dir = match std::fs::create_dir_all(&dir).and_then(|()| std::fs::canonicalize(&dir)) {
+            let dir = match std::fs::create_dir_all(&dir).and_then(|()| crate::runtime::resolve(&dir)) {
                 Ok(dir) => dir,
                 Err(e) => {
                     tracing::warn!("nd-cef: {}: {e}", dir.display());

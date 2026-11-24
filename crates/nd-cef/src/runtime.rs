@@ -4,7 +4,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use cef::*;
@@ -159,7 +159,17 @@ pub(crate) fn root_cache() -> PathBuf {
     let _ = std::fs::create_dir_all(&root);
     // Chromium resolves symlinks in the root (/var is /private/var on macOS) but not in a cache
     // path, then finds the cache outside the root and keeps that profile in memory.
-    std::fs::canonicalize(&root).unwrap_or(root)
+    resolve(&root).unwrap_or(root)
+}
+
+/// `path` with `..` and symlinks resolved. On Windows without the `\\?\` prefix `canonicalize`
+/// adds there: Chromium fails to lock its databases under such a root and interrupts downloads
+/// to such a path.
+pub(crate) fn resolve(path: &Path) -> std::io::Result<PathBuf> {
+    #[cfg(windows)]
+    return std::path::absolute(path);
+    #[cfg(not(windows))]
+    return std::fs::canonicalize(path);
 }
 
 /// The request context a profile's pages share: the global one for `Default`, an in-memory one
