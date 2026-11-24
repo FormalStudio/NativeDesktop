@@ -77,7 +77,7 @@ pub fn occluders(window: &gpui::Window) -> Vec<Occluder> {
 }
 
 /// Records its child's bounds as an occluder of its window.
-pub(crate) struct Occluding {
+pub struct Occluding {
     inner: AnyElement,
     draws: bool,
     blocks_input: bool,
@@ -85,7 +85,7 @@ pub(crate) struct Occluding {
 
 impl Occluding {
     /// Content that draws over what is under it and takes the pointer there.
-    pub(crate) fn surface(inner: impl IntoElement) -> Self {
+    pub fn surface(inner: impl IntoElement) -> Self {
         Self { inner: inner.into_any_element(), draws: true, blocks_input: true }
     }
 

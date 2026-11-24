@@ -13,7 +13,7 @@
 //! `ND_DEBUG_EXPOSE=1` keeps the root opaque, so the resize gate's magenta stays covered.
 //! `ND_DIAG_WINDOW=1` prints `nd: pen <phase> pressure=<p>` for pen contacts from `WM_POINTER`.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
@@ -185,13 +185,18 @@ impl OsHooks for WindowsHooks {
         let maximized = gpui_window.is_maximized();
         // Overlays record where they take the pointer as they prepaint, which GPUI does for the
         // deferred layer before this row paints.
+        // The row is an occluder itself, so a page's window cuts it out instead of covering it;
+        // it is left out of what covers the row.
+        let own = Rc::new(Cell::new(None));
+        let at = own.clone();
+        let row_bounds = canvas(move |bounds, _, _| at.set(Some(bounds)), |_, _, _, _| ()).absolute().size_full();
         let covering = chrome.clone();
         let covered = canvas(
             |_, _, _| (),
             move |_, _, window, _| {
                 let covered = nd_backend_gpui::occlusion::occluders(window)
                     .into_iter()
-                    .filter(|o| o.blocks_input)
+                    .filter(|o| o.blocks_input && Some(o.bounds) != own.get())
                     .map(|o| {
                         let b = o.bounds;
                         Rect::new(
@@ -214,11 +219,12 @@ impl OsHooks for WindowsHooks {
             .h(px(height))
             .flex()
             .flex_row()
+            .child(row_bounds)
             .child(covered)
             .child(caption_button(CaptionButton::Minimize, state, look, maximized))
             .child(caption_button(CaptionButton::Maximize, state, look, maximized))
             .child(caption_button(CaptionButton::Close, state, look, maximized));
-        Some(row.into_any_element())
+        Some(nd_backend_gpui::occlusion::Occluding::surface(row).into_any_element())
     }
 
     fn backdrop(&self, _window: WindowId) -> bool {
