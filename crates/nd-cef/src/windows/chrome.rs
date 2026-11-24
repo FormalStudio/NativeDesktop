@@ -32,11 +32,12 @@ use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetFocus, SetFocus};
 use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, EnumThreadWindows, GWL_STYLE, GetWindowLongPtrW, GetWindowRect,
-    HWND_TOP, IsChild, IsWindowVisible, PW_RENDERFULLCONTENT, RegisterClassW, SW_HIDE, SW_SHOWNA, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetParent, SetWindowLongPtrW, SetWindowPos, ShowWindow, WINDOWPOS,
-    WM_NCDESTROY, WM_WINDOWPOSCHANGING, WNDCLASSW, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS,
-    WS_EX_NOPARENTNOTIFY, WS_EX_TOOLWINDOW, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, EnumChildWindows, EnumThreadWindows, GWL_STYLE, GetClassNameW,
+    GetParent, GetWindowLongPtrW, GetWindowRect, HWND_TOP, IsChild, IsWindowVisible, PW_RENDERFULLCONTENT,
+    RegisterClassW, SW_HIDE, SW_SHOWNA, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetParent,
+    SetWindowLongPtrW, SetWindowPos, ShowWindow, WINDOWPOS, WM_DESTROY, WM_NCDESTROY, WM_WINDOWPOSCHANGING, WNDCLASSW,
+    WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOPARENTNOTIFY, WS_EX_TOOLWINDOW, WS_MAXIMIZEBOX,
+    WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
 };
 use windows::core::{BOOL, w};
 
@@ -47,6 +48,7 @@ use crate::page::{self, CefPage};
 const POPUP_POLL: Duration = Duration::from_millis(8);
 /// The subclass id of a popup pinned under its anchor.
 const PIN: usize = 1;
+const KEEP: usize = 2;
 
 /// Every style is hosted here.
 pub(crate) fn supported(style: nd_webview::CefStyle) -> nd_webview::CefStyle {
@@ -305,6 +307,8 @@ impl Chrome {
                 if let Err(e) = unsafe { SetParent(self.container, Some(parent)) } {
                     tracing::warn!("nd-cef: moving the Chrome-style page into its window: {e}");
                 }
+                // SAFETY: subclasses a window of this thread; a second call for it changes nothing.
+                let _ = unsafe { SetWindowSubclass(parent, Some(keep_pages), KEEP, 0) };
                 st.parent = Some(parent);
                 st.frame = R::default();
                 st.shape = None;
@@ -631,6 +635,48 @@ pub(crate) fn thread_windows() -> Vec<isize> {
     let _ =
         unsafe { EnumThreadWindows(GetCurrentThreadId(), Some(collect), LPARAM(&mut out as *mut Vec<isize> as isize)) };
     out
+}
+
+/// The procedure of a GPUI window that holds pages. Destroying a window destroys its child
+/// windows, Chromium's among them, and Chrome then never deletes its `Browser` for the page,
+/// which crashes the profile's shutdown. So the containers go under the parking window first,
+/// where the pages close as they do when one is closed in a window that stays.
+unsafe extern "system" fn keep_pages(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    _id: usize,
+    _data: usize,
+) -> LRESULT {
+    if msg == WM_DESTROY {
+        unsafe extern "system" fn collect(child: HWND, out: LPARAM) -> BOOL {
+            let mut name = [0u16; 16];
+            // SAFETY: `out` is the vector passed below, alive for the call; the class name fits
+            // in `name` or is cut short, which no container's is.
+            unsafe {
+                let len = GetClassNameW(child, &mut name) as usize;
+                if name[..len] == *w!("nd-cef-page").as_wide() {
+                    (*(out.0 as *mut Vec<HWND>)).push(child);
+                }
+            }
+            BOOL(1)
+        }
+        let mut containers: Vec<HWND> = Vec::new();
+        // SAFETY: the callback only runs during the call; the windows are this thread's.
+        unsafe {
+            let _ = EnumChildWindows(Some(hwnd), Some(collect), LPARAM(&mut containers as *mut Vec<HWND> as isize));
+            if let Ok(parking) = parking() {
+                for container in containers.into_iter().filter(|c| GetParent(*c).ok() == Some(hwnd)) {
+                    let _ = ShowWindow(container, SW_HIDE);
+                    let _ = SetParent(container, Some(parking));
+                }
+            }
+            let _ = RemoveWindowSubclass(hwnd, Some(keep_pages), KEEP);
+        }
+    }
+    // SAFETY: the arguments are the ones Windows passed this subclass.
+    unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
 }
 
 /// A pinned popup's window procedure: every move or resize Chromium makes lands under the
