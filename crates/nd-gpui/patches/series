@@ -46,3 +46,4 @@
 0047-gpui_wgpu-hold-the-GPU-for-the-embedding-application.patch
 0048-gpui-update-part-of-a-drawn-image-in-place.patch
 0049-gpui-Window-set_corner_curve-continuous-corners-in-t.patch
+0050-gpui_wgpu-configure-surfaces-on-a-drained-queue.patch

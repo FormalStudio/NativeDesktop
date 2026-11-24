@@ -5,9 +5,10 @@ use crate::{WgpuRenderer, WgpuSurfaceConfig};
 use anyhow::Context as _;
 #[cfg(not(target_family = "wasm"))]
 use gpui_util::ResultExt;
-use parking_lot::Mutex;
+use parking_lot::{Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 use wgpu::TextureFormat;
 
 #[derive(Clone)]
@@ -166,6 +167,53 @@ pub fn set_frame_hold(hold: fn() -> Box<dyn std::any::Any>) {
 pub(crate) fn frame_hold() -> Option<Box<dyn std::any::Any>> {
     let hold = *FRAME_HOLD.lock();
     hold.map(|hold| hold())
+}
+
+static SUBMITS: RwLock<()> = RwLock::new(());
+
+/// How long a surface configuration waits for the queue to drain before it gives up for
+/// this frame.
+const QUEUE_DRAIN: Duration = Duration::from_millis(250);
+
+/// Hold while submitting to an adopted device from a thread of the application's own, and
+/// drop once `Queue::submit` returns. `Surface::configure` waits for the queue with no
+/// timeout, then fails ("Failed to wait for GPU to come idle") when it was not empty to
+/// begin with, leaving the surface unconfigured; GPUI configures with every holder gone.
+pub fn submit_guard() -> RwLockReadGuard<'static, ()> {
+    SUBMITS.read()
+}
+
+/// Holds application submits off (`submit_guard`) once the queue has drained. None when it
+/// still has work after `QUEUE_DRAIN`, such as a submission the application made to an
+/// adopted device that stalled the GPU: the caller leaves the surface as it is and tries
+/// again on a later frame instead of waiting on the queue with the window frozen.
+pub(crate) fn drained(device: &wgpu::Device) -> Option<RwLockWriteGuard<'static, ()>> {
+    let submits = SUBMITS.write();
+    match device.poll(wgpu::PollType::Wait {
+        submission_index: None,
+        timeout: Some(QUEUE_DRAIN),
+    }) {
+        Ok(_) => Some(submits),
+        Err(error) => {
+            log::warn!("GPU queue did not drain for a surface configuration: {error}");
+            None
+        }
+    }
+}
+
+/// `surface.configure` once the queue has drained (`drained`). False when it did not and
+/// the surface was left as it was.
+#[must_use]
+pub(crate) fn configure(
+    surface: &wgpu::Surface<'_>,
+    device: &wgpu::Device,
+    config: &wgpu::SurfaceConfiguration,
+) -> bool {
+    let Some(_drained) = drained(device) else {
+        return false;
+    };
+    surface.configure(device, config);
+    true
 }
 
 /// A hold taken as its owner starts to drop, kept until the owner's other fields are gone.
@@ -621,7 +669,8 @@ impl WgpuContext {
         let (surface_config, _, _) =
             WgpuRenderer::surface_configuration(&surface, &adopted.adapter, &adopted.device, config)?;
         let error_scope = adopted.device.push_error_scope(wgpu::ErrorFilter::Validation);
-        surface.configure(&adopted.device, &surface_config);
+        let configured = configure(&surface, &adopted.device, &surface_config);
+        anyhow::ensure!(configured, "the adopted device's queue did not drain");
         if let Some(e) = gpui::block_on(error_scope.pop()) {
             anyhow::bail!("surface configuration failed: {e}");
         }

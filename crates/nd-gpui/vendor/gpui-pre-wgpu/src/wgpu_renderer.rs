@@ -279,6 +279,9 @@ pub struct WgpuRenderer {
     /// Draws the frames of a live resize, while the surface is larger than the drawable.
     edge_extend: Option<EdgeExtend>,
     needs_redraw: bool,
+    /// The surface has yet to take `surface_config`: the queue had not drained when it last
+    /// tried. `draw` tries again first.
+    surface_pending: bool,
     /// Whether the surface can be copied from, which backdrops need: it is configured so the
     /// first time a frame draws one.
     surface_copy_src: bool,
@@ -773,9 +776,8 @@ impl WgpuRenderer {
             Self::surface_configuration(&surface, &context.adapter, &context.device, &config)?;
         // Adapter selection configures the surface with this same configuration when it
         // creates the context, so only configure it here when that did not happen.
-        if !surface_configured {
-            surface.configure(&context.device, &surface_config);
-        }
+        let surface_pending = !surface_configured
+            && !crate::wgpu_context::configure(&surface, &context.device, &surface_config);
 
         let surface_copy_src = surface
             .get_capabilities(&context.adapter)
@@ -806,7 +808,8 @@ impl WgpuRenderer {
             device_errors: Arc::clone(context.errors()),
             observed_error_generation: 0,
             last_surface_error: None,
-            needs_redraw: false,
+            needs_redraw: surface_pending,
+            surface_pending,
             surface_copy_src,
             drop_hold: Default::default(),
         })
@@ -1405,19 +1408,24 @@ impl WgpuRenderer {
         if let Some(cost) = debug_swapchain().cost {
             std::thread::sleep(cost);
         }
+        self.apply_surface_config();
+    }
 
+    /// Destroys the size-bound textures and configures the surface with `surface_config` once
+    /// the queue has drained. When it has not, both stay as they were and the next `draw`
+    /// tries again.
+    fn apply_surface_config(&mut self) {
         let Some(core) = self.core_mut() else {
             return;
         };
         let resources = &mut core.resources;
 
-        // Wait for any in-flight GPU work to complete before destroying textures
-        if let Err(e) = resources.device.poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: None,
-        }) {
-            warn!("Failed to poll device during resize: {e:?}");
-        }
+        // In-flight GPU work has to complete before the textures are destroyed.
+        let Some(_drained) = crate::wgpu_context::drained(&resources.device) else {
+            self.surface_pending = true;
+            self.needs_redraw = true;
+            return;
+        };
 
         // Destroy old textures before allocating new ones to avoid GPU memory spikes
         if let Some(ref texture) = resources.path_intermediate_texture {
@@ -1435,6 +1443,7 @@ impl WgpuRenderer {
         if let RendererState::Ready { surface, core } = &self.state {
             surface.configure(&core.resources.device, &self.surface_config);
         }
+        self.surface_pending = false;
     }
 
     pub fn set_subpixel_layout(&mut self, is_bgr: bool) {
@@ -1477,8 +1486,11 @@ impl WgpuRenderer {
             core.uses_webgl_instance_data,
         );
 
-        if let RendererState::Ready { surface, core } = &self.state {
-            surface.configure(&core.resources.device, &self.surface_config);
+        if let RendererState::Ready { surface, core } = &self.state
+            && !crate::wgpu_context::configure(surface, &core.resources.device, &self.surface_config)
+        {
+            self.surface_pending = true;
+            self.needs_redraw = true;
         }
     }
 
@@ -1527,6 +1539,13 @@ impl WgpuRenderer {
             return false;
         }
 
+        if self.surface_pending {
+            self.apply_surface_config();
+            if self.surface_pending {
+                return false;
+            }
+        }
+
         // Bail out early if the surface has been unconfigured (e.g. during
         // Android background/rotation transitions).  Attempting to acquire
         // a texture from an unconfigured surface can block indefinitely on
@@ -1564,7 +1583,11 @@ impl WgpuRenderer {
             && scene.backdrops.iter().any(|b| b.source == gpui::BackdropSource::Window)
         {
             self.surface_config.usage |= wgpu::TextureUsages::COPY_SRC;
-            surface.configure(&core.resources.device, &self.surface_config);
+            if !crate::wgpu_context::configure(surface, &core.resources.device, &self.surface_config) {
+                self.surface_pending = true;
+                self.needs_redraw = true;
+                return false;
+            }
         }
 
         let frame = match surface.get_current_texture() {
@@ -1572,11 +1595,17 @@ impl WgpuRenderer {
             wgpu::CurrentSurfaceTexture::Suboptimal(frame) => {
                 // Textures must be destroyed before the surface can be reconfigured.
                 drop(frame);
-                surface.configure(&core.resources.device, &self.surface_config);
+                if !crate::wgpu_context::configure(surface, &core.resources.device, &self.surface_config) {
+                    self.surface_pending = true;
+                    self.needs_redraw = true;
+                }
                 return false;
             }
             wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Outdated => {
-                surface.configure(&core.resources.device, &self.surface_config);
+                if !crate::wgpu_context::configure(surface, &core.resources.device, &self.surface_config) {
+                    self.surface_pending = true;
+                    self.needs_redraw = true;
+                }
                 return false;
             }
             wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
@@ -2712,7 +2741,10 @@ impl WgpuRenderer {
                 anyhow::bail!("Cannot replace the surface: GPU resources have been released")
             }
         };
-        surface.configure(&core.resources.device, &self.surface_config);
+        if !crate::wgpu_context::configure(&surface, &core.resources.device, &self.surface_config) {
+            self.surface_pending = true;
+            self.needs_redraw = true;
+        }
         core.resources.invalidate_intermediate_textures();
         self.state = RendererState::Ready { surface, core };
 
