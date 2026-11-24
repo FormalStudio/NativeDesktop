@@ -221,6 +221,8 @@ impl FormsPage {
                 ClickEvent,
                 |p, _e| p.did("Pushed the destructive button")
             ))))
+            .child(form_row("Unavailable").child(button("push-off", "Save draft").disabled(true)))
+            .child(form_row("Unavailable default").child(button("primary-off", "Continue").primary().disabled(true)))
     }
 
     fn toggles(&self, cx: &mut Context<Self>) -> FormSection {
@@ -425,6 +427,7 @@ impl FormsPage {
                 LinkActivated,
                 |p, _e| p.did("Activated the link")
             ))))
+            .child(form_row("Unavailable link").child(link("docs-off", "Read about forms").disabled(true)))
             .child(navigation_row("about", "About this Mac", on!(cx, RowActivated, |p, _e| p.did("Opened About"))))
             .child(
                 form_row("Sign up").child(

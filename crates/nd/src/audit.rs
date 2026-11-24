@@ -258,7 +258,15 @@ impl Audit {
         };
         // Text nodes with no text paint mean the backend's read-back missed them. Labels a
         // native intent draws itself (a SwiftUI form) have no node and are not counted.
-        let has_text_nodes = cx.semantic_window(window).is_some_and(|w| has_text(&w.root));
+        let semantic = cx.semantic_window(window);
+        let has_text_nodes = semantic.as_ref().is_some_and(|w| has_text(&w.root));
+        // WCAG 1.4.3 exempts the text of an inactive control.
+        let mut disabled = std::collections::HashSet::new();
+        if let Some(w) = &semantic {
+            for off in w.root.iter().filter(|n| !n.enabled) {
+                disabled.extend(off.iter().map(|n| n.id));
+            }
+        }
         if has_text_nodes && !paints.iter().any(|p| matches!(p.kind, PaintKind::Text { .. })) {
             out.push(format!("FAIL {label}: the window has text nodes but no text was painted"));
         }
@@ -281,7 +289,7 @@ impl Audit {
                     let ratio = contrast(over(paint.color, paint.background), paint.background);
                     let large = size >= 24. || (size >= 18.66 && weight >= 700.);
                     let floor = if large { 3. } else { 4.5 };
-                    if ratio < floor {
+                    if ratio < floor && !paint.node.is_some_and(|n| disabled.contains(&n)) {
                         out.push(format!(
                             "FAIL {label}: text \"{}\" {} on {} is {ratio:.2}:1, under {floor}:1",
                             paint.label,
