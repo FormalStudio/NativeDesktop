@@ -1108,10 +1108,17 @@ impl TableNative {
     /// flat grey, so there it is the inset style on the content's own background, with the
     /// alternating rows of a table.
     fn apply_inset_style(&self) {
+        let sidebar = crate::scaffold::NdPaneView::in_sidebar(&self.scroll);
         if !self.props.inset {
+            // A plain list in a sidebar is rows the app draws, on the sidebar's material and
+            // edge to edge: the full width style would pad them and paint the control ground.
+            if sidebar == Some(true) && self.table.style() != NSTableViewStyle::Plain {
+                self.table.setStyle(NSTableViewStyle::Plain);
+                self.table.setBackgroundColor(&NSColor::clearColor());
+            }
             return;
         }
-        let content = crate::scaffold::NdPaneView::in_sidebar(&self.scroll) == Some(false);
+        let content = sidebar == Some(false);
         let style = if content { NSTableViewStyle::Inset } else { NSTableViewStyle::SourceList };
         if self.table.style() != style {
             self.table.setStyle(style);
