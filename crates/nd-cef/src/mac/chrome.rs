@@ -86,6 +86,10 @@ thread_local! {
     /// Chromium builds them (`get_delegate_for_popup_browser_view`, then
     /// `on_popup_browser_view_created`).
     static PENDING_POPUPS: RefCell<std::collections::VecDeque<u64>> = RefCell::default();
+    /// The last window other than an anchor to give up key, which is where key goes back to
+    /// when Chromium takes it for an anchor. Watched from the first anchor on.
+    static LAST_KEY: RefCell<Weak<NSWindow>> = RefCell::default();
+    static LAST_KEY_WATCH: RefCell<Option<Observer>> = const { RefCell::new(None) };
 }
 
 impl Chrome {
@@ -607,18 +611,24 @@ impl Chrome {
 /// Hands key back whenever Chromium activates `anchor`: the anchor is invisible, and key on it
 /// would take the app window's title bar out of its active look and its keys into the page. On a
 /// later turn, since AppKit finishes the anchor's own key change after the notification and would
-/// take key back. Straight to a key-taking overlay (a palette with its field) when one shows:
-/// handing it to the window first leaves a turn in which Chromium activates its widget again and
-/// the overlay never gets key back. A page in no window (a tab in the background) activates too.
+/// take key back. Straight to the host's overlay that had key just before (a palette with its
+/// field), never to another one such as a popover that did not: handing it to the window first
+/// leaves a turn in which Chromium activates its widget again and the overlay never gets key back.
+/// A page in no window (a tab in the background) activates too.
 fn key_back(anchor: &NSWindow, id: u64) -> Observer {
+    watch_last_key();
     let weak = Weak::from_retained(&anchor.retain());
     let key = RcBlock::new(move |_note: NonNull<NSNotification>| {
+        // The window that had key until now, read before anything else can take it.
+        let before = LAST_KEY.with(|k| k.borrow().load());
         let weak = weak.clone();
         super::run_later(move || {
             let anchor = weak.load();
             let host = page::get(id).and_then(|p| p.view.window()).or_else(app_window);
-            let overlay = host.as_ref().and_then(|h| h.childWindows()).and_then(|children| {
-                children.iter().filter(|w| w.isVisible() && w.canBecomeKeyWindow() && !w.ignoresMouseEvents()).last()
+            let overlay = before.filter(|w| {
+                w.isVisible()
+                    && w.canBecomeKeyWindow()
+                    && host.as_ref().is_some_and(|h| w.parentWindow().is_some_and(|p| *p == **h))
             });
             let target = key_target(
                 anchor.as_ref().is_some_and(|a| a.isKeyWindow()),
@@ -641,6 +651,31 @@ fn key_back(anchor: &NSWindow, id: u64) -> Observer {
             &key,
         )
     }
+}
+
+/// Keeps [`LAST_KEY`]: every window that resigns key, anchors (click-through) aside.
+fn watch_last_key() {
+    LAST_KEY_WATCH.with(|watch| {
+        if watch.borrow().is_some() {
+            return;
+        }
+        let block = RcBlock::new(|note: NonNull<NSNotification>| {
+            let note = unsafe { note.as_ref() };
+            let Some(window) = note.object().and_then(|o| o.downcast::<NSWindow>().ok()) else { return };
+            if !window.ignoresMouseEvents() {
+                LAST_KEY.with(|k| *k.borrow_mut() = Weak::from_retained(&window));
+            }
+        });
+        let observer = unsafe {
+            NSNotificationCenter::defaultCenter().addObserverForName_object_queue_usingBlock(
+                Some(objc2_app_kit::NSWindowDidResignKeyNotification),
+                None,
+                None,
+                &block,
+            )
+        };
+        *watch.borrow_mut() = Some(observer);
+    });
 }
 
 #[derive(Debug, PartialEq)]
