@@ -35,7 +35,7 @@ use objc2_app_kit::{
     NSIndexPathNSCollectionViewAdditions, NSOutlineView, NSOutlineViewDataSource, NSOutlineViewDelegate,
     NSPasteboardItem, NSPasteboardWriting, NSResponder, NSScrollView, NSTableColumn, NSTableColumnResizingOptions,
     NSTableRowView, NSTableView, NSTableViewAnimationOptions, NSTableViewColumnAutoresizingStyle,
-    NSTableViewDataSource, NSTableViewDelegate, NSTableViewStyle, NSTrackingArea, NSTrackingAreaOptions, NSView,
+    NSTableViewDataSource, NSTableViewDelegate, NSTableViewSelectionHighlightStyle, NSTableViewStyle, NSTrackingArea, NSTrackingAreaOptions, NSView,
     NSViewBoundsDidChangeNotification,
 };
 use objc2_core_foundation::CGFloat;
@@ -1108,6 +1108,14 @@ impl TableNative {
     /// flat grey, so there it is the inset style on the content's own background, with the
     /// alternating rows of a table.
     fn apply_inset_style(&self) {
+        let highlight = if self.props.own_highlight {
+            NSTableViewSelectionHighlightStyle::None
+        } else {
+            NSTableViewSelectionHighlightStyle::Regular
+        };
+        if self.table.selectionHighlightStyle() != highlight {
+            self.table.setSelectionHighlightStyle(highlight);
+        }
         let sidebar = crate::scaffold::NdPaneView::in_sidebar(&self.scroll);
         if !self.props.inset {
             // A plain list in a sidebar is rows the app draws, on the sidebar's material and

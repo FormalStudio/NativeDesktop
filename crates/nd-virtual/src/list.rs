@@ -153,6 +153,8 @@ pub struct ListProps {
     /// A sidebar's list: rows inset from the edges, the selection a rounded inset highlight
     /// (the source list style on macOS).
     pub inset: bool,
+    /// The rows draw their own selected and hovered look ([`List::own_highlight`]).
+    pub own_highlight: bool,
     /// Rows drag as this kind ([`List::drag_rows`]).
     pub drag_kind: Option<SharedString>,
     /// The drag id of each rendered or selected row that drags.
@@ -880,6 +882,7 @@ impl<K: RowKey> ListState<K> {
             style,
             gestures,
             inset,
+            own_highlight: false,
             drag_kind: None,
             drag_ids: HashMap::new(),
             drag_files: HashMap::new(),
@@ -1047,6 +1050,7 @@ pub struct List<K: RowKey> {
     style: StyleRefinement,
     selection: Selection,
     inset: bool,
+    own_highlight: bool,
     empty: Option<AnyElement>,
     on_select: Option<Handler<SelectEvent<K>>>,
     on_selection_change: Option<Handler<SelectionChanged<K>>>,
@@ -1076,6 +1080,7 @@ fn build<K: RowKey>(id: SharedString, state: &ListState<K>, kind: ListKind, rend
         style: StyleRefinement::default(),
         selection: Selection::None,
         inset: false,
+        own_highlight: false,
         empty: None,
         on_select: None,
         on_selection_change: None,
@@ -1195,6 +1200,13 @@ impl<K: RowKey> List<K> {
         self
     }
 
+    /// The rows draw their own selected and hovered look: the list keeps its selection for the
+    /// keyboard and assistive tech and paints none of its own.
+    pub fn own_highlight(mut self) -> Self {
+        self.own_highlight = true;
+        self
+    }
+
     pub fn on_select(mut self, f: impl Fn(&SelectEvent<K>, &mut Window, &mut App) + 'static) -> Self {
         self.on_select = Some(Rc::new(f));
         if self.selection == Selection::None {
@@ -1310,6 +1322,7 @@ impl<K: RowKey> IntoElement for List<K> {
         }
         state.inner.borrow_mut().renderer = Some(self.renderer);
         let mut props = state.props(self.kind, self.selection, self.style.clone(), self.inset);
+        props.own_highlight = self.own_highlight;
         if self.drag.is_some() || self.drop_on.is_some() {
             let live = state.live_rows();
             if let Some((kind, id)) = &self.drag {

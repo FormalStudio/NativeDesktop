@@ -816,8 +816,9 @@ impl gpui::Element for VirtualList {
             Bounds::new(point(px(v.origin.x), px(v.origin.y)), size(px(v.size.width), px(v.size.height)))
         });
         let selected_rows: HashSet<RowId> = self.props.selected.iter().copied().collect();
+        let own = self.props.own_highlight;
         window.with_content_mask(Some(ContentMask { bounds: view }), |window| {
-            if let Some((_, b)) = hovered.filter(|(r, _)| !selected_rows.contains(r)) {
+            if let Some((_, b)) = hovered.filter(|(r, _)| !own && !selected_rows.contains(r)) {
                 let full = Bounds::new(point(view.origin.x, b.origin.y), size(view.size.width, b.size.height));
                 if self.props.inset {
                     let s = self.sidebar;
@@ -830,7 +831,7 @@ impl gpui::Element for VirtualList {
                     window.paint_quad(fill(full, self.hover_color));
                 }
             }
-            for b in &prepainted.selected {
+            for b in prepainted.selected.iter().filter(|_| !own) {
                 if self.props.inset {
                     // A sidebar's selection: inset from the edges, rounded.
                     let s = self.sidebar;
