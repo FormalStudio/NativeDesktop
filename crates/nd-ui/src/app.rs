@@ -231,6 +231,7 @@ pub struct App {
     /// Titles set while a handler or a frame held the window, applied once it is back.
     retitled: HashMap<WindowId, SharedString>,
     active_window: Option<WindowId>,
+    quitting: Vec<QuitHandler>,
     /// The user asked for less motion: element animations jump instead of moving.
     pub(crate) reduce_motion: bool,
     /// The platform's timings, which themed animations resolve through.
@@ -238,6 +239,8 @@ pub struct App {
     /// The drag and drop running now.
     pub(crate) drag: Option<crate::drag::Session>,
 }
+
+type QuitHandler = Box<dyn FnOnce(&mut App)>;
 
 impl App {
     pub fn with_backend(mut backend: Box<dyn Backend>) -> Self {
@@ -269,6 +272,7 @@ impl App {
             frames: 0,
             retitled: HashMap::new(),
             active_window: None,
+            quitting: Vec::new(),
             reduce_motion: false,
             motion: crate::animation::MotionTokens::default(),
             drag: None,
@@ -743,6 +747,21 @@ impl App {
     /// item turns it off to keep running behind the item with no window open.
     pub fn set_quit_when_windows_close(&mut self, quit: bool) {
         self.backend.set_quit_when_windows_close(quit);
+    }
+
+    /// Runs `f` as the app quits, however that comes (the Quit menu item, [`Self::quit`], the
+    /// OS logging out), before the process exits: the last chance to write state to disk. It
+    /// runs once and must not wait on anything the run loop would deliver.
+    pub fn on_quit(&mut self, f: impl FnOnce(&mut App) + 'static) {
+        self.quitting.push(Box::new(f));
+    }
+
+    /// The app is about to quit. Hosts call it synchronously from the OS's last callback; it
+    /// runs the [`Self::on_quit`] handlers in the order they came.
+    pub fn app_will_quit(&mut self) {
+        for f in std::mem::take(&mut self.quitting) {
+            f(self);
+        }
     }
 
     /// Ends the app as the OS's Quit does: the way out of an app that outlives its windows.

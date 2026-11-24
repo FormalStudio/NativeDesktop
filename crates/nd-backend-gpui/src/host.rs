@@ -1590,6 +1590,17 @@ pub fn run_with(hooks: impl OsHooks, init: impl FnOnce(&mut App) + 'static, star
     application().run(move |cx: &mut gpui::App| {
         let host = GpuiHost::builder().hooks(hooks).start(cx, init);
         started(host.sender());
+        let inner = Rc::downgrade(&host.0);
+        cx.on_app_quit(move |_| {
+            if let Some(inner) = inner.upgrade() {
+                match inner.app.try_borrow_mut() {
+                    Ok(mut app) => app.app_will_quit(),
+                    Err(_) => eprintln!("nd: the app was busy as it quit; its quit handlers did not run"),
+                }
+            }
+            async {}
+        })
+        .detach();
         cx.activate(true);
         // GPUI's app owns the host from here, and with it the subscriptions and tasks.
         cx.set_global(HostGlobal(host));

@@ -121,3 +121,16 @@ fn a_window_keeps_its_place_only_while_its_title_bar_is_on_a_display() {
     assert!(title_bar_on_a_display(Rect::new(-1200., 100., 1280., 800.), &[main]), "80 points still show");
     assert!(!title_bar_on_a_display(Rect::new(-1260., 100., 1280., 800.), &[main]), "20 points cannot be grabbed");
 }
+
+#[test]
+fn quit_handlers_run_once_in_order() {
+    let mut cx = TestApp::new();
+    let ran = Rc::new(std::cell::RefCell::new(Vec::new()));
+    for n in 1..=2 {
+        let ran = ran.clone();
+        cx.on_quit(move |_| ran.borrow_mut().push(n));
+    }
+    cx.app_will_quit();
+    cx.app_will_quit();
+    assert_eq!(*ran.borrow(), [1, 2]);
+}

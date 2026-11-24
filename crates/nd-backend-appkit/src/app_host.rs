@@ -368,6 +368,16 @@ fn run_jobs(jobs: &Jobs) {
     host.after_frame();
 }
 
+/// Runs the app's quit handlers now. A handler or a nested run loop holding the app at the
+/// moment of quitting means they do not run.
+pub(crate) fn app_will_quit() {
+    let Some(host) = HOST.with(|h| h.borrow().upgrade()) else { return };
+    match host.app.try_borrow_mut() {
+        Ok(mut app) => app.app_will_quit(),
+        Err(_) => eprintln!("nd: the app was busy as it quit; its quit handlers did not run"),
+    };
+}
+
 type AppTask = Box<dyn FnOnce(&mut App)>;
 
 /// Runs `f` with the app on a later main run loop turn: outside the native callback that asks

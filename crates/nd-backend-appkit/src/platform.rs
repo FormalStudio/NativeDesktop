@@ -30,6 +30,12 @@ define_class!(
             QUIT_WHEN_WINDOWS_CLOSE.load(std::sync::atomic::Ordering::Relaxed)
         }
 
+        // Synchronous: the process exits when this returns, so there is no later turn to defer to.
+        #[unsafe(method(applicationWillTerminate:))]
+        fn will_terminate(&self, _notification: &objc2_foundation::NSNotification) {
+            crate::app_host::app_will_quit();
+        }
+
         // Light-dismiss overlays close when the app loses activation (ARCHITECTURE.md 6.3).
         #[unsafe(method(applicationDidResignActive:))]
         fn did_resign_active(&self, _notification: &objc2_foundation::NSNotification) {
