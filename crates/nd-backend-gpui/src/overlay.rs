@@ -21,6 +21,7 @@
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use nd_components::services::{AlertCallback, ChromeServices, OpenCallback, SaveCallback};
 use nd_components::{
@@ -81,7 +82,17 @@ pub(crate) struct MenuOverlay {
     pub placed: Placed,
     /// The single keystroke bound to each action, as the menu shows it ("Ctrl+C").
     pub shortcuts: Vec<(Box<dyn gpui::Action>, SharedString)>,
+    /// What the user typed to select a row, and when the last key of it came.
+    typed: String,
+    typed_at: Option<Instant>,
 }
+
+/// One row of a menu level for the keyboard: whether it takes the keyboard, whether it opens a
+/// submenu, and its title.
+type KeyRow = (bool, bool, SharedString);
+
+/// Keys typed further apart than this start a new type-select prefix.
+const TYPE_SELECT_PAUSE: Duration = Duration::from_secs(1);
 
 impl MenuOverlay {
     pub(crate) fn new(node: NodeId, at: Point, above: bool, content: MenuContent) -> Self {
@@ -97,6 +108,27 @@ impl MenuOverlay {
             pointer: None,
             placed: Default::default(),
             shortcuts: Vec::new(),
+            typed: String::new(),
+            typed_at: None,
+        }
+    }
+
+    /// Whether a type-select prefix is being typed, so Space extends it instead of choosing.
+    fn typing(&self) -> bool {
+        !self.typed.is_empty() && self.typed_at.is_some_and(|t| t.elapsed() <= TYPE_SELECT_PAUSE)
+    }
+
+    /// Type-select, as macOS's menus take it: keys typed within a second of each other build a
+    /// prefix, and the keyboard moves to the first row that takes it and whose title starts with
+    /// it.
+    fn type_select(&mut self, c: char, rows: &[KeyRow]) {
+        if !self.typing() {
+            self.typed.clear();
+        }
+        self.typed_at = Some(Instant::now());
+        self.typed.extend(c.to_lowercase());
+        if let Some(at) = starting_with(rows, &self.typed) {
+            self.hot = Some(at);
         }
     }
 
@@ -104,9 +136,8 @@ impl MenuOverlay {
         self.shortcuts.iter().find(|(a, _)| a.partial_eq(action)).map(|(_, keys)| keys.clone())
     }
 
-    /// The rows of the innermost open level: whether each takes the keyboard, and whether it
-    /// opens a submenu.
-    fn innermost(&self) -> Vec<(bool, bool)> {
+    /// The rows of the innermost open level.
+    fn innermost(&self) -> Vec<KeyRow> {
         match &self.content {
             MenuContent::Actions(items) => {
                 let mut level: &[MenuItem] = items;
@@ -117,17 +148,17 @@ impl MenuOverlay {
                 level
                     .iter()
                     .map(|item| match item {
-                        MenuItem::Action { enabled, .. } => (*enabled, false),
-                        MenuItem::Submenu(_) => (true, true),
-                        MenuItem::Separator | MenuItem::Role(_) => (false, false),
+                        MenuItem::Action { enabled, label, .. } => (*enabled, false, label.clone()),
+                        MenuItem::Submenu(sub) => (true, true, sub.title.clone()),
+                        MenuItem::Separator | MenuItem::Role(_) => (false, false, SharedString::default()),
                     })
                     .collect()
             }
             MenuContent::Rows(rows, _) => rows
                 .iter()
                 .map(|row| match row {
-                    MenuRow::Item { enabled, .. } => (*enabled, false),
-                    MenuRow::Separator => (false, false),
+                    MenuRow::Item { enabled, label, .. } => (*enabled, false, label.clone()),
+                    MenuRow::Separator => (false, false, SharedString::default()),
                 })
                 .collect(),
         }
@@ -205,7 +236,7 @@ fn heading_for(from: Point, to: Point, sub: Bounds<Pixels>) -> bool {
 }
 
 /// A key's step from `from` to the next row that takes the keyboard, wrapping, `forward` or back.
-fn step(rows: &[(bool, bool)], from: Option<usize>, forward: bool) -> Option<usize> {
+fn step(rows: &[KeyRow], from: Option<usize>, forward: bool) -> Option<usize> {
     let n = rows.len();
     if n == 0 {
         return None;
@@ -217,6 +248,11 @@ fn step(rows: &[(bool, bool)], from: Option<usize>, forward: bool) -> Option<usi
         (None, false) => n - 1,
     };
     (0..n).map(|k| if forward { (start + k) % n } else { (start + n - k) % n }).find(|&i| rows[i].0)
+}
+
+/// The first row that takes the keyboard whose title starts with `prefix`, ignoring case.
+fn starting_with(rows: &[KeyRow], prefix: &str) -> Option<usize> {
+    rows.iter().position(|(takes, _, title)| *takes && title.to_lowercase().starts_with(prefix))
 }
 
 pub(crate) enum MenuContent {
@@ -1126,6 +1162,7 @@ impl GpuiBackend {
     /// A key while the window's menu is open, as WinUI's menus take it: Up and Down move along
     /// the innermost level, Right, Enter and Space open the submenu under the keyboard, Left and
     /// Esc close it (Esc closes the menu from its top level), Enter and Space choose an item.
+    /// A character key type-selects a row, as macOS's menus do.
     /// False when the key is not the menu's.
     pub(crate) fn menu_key(&self, window: WindowId, key: &str) -> bool {
         enum Then {
@@ -1146,6 +1183,14 @@ impl GpuiBackend {
                 true
             };
             let then = match key {
+                "space" if menu.typing() => {
+                    menu.type_select(' ', &rows);
+                    Then::Stay
+                }
+                _ if key.chars().count() == 1 => {
+                    key.chars().for_each(|c| menu.type_select(c, &rows));
+                    Then::Stay
+                }
                 "down" | "up" => {
                     menu.hot = step(&rows, hot, key == "down");
                     Then::Stay
@@ -1563,6 +1608,22 @@ mod tests {
         let left = Bounds { origin: point(px(-100.), px(100.)), size: size(px(80.), px(120.)) };
         assert!(super::heading_for(from, at(60., 130.), left));
         assert!(!super::heading_for(from, at(150., 130.), left));
+    }
+
+    #[test]
+    fn type_select_finds_the_first_row_that_takes_the_prefix() {
+        let row = |takes, title: &'static str| (takes, false, title.into());
+        let rows = [
+            row(true, "Reload"),
+            row(false, "Put Tab to Sleep"),
+            row(true, "Put Tab Here"),
+            row(true, "Close Tab"),
+            row(true, "Close Other Tabs"),
+        ];
+        assert_eq!(super::starting_with(&rows, "p"), Some(2), "a row that does not take the keyboard is passed over");
+        assert_eq!(super::starting_with(&rows, "close"), Some(3));
+        assert_eq!(super::starting_with(&rows, "close o"), Some(4));
+        assert_eq!(super::starting_with(&rows, "x"), None);
     }
 
     #[test]
