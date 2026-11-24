@@ -795,7 +795,9 @@ wrap_focus_handler! {
             with(self.id, |p| {
                 p.page.report_focus(true);
                 // A click in a Chrome-style page's window reaches Chromium alone: nd focus follows.
-                #[cfg(any(target_os = "linux", target_os = "windows"))]
+                // On Linux the press itself does (`linux::chrome::forward_keys`): Chromium also
+                // takes focus as it creates the page's window, which a click would not follow.
+                #[cfg(target_os = "windows")]
                 if p.view.chrome().is_some() {
                     p.view.focus();
                 }

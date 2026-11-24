@@ -68,6 +68,10 @@ thread_local! {
     static LIVE: Cell<usize> = const { Cell::new(0) };
     /// Chromium's windows whose page does not have the keyboard, and the GPUI window each is in.
     static KEYS_TO: RefCell<HashMap<Window, Window>> = RefCell::default();
+    /// Chromium's windows and the page each draws.
+    static PAGES: RefCell<HashMap<Window, u64>> = RefCell::default();
+    /// The page the last button press landed in, until the pump focuses it.
+    static PRESSED: Cell<Option<u64>> = const { Cell::new(None) };
 }
 
 /// Forwards the keys Chromium's windows got without the keyboard (`X::forward_key`); the pump
@@ -75,6 +79,9 @@ thread_local! {
 pub(crate) fn forward_keys() {
     if let Some(x) = CONN.with(|c| c.borrow().clone()) {
         x.flush();
+    }
+    if let Some(page) = PRESSED.with(Cell::take).and_then(crate::page::get) {
+        page.view.focus();
     }
 }
 
@@ -103,6 +110,15 @@ fn x() -> Result<Rc<X>, String> {
             white: s.white_pixel,
             conn,
         });
+        // Raw presses on the root reach every client that selects them, where a press on
+        // Chromium's window goes to Chromium alone. XI 2.1 delivers them during grabs too.
+        let presses = xinput::EventMask {
+            deviceid: xinput::Device::ALL_MASTER.into(),
+            mask: vec![xinput::XIEventMask::RAW_BUTTON_PRESS],
+        };
+        if x.conn.xinput_xi_query_version(2, 2).ok().and_then(|c| c.reply().ok()).is_some() {
+            let _ = x.conn.xinput_xi_select_events(x.root, &[presses]);
+        }
         *c.borrow_mut() = Some(x.clone());
         Ok(x)
     })
@@ -114,7 +130,26 @@ impl X {
     fn flush(&self) {
         let _ = self.conn.flush();
         while let Ok(Some(event)) = self.conn.poll_for_event() {
-            self.forward_key(event);
+            match event {
+                Event::XinputRawButtonPress(_) => self.note_press(),
+                event => self.forward_key(event),
+            }
+        }
+    }
+
+    /// A press in a page's window gives that page nd's focus on the pump's next turn: Chromium
+    /// takes focus as it creates its window, so the focus it reports says nothing of a click.
+    fn note_press(&self) {
+        let mut at = self.root;
+        while let Some(reply) = self.conn.query_pointer(at).ok().and_then(|c| c.reply().ok()) {
+            if reply.child == x11rb::NONE {
+                return;
+            }
+            at = reply.child;
+            if let Some(page) = PAGES.with(|p| p.borrow().get(&at).copied()) {
+                PRESSED.with(|p| p.set(Some(page)));
+                return;
+            }
         }
     }
 
@@ -295,6 +330,7 @@ impl Chrome {
                     mask: vec![xinput::XIEventMask::KEY_PRESS | xinput::XIEventMask::KEY_RELEASE],
                 };
                 let _ = conn.xinput_xi_select_events(window, &[keys]);
+                PAGES.with(|p| p.borrow_mut().insert(window, self.page));
             }
             st.browser = browser;
             resized = true;
@@ -379,6 +415,7 @@ impl Chrome {
         self.park();
         if let Some((browser, ..)) = self.st.borrow().browser {
             KEYS_TO.with(|k| k.borrow_mut().remove(&browser));
+            PAGES.with(|p| p.borrow_mut().remove(&browser));
         }
         let _ = self.x.conn.reparent_window(self.container, self.x.root, 0, 0);
         self.x.flush();
