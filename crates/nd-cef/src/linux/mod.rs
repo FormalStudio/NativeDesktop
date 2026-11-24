@@ -102,6 +102,18 @@ pub(crate) fn on_main(f: impl FnOnce() + Send + 'static) {
     pump::send(pump::Msg::Run(Box::new(f)));
 }
 
+/// Chromium on Linux takes its colour scheme from the desktop's, which need not be the app's: a
+/// page's `prefers-color-scheme` and the canvas of one that declares `light dark` follow the
+/// app's appearance instead.
+pub(crate) fn follow_scheme(page: u64, dark: bool) {
+    let Some(host) = crate::page::get(page).and_then(|p| p.host()) else { return };
+    let Some(context) = cef::ImplBrowserHost::request_context(&host) else { return };
+    let want = if dark { cef::ColorVariant::DARK } else { cef::ColorVariant::LIGHT };
+    if cef::ImplRequestContext::chrome_color_scheme_mode(&context) != want {
+        cef::ImplRequestContext::set_chrome_color_scheme(&context, want, 0);
+    }
+}
+
 /// How often the pump runs Chromium while a Chrome-style page is open: Chromium reads its X
 /// events only when polled.
 pub(crate) fn pump_fallback() -> Option<Duration> {

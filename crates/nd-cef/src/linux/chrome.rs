@@ -162,8 +162,6 @@ struct St {
     /// The GPUI window the container is in; the root while parked.
     parent: Window,
     mapped: bool,
-    /// Mapped before, so the next map shows a page that was out of sight.
-    shown: bool,
     frame: R,
     shape: Option<Shape>,
     /// Chromium's window and the size it was given: it only exists once the browser does, and
@@ -231,16 +229,17 @@ impl Chrome {
     pub(crate) fn browser_created(&self) {}
 
     /// Chrome style takes the page base background from the Views theme, dark grey under a dark
-    /// system theme, where Chrome shows a page with no colours of its own on white. Each theme
-    /// change sets it again, and a windowed browser has no delegate to hear of one (macOS's
-    /// `on_theme_changed`), so every placement puts white back once the theme has moved it.
-    /// shortcut: as on macOS, white also wins over a page's own `color-scheme: dark` canvas.
-    fn white_base(&self) {
+    /// system theme, where Chrome shows a page with no colours of its own on white, or on its dark
+    /// canvas when the page asks for a dark scheme (`page::canvas`). Each theme change sets it
+    /// again, and a windowed browser has no delegate to hear of one (macOS's `on_theme_changed`),
+    /// so every placement puts the page's canvas back once the theme has moved it.
+    fn canvas_base(&self) {
+        let canvas = crate::page::canvas(self.page);
         let mut browser = crate::page::get(self.page).and_then(|p| p.host()).and_then(|h| cef::ImplBrowserHost::browser(&h));
         if let Some(view) = cef::browser_view_get_for_browser(browser.as_mut())
-            && cef::ImplView::background_color(&view) != crate::page::PAGE_BACKGROUND
+            && cef::ImplView::background_color(&view) != canvas
         {
-            cef::ImplView::set_background_color(&view, crate::page::PAGE_BACKGROUND);
+            cef::ImplView::set_background_color(&view, canvas);
         }
     }
 
@@ -318,18 +317,9 @@ impl Chrome {
         if !st.mapped {
             let _ = conn.map_window(self.container);
             st.mapped = true;
-            // A GPU process that went down while the page was out of sight leaves it blank once
-            // shown again until its size changes: a one-pixel step and back gets it a new frame.
-            // Not on the first map, where the step costs a fresh page its first click.
-            if let (true, Some((window, w, h))) = (std::mem::replace(&mut st.shown, true), st.browser) {
-                for h in [h + 1, h] {
-                    let aux = ConfigureWindowAux::new().width(w.max(1) as u32).height(h.max(1) as u32);
-                    let _ = conn.configure_window(window, &aux);
-                }
-            }
         }
         drop(st);
-        self.white_base();
+        self.canvas_base();
         self.route_keys();
         self.x.flush();
         resized

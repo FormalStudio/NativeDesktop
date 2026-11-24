@@ -412,6 +412,8 @@ impl OsrView {
     /// The element that shows the page. Called on every build of its node.
     pub(crate) fn element(self: &Rc<Self>, cx: &CustomCx<'_>, _window: &mut Window) -> AnyElement {
         super::pump::attach_backend(cx.backend());
+        #[cfg(target_os = "linux")]
+        crate::platform::follow_scheme(self.id, cx.theme().is_dark());
         let props = cx.props().downcast_ref::<WebViewProps>().expect("webview node needs WebViewProps");
         {
             let mut st = self.st.borrow_mut();
