@@ -262,8 +262,9 @@ impl Chrome {
             st.views = Some(hwnd);
             st.views_size = (0, 0);
         }
-        // Views' own show activates, and the activation would land on the hidden parking window.
-        let _ = unsafe { ShowWindow(hwnd, SW_SHOWNA) };
+        // Through views, not ShowWindow: views keeps its own visibility, and a widget it thinks
+        // hidden keeps the page's contents hidden, which then never draw.
+        window.show();
         let frame = self.st.borrow().frame;
         self.size_views(frame.w, frame.h);
     }
