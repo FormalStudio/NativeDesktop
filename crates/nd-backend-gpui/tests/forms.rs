@@ -535,6 +535,26 @@ mod forms {
         quiet(&mut rig);
     }
 
+    /// WinUI sets the off knob 4 px in from the track's outer edge on every side; the track's
+    /// outline once pushed it a pixel right and down.
+    pub fn fluent_switch_knob_is_centred() {
+        let rig = open_in(Preset::Fluent, WindowAppearance::Light, false);
+        let b = rig.node("switch").bounds.expect("switch laid out");
+        let capture = rig.host.job(|app| app.capture(rig.window)).expect("capture");
+        let image = image::load_from_memory(&capture.png).expect("png").to_luma8();
+        let scale = image.width() as f32 / SIZE.0;
+        let (x0, y0) = ((b.origin.x * scale).round() as u32, (b.origin.y * scale).round() as u32);
+        let (x1, y1) = (x0 + (b.size.width * scale).round() as u32, y0 + (b.size.height * scale).round() as u32);
+        // The knob is TextFillColorSecondary, darker than the ControlStrongStroke outline.
+        let knob: Vec<(u32, u32)> =
+            (y0..y1).flat_map(|y| (x0..x1).map(move |x| (x, y))).filter(|&(x, y)| image.get_pixel(x, y).0[0] < 120).collect();
+        let left = knob.iter().map(|p| p.0).min().expect("knob drawn") - x0;
+        let top = knob.iter().map(|p| p.1).min().expect("knob drawn") - y0;
+        let bottom = y1 - 1 - knob.iter().map(|p| p.1).max().expect("knob drawn");
+        let inset = (4. * scale).round() as u32;
+        assert_eq!((left, top, bottom), (inset, inset, inset), "knob insets left, top, bottom at {scale}x");
+    }
+
     pub fn typing_arrives_as_text_changed() {
         let mut rig = open();
         rig.click("text");
@@ -878,6 +898,7 @@ fn main() {
             forms::access_keys_toggle_and_focus_the_first_control,
         ),
         ("forms::switch_click_and_space_toggle", forms::switch_click_and_space_toggle),
+        ("forms::fluent_switch_knob_is_centred", forms::fluent_switch_knob_is_centred),
         ("forms::typing_arrives_as_text_changed", forms::typing_arrives_as_text_changed),
         ("forms::an_app_write_replaces_the_text", forms::an_app_write_replaces_the_text),
         ("forms::secure_and_search_fields", forms::secure_and_search_fields),

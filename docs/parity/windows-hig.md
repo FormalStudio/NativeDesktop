@@ -13,6 +13,18 @@ The rules and values are in [docs/dev/hig/windows.md](../dev/hig/windows.md).
   ControlAltFill states, 12 px glyph. VM capture beside the CheckBox page.
 - [x] Toggle switch: off fill and outline colours, no knob growth. Now ControlAltFillSecondary
   off fill, strong outline, knob 12/14/17x14. Pixel-sampled against the ToggleSwitch page.
+- [x] Toggle switch: off knob sat 1 px right and down, since absolute insets start inside the
+  outline. Now the outline stays on (clear when on) and the knob is placed from the outer edge.
+  `forms::fluent_switch_knob_is_centred`; [capture](windows-shots/toggle-light-100.png) (before,
+  after, Settings), 8x at 100%:
+
+  | Off knob inset (px) | left | top | bottom |
+  | --- | --- | --- | --- |
+  | Settings (WinUI) | 4 | 4 | 4 |
+  | nd before | 5 | 5 | 3 |
+  | nd after | 4 | 4 | 4 |
+
+  Label: Settings and nd both set the text's cap centre 1 px below the track's centre.
 - [x] Radio button: 6 px dot, no states. Now 12/14/10 dot, 32 px rows 8 apart. VM capture
   side by side with the RadioButton page (40 px pitch, same ring and dot).
 - [x] Slider: plain white knob. Now a 20 px thumb with a 1 px elevation border and a 12/14/10
