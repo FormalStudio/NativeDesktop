@@ -162,8 +162,8 @@ struct St {
     /// The GPUI window the container is in; the root while parked.
     parent: Window,
     mapped: bool,
-    /// Unmapped by `park`, so the next map shows a page that was out of sight.
-    parked: bool,
+    /// Mapped before, so the next map shows a page that was out of sight.
+    shown: bool,
     frame: R,
     shape: Option<Shape>,
     /// Chromium's window and the size it was given: it only exists once the browser does, and
@@ -306,8 +306,8 @@ impl Chrome {
             st.mapped = true;
             // A GPU process that went down while the page was out of sight leaves it blank once
             // shown again until its size changes: a one-pixel step and back gets it a new frame.
-            // Only after a park, since the step costs a fresh page its first click.
-            if let (true, Some((window, w, h))) = (std::mem::take(&mut st.parked), st.browser) {
+            // Not on the first map, where the step costs a fresh page its first click.
+            if let (true, Some((window, w, h))) = (std::mem::replace(&mut st.shown, true), st.browser) {
                 for h in [h + 1, h] {
                     let aux = ConfigureWindowAux::new().width(w.max(1) as u32).height(h.max(1) as u32);
                     let _ = conn.configure_window(window, &aux);
@@ -324,7 +324,6 @@ impl Chrome {
     pub(crate) fn park(&self) {
         let mut st = self.st.borrow_mut();
         if std::mem::take(&mut st.mapped) {
-            st.parked = true;
             let _ = self.x.conn.unmap_window(self.container);
             self.x.flush();
         }
