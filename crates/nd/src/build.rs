@@ -6,8 +6,8 @@
 //! `OUT_DIR`, builds it into one static library and emits the link arguments for the app's
 //! binaries. Every package must export a library product named like its package. Packages that
 //! depend on the framework package take its path from the `ND_SWIFT_PATH` environment variable.
-//! On Windows it raises the main thread's stack to 8 MB and embeds the application manifest and
-//! `[app] icon` as the executable's icon. On Linux it gives the app's binaries an
+//! On Windows it raises the main thread's stack to 8 MB and embeds `[app] icon` as the
+//! executable's icon; GPUI embeds the application manifest. On Linux it gives the app's binaries an
 //! `$ORIGIN` run path, so the Chromium runtime web views link (`libcef.so`) loads from beside the
 //! executable, where builds and packages put it. On the web it does nothing.
 
@@ -59,30 +59,16 @@ fn windows_stack() {
     println!("cargo::rustc-link-arg={flag}");
 }
 
-/// The application manifest's compatibility section. Without it Windows reports itself to the
-/// process as Windows 8, and Chromium, which needs 10, will not start.
-const WINDOWS_MANIFEST: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
-  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
-    <application>
-      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
-    </application>
-  </compatibility>
-</assembly>
-"#;
-
-/// Embeds the application manifest, and `[app] icon` as icon resource 1.
+/// Embeds `[app] icon` as icon resource 1. The application manifest, whose compatibility
+/// section Chromium needs to see Windows 10, comes from GPUI's `windows-manifest` feature: a
+/// second manifest resource fails the link (CVT1100).
 fn windows_resources() -> Result<(), String> {
     let out_dir = PathBuf::from(var("OUT_DIR")?);
-    let manifest = out_dir.join("app.manifest");
-    write_if_changed(&manifest, WINDOWS_MANIFEST)?;
-    let mut rc = format!("1 24 \"{}\"\n", manifest.to_str().ok_or("non-UTF-8 OUT_DIR")?.replace('\\', "/"));
-    if let Some(ico) = windows_icon(&out_dir)? {
-        rc.push_str(&format!("1 ICON \"{}\"\n", ico.to_str().ok_or("non-UTF-8 OUT_DIR")?.replace('\\', "/")));
-    }
+    let Some(ico) = windows_icon(&out_dir)? else { return Ok(()) };
+    let rc = format!("1 ICON \"{}\"\n", ico.to_str().ok_or("non-UTF-8 OUT_DIR")?.replace('\\', "/"));
     let path = out_dir.join("app.rc");
     write_if_changed(&path, &rc)?;
-    embed_resource::compile(&path, embed_resource::NONE).manifest_required().map_err(|e| e.to_string())
+    embed_resource::compile(&path, embed_resource::NONE).manifest_optional().map_err(|e| e.to_string())
 }
 
 /// `[app] icon` as an `.ico` in `out_dir`. GPUI's window class, the tray's fallback icon,
