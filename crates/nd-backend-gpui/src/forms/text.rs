@@ -1204,6 +1204,32 @@ pub(crate) fn chrome(ctl: &Ctl, editor: &Rc<std::cell::RefCell<Editor>>, f: &Fie
         let editor = editor.clone();
         move |_: &gpui::MouseUpEvent, _: &mut Window, _: &mut App| editor.borrow_mut().selecting = false
     };
+    // X11 and Wayland's primary selection: what a drag selects, a middle click pastes.
+    #[cfg(target_os = "linux")]
+    let selected = {
+        let editor = editor.clone();
+        move |_: &gpui::MouseUpEvent, _: &mut Window, cx: &mut App| {
+            let e = editor.borrow();
+            if !e.secure && !e.selected.is_empty() {
+                cx.write_to_primary(ClipboardItem::new_string(e.text[e.selected.clone()].to_owned()));
+            }
+        }
+    };
+    #[cfg(target_os = "linux")]
+    let middle = {
+        let (editor, sink) = (editor.clone(), ctl.sink.clone());
+        move |event: &MouseDownEvent, window: &mut Window, cx: &mut App| {
+            let Some(text) = cx.read_from_primary().and_then(|item| item.text()) else { return };
+            sink.take_focus(window, cx);
+            let mut e = editor.borrow_mut();
+            let at = e.offset_at(event.position);
+            e.move_to(at);
+            let range = e.selected.clone();
+            e.replace(range, &text, cx);
+            drop(e);
+            window.refresh();
+        }
+    };
     let scrolled = {
         let editor = editor.clone();
         move |event: &ScrollEvent, window: &mut Window, _: &mut App| {
@@ -1219,6 +1245,10 @@ pub(crate) fn chrome(ctl: &Ctl, editor: &Rc<std::cell::RefCell<Editor>>, f: &Fie
         .on_mouse_move(moved)
         .on_mouse_up(MouseButton::Left, up.clone())
         .on_mouse_up_out(MouseButton::Left, up);
+    #[cfg(target_os = "linux")]
+    {
+        chrome = chrome.on_mouse_up(MouseButton::Left, selected).on_mouse_down(MouseButton::Middle, middle);
+    }
     if f.multiline {
         chrome = chrome.on_scroll(scrolled);
     }
