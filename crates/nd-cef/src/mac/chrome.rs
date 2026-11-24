@@ -377,10 +377,23 @@ impl Chrome {
         let id = self.page;
         let mut observers = Vec::new();
         if let Some(anchor) = self.anchor.borrow().as_ref() {
+            // On a later turn: AppKit finishes the anchor's own key change after this notification
+            // and would take key back. Straight to a key-taking overlay over the host (a palette
+            // with its field) when one shows: handing it to the host first leaves a turn in
+            // which Chromium activates its widget again and the overlay never gets key back.
             let key = RcBlock::new(move |_note: NonNull<NSNotification>| {
-                if let Some(host) = page::get(id).and_then(|p| p.view.window()) {
-                    host.makeKeyWindow();
-                }
+                super::run_later(move || {
+                    let Some(host) = page::get(id).and_then(|p| p.view.window()) else { return };
+                    let overlay = host.childWindows().and_then(|children| {
+                        children.iter().filter(|w| {
+                            w.isVisible() && w.canBecomeKeyWindow() && !w.ignoresMouseEvents()
+                        }).last()
+                    });
+                    match overlay {
+                        Some(overlay) => overlay.makeKeyWindow(),
+                        None => host.makeKeyWindow(),
+                    }
+                });
             });
             let object: &AnyObject = anchor;
             observers.push(unsafe {
