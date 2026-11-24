@@ -224,7 +224,7 @@ impl OsHooks for WindowsHooks {
             .child(caption_button(CaptionButton::Minimize, state, look, maximized))
             .child(caption_button(CaptionButton::Maximize, state, look, maximized))
             .child(caption_button(CaptionButton::Close, state, look, maximized));
-        Some(nd_backend_gpui::occlusion::Occluding::surface(row).into_any_element())
+        Some(nd_backend_gpui::occlusion::Occluding::chrome(row).into_any_element())
     }
 
     fn backdrop(&self, _window: WindowId) -> bool {

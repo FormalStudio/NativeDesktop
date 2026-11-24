@@ -541,10 +541,9 @@ impl OsrView {
             return;
         }
         let visible = device(window.content_mask().bounds).intersect(frame);
-        let overlays: Vec<(R, bool, bool)> = nd_backend_gpui::occlusion::occluders(window)
-            .iter()
-            .map(|o| (device(o.bounds), o.draws, o.blocks_input))
-            .collect();
+        let occluders = nd_backend_gpui::occlusion::occluders(window);
+        let overlays: Vec<(R, bool, bool)> =
+            occluders.iter().map(|o| (device(o.bounds), o.draws, o.blocks_input)).collect();
         let shape = chrome::shape(frame, visible, &overlays, scale);
         let cut = shape.cut;
         let had = self.st.borrow().frame.is_some();
@@ -556,8 +555,8 @@ impl OsrView {
             self.set_frame(pixels, width, height);
         }
         let resized = chrome.place(parent, frame, shape);
-        // An overlay that takes the pointer takes the keys too, as it does over any other element.
-        let keyboard = self.st.borrow().focused && !overlays.iter().any(|&(_, _, blocks)| blocks);
+        // A menu or dialog over the window takes the keys, as it does over any other element.
+        let keyboard = self.st.borrow().focused && !occluders.iter().any(|o| o.takes_keys);
         if std::mem::replace(&mut self.st.borrow_mut().keyboard, keyboard) != keyboard {
             chrome.focus(keyboard);
         }
