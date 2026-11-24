@@ -55,6 +55,8 @@ pub(crate) struct Chrome {
     lifted: RefCell<Option<Retained<NSView>>>,
     relift: RefCell<Option<Retained<NSTimer>>>,
     observers: RefCell<Vec<Observer>>,
+    /// Hands key back whenever Chromium activates the anchor, for the anchor's whole life.
+    key_back: RefCell<Option<Observer>>,
     observed: RefCell<Weak<NSWindow>>,
     focused: Cell<bool>,
     closed: Cell<bool>,
@@ -96,6 +98,7 @@ impl Chrome {
             lifted: RefCell::default(),
             relift: RefCell::default(),
             observers: RefCell::default(),
+            key_back: RefCell::default(),
             observed: RefCell::default(),
             focused: Cell::new(false),
             closed: Cell::new(false),
@@ -163,6 +166,7 @@ impl Chrome {
             return;
         };
         imperceptible(&anchor);
+        *self.key_back.borrow_mut() = Some(key_back(&anchor, self.page));
         *self.anchor.borrow_mut() = Some(anchor);
         let host_was_key = self.view().and_then(|v| v.window()).is_some_and(|w| w.isKeyWindow());
         window.show();
@@ -363,10 +367,9 @@ impl Chrome {
         }
     }
 
-    /// Follows the host window's moves and resizes, and hands key back to it whenever Chromium
-    /// activates its own widget: the anchor is invisible, and key on it would take the app
-    /// window's title bar out of its active look. Refusing key in an NSWindow subclass is not an
-    /// option, since Chromium's activation path crashes on a window that cannot become key.
+    /// Follows the host window's moves and resizes. Key goes back from the anchor through
+    /// [`key_back`]: refusing key in an NSWindow subclass is not an option, since Chromium's
+    /// activation path crashes on a window that cannot become key.
     fn observe(&self, host: Option<&NSWindow>) {
         let center = NSNotificationCenter::defaultCenter();
         for observer in self.observers.borrow_mut().drain(..) {
@@ -376,35 +379,6 @@ impl Chrome {
         let Some(host) = host else { return };
         let id = self.page;
         let mut observers = Vec::new();
-        if let Some(anchor) = self.anchor.borrow().as_ref() {
-            // On a later turn: AppKit finishes the anchor's own key change after this notification
-            // and would take key back. Straight to a key-taking overlay over the host (a palette
-            // with its field) when one shows: handing it to the host first leaves a turn in
-            // which Chromium activates its widget again and the overlay never gets key back.
-            let key = RcBlock::new(move |_note: NonNull<NSNotification>| {
-                super::run_later(move || {
-                    let Some(host) = page::get(id).and_then(|p| p.view.window()) else { return };
-                    let overlay = host.childWindows().and_then(|children| {
-                        children.iter().filter(|w| {
-                            w.isVisible() && w.canBecomeKeyWindow() && !w.ignoresMouseEvents()
-                        }).last()
-                    });
-                    match overlay {
-                        Some(overlay) => overlay.makeKeyWindow(),
-                        None => host.makeKeyWindow(),
-                    }
-                });
-            });
-            let object: &AnyObject = anchor;
-            observers.push(unsafe {
-                center.addObserverForName_object_queue_usingBlock(
-                    Some(NSWindowDidBecomeKeyNotification),
-                    Some(object),
-                    None,
-                    &key,
-                )
-            });
-        }
         let sync = RcBlock::new(move |_note: NonNull<NSNotification>| {
             if let Some(chrome) = page::get(id).and_then(|p| p.view.chrome()) {
                 chrome.place();
@@ -604,7 +578,7 @@ impl Chrome {
         }
         self.untrack_popup();
         let center = NSNotificationCenter::defaultCenter();
-        for observer in self.observers.borrow_mut().drain(..) {
+        for observer in self.observers.borrow_mut().drain(..).chain(self.key_back.borrow_mut().take()) {
             unsafe { center.removeObserver(observer.as_ref()) };
         }
         let anchor = self.anchor.borrow_mut().take();
@@ -628,6 +602,70 @@ impl Chrome {
             window.close();
         }
     }
+}
+
+/// Hands key back whenever Chromium activates `anchor`: the anchor is invisible, and key on it
+/// would take the app window's title bar out of its active look and its keys into the page. On a
+/// later turn, since AppKit finishes the anchor's own key change after the notification and would
+/// take key back. Straight to a key-taking overlay (a palette with its field) when one shows:
+/// handing it to the window first leaves a turn in which Chromium activates its widget again and
+/// the overlay never gets key back. A page in no window (a tab in the background) activates too.
+fn key_back(anchor: &NSWindow, id: u64) -> Observer {
+    let weak = Weak::from_retained(&anchor.retain());
+    let key = RcBlock::new(move |_note: NonNull<NSNotification>| {
+        let weak = weak.clone();
+        super::run_later(move || {
+            let anchor = weak.load();
+            let host = page::get(id).and_then(|p| p.view.window()).or_else(app_window);
+            let overlay = host.as_ref().and_then(|h| h.childWindows()).and_then(|children| {
+                children.iter().filter(|w| w.isVisible() && w.canBecomeKeyWindow() && !w.ignoresMouseEvents()).last()
+            });
+            let target = key_target(
+                anchor.as_ref().is_some_and(|a| a.isKeyWindow()),
+                host.as_ref().is_some_and(|h| h.isVisible()),
+                overlay.is_some(),
+            );
+            match (target, host, overlay) {
+                (KeyTarget::Overlay, _, Some(overlay)) => overlay.makeKeyWindow(),
+                (KeyTarget::Host, Some(host), _) => host.makeKeyWindow(),
+                _ => {}
+            }
+        });
+    });
+    let object: &AnyObject = anchor;
+    unsafe {
+        NSNotificationCenter::defaultCenter().addObserverForName_object_queue_usingBlock(
+            Some(NSWindowDidBecomeKeyNotification),
+            Some(object),
+            None,
+            &key,
+        )
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum KeyTarget {
+    Overlay,
+    Host,
+    Nothing,
+}
+
+/// Where key goes on the turn after Chromium activated an anchor. Nowhere once the anchor lost
+/// key by then (AppKit or the user already put it somewhere) or the host is gone.
+fn key_target(anchor_still_key: bool, host_visible: bool, overlay_shows: bool) -> KeyTarget {
+    match (anchor_still_key, host_visible, overlay_shows) {
+        (false, _, _) | (_, false, _) => KeyTarget::Nothing,
+        (true, true, true) => KeyTarget::Overlay,
+        (true, true, false) => KeyTarget::Host,
+    }
+}
+
+/// The app's front window that is not an anchor: anchors are the only click-through windows
+/// that can become key.
+fn app_window() -> Option<Retained<NSWindow>> {
+    let mtm = objc2::MainThreadMarker::new()?;
+    let app = objc2_app_kit::NSApplication::sharedApplication(mtm);
+    app.orderedWindows().iter().find(|w| w.isVisible() && !w.ignoresMouseEvents() && w.parentWindow().is_none())
 }
 
 fn imperceptible(anchor: &NSWindow) {
@@ -800,5 +838,18 @@ wrap_window_delegate! {
                 height: r.size.height.round() as i32,
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{KeyTarget, key_target};
+
+    #[test]
+    fn key_goes_back_only_while_the_anchor_still_has_it() {
+        assert_eq!(key_target(true, true, true), KeyTarget::Overlay);
+        assert_eq!(key_target(true, true, false), KeyTarget::Host, "the overlay closed during the turn");
+        assert_eq!(key_target(true, false, true), KeyTarget::Nothing, "the host closed during the turn");
+        assert_eq!(key_target(false, true, true), KeyTarget::Nothing, "the user clicked another window");
     }
 }
