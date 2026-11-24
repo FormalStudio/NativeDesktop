@@ -51,11 +51,12 @@ impl Launch {
     }
 }
 
-/// `scheme://rest` with an RFC 3986 scheme. A Windows path (`C:\x`) has no `//`, so it never
-/// matches.
+/// `scheme:rest` with an RFC 3986 scheme of two or more characters, so `data:` and `mailto:`
+/// count and a Windows path (`C:\x`), whose drive letter is one character, never does.
 fn is_url(arg: &str) -> bool {
-    let Some((scheme, rest)) = arg.split_once("://") else { return false };
+    let Some((scheme, rest)) = arg.split_once(':') else { return false };
     !rest.is_empty()
+        && scheme.len() >= 2
         && scheme.chars().next().is_some_and(|c| c.is_ascii_alphabetic())
         && scheme.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '.' | '-'))
 }
@@ -205,4 +206,19 @@ async fn serve_one(stream: crate::LocalStream, tx: mpsc::Sender<Launch>) -> io::
         Err(_) => false,
     };
     write_json(&mut write, &Ack { ok }).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_url;
+
+    #[test]
+    fn urls_with_and_without_an_authority_count_and_paths_do_not() {
+        for url in ["https://a.test/", "myapp://open/1", "data:text/html,<p>x", "mailto:a@b.test", "file:///tmp/x"] {
+            assert!(is_url(url), "{url}");
+        }
+        for arg in ["C:\\x", "C:/x", "/tmp/x", "--flag", "plain", "1x:y", "https:"] {
+            assert!(!is_url(arg), "{arg}");
+        }
+    }
 }
