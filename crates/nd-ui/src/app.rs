@@ -689,6 +689,20 @@ impl App {
         self.flush_effects();
     }
 
+    /// The window's frame changed: moved to `origin`, or its content resized (reported through
+    /// [`Self::resize_window`]). Hosts call it from a later run loop turn, never inside the OS
+    /// callback; it runs the window's [`Window::on_frame_changed`] handler.
+    pub fn window_frame_changed(&mut self, id: WindowId, origin: Option<nd_core::Point>) {
+        let Some(window) = self.windows.get_mut(&id).and_then(|w| w.window.as_mut()) else { return };
+        if let Some(origin) = origin {
+            window.set_origin(origin);
+        }
+        if let Some(handler) = window.frame_changed.clone() {
+            self.with_window(id, (), |window, cx| handler(window, cx));
+        }
+        self.flush_effects();
+    }
+
     /// The key window as the host last reported it, while it is open.
     pub fn active_window(&self) -> Option<WindowId> {
         self.active_window.filter(|id| self.windows.contains_key(id))

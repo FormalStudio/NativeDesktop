@@ -48,6 +48,17 @@ impl Inner {
         }
     }
 
+    /// The window's top-left corner in global points from the top-left of the primary display.
+    fn origin(&self) -> nd_core::Point {
+        top_left(&self.window)
+    }
+
+    /// Tells the app, on a later turn, that the window moved or resized.
+    fn report_frame(&self) {
+        let (id, origin) = (self.id, self.origin());
+        crate::defer_with_app(move |app| app.window_frame_changed(id, Some(origin)));
+    }
+
     fn diag_frame(&self) {
         if !self.diag {
             return;
@@ -67,6 +78,13 @@ impl Inner {
             self.window.windowNumber()
         );
     }
+}
+
+pub(crate) fn top_left(window: &NSWindow) -> nd_core::Point {
+    let f = window.frame();
+    let mtm = MainThreadMarker::from(window);
+    let primary = NSScreen::screens(mtm).firstObject().map_or(0., |s| s.frame().size.height);
+    nd_core::Point { x: f.origin.x as f32, y: (primary - (f.origin.y + f.size.height)) as f32 }
 }
 
 fn env_flag(name: &str) -> bool {
@@ -121,7 +139,15 @@ define_class!(
 
         #[unsafe(method(windowDidResize:))]
         fn did_resize(&self, _n: &NSNotification) {
-            self.with(Inner::place_lights);
+            self.with(|h| {
+                h.place_lights();
+                h.report_frame();
+            });
+        }
+
+        #[unsafe(method(windowDidMove:))]
+        fn did_move(&self, _n: &NSNotification) {
+            self.with(Inner::report_frame);
         }
 
         #[unsafe(method(windowDidBecomeKey:))]

@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use nd_core::{FrameTime, Size, WindowId};
+use nd_core::{FrameTime, Rect, Size, WindowId};
 use nd_gpui::gpui::{self, Pixels, SharedString};
 
 /// A window of another app, by the handle that app exported for it: an xdg-foreign v2 handle on
@@ -150,9 +150,25 @@ pub struct TitlebarInsets {
     pub height: f32,
 }
 
+/// How much of a window's title bar must show on a display for the user to grab it.
+const GRAB: f32 = 40.;
+
+/// Whether enough of `window`'s top edge to grab lies on one of `displays` (each in global
+/// points, top-left origin, the display's usable area). A window restored where this fails sat
+/// on a display that is gone, or was dragged almost off every one; the backend centres it.
+pub fn title_bar_on_a_display(window: Rect, displays: &[Rect]) -> bool {
+    let (left, top, right) = (window.origin.x, window.origin.y, window.origin.x + window.size.width);
+    displays.iter().any(|d| {
+        let width = right.min(d.origin.x + d.size.width) - left.max(d.origin.x);
+        let height = (top + GRAB).min(d.origin.y + d.size.height) - top.max(d.origin.y);
+        width >= GRAB && height >= GRAB / 2.
+    })
+}
+
 pub(crate) type ShouldClose = Rc<dyn Fn(&mut Window, &mut App) -> bool>;
 pub(crate) type NewTab = Rc<dyn Fn(&mut Window, &mut App)>;
 pub(crate) type Activated = Rc<dyn Fn(&mut Window, &mut App)>;
+pub(crate) type FrameChanged = Rc<dyn Fn(&mut Window, &mut App)>;
 
 /// Per-window state handed to `render` and to handlers.
 pub struct Window {
@@ -162,6 +178,7 @@ pub struct Window {
     clock: FrameTime,
     options: WindowOptions,
     insets: TitlebarInsets,
+    origin: Option<nd_core::Point>,
     /// An element id to focus once the frame has rendered; see [`Window::focus`].
     pub(crate) focus_request: Option<SharedString>,
     /// Whether that request stands only when nothing mounted holds focus; see
@@ -170,6 +187,7 @@ pub struct Window {
     pub(crate) should_close: Option<ShouldClose>,
     pub(crate) new_tab: Option<NewTab>,
     pub(crate) activated: Option<Activated>,
+    pub(crate) frame_changed: Option<FrameChanged>,
 }
 
 impl Window {
@@ -185,11 +203,13 @@ impl Window {
             clock: FrameTime::default(),
             options: options.clone(),
             insets: TitlebarInsets::default(),
+            origin: options.origin,
             focus_request: None,
             focus_if_lost: false,
             should_close: None,
             new_tab: None,
             activated: None,
+            frame_changed: None,
         }
     }
 
@@ -212,6 +232,24 @@ impl Window {
     /// whose menus show per-window state rebuilds them here. Replaces an earlier handler.
     pub fn on_activate(&mut self, handler: impl Fn(&mut Window, &mut App) + 'static) {
         self.activated = Some(Rc::new(handler));
+    }
+
+    /// The window moved or its content was resized; [`Window::origin`] and
+    /// [`Window::viewport_size`] hold the new frame. An app that restores window frames saves
+    /// them here. Replaces an earlier handler.
+    pub fn on_frame_changed(&mut self, handler: impl Fn(&mut Window, &mut App) + 'static) {
+        self.frame_changed = Some(Rc::new(handler));
+    }
+
+    /// Where the window's top-left corner sits, in global points from the top-left of the
+    /// primary display, as the backend last reported it; the requested
+    /// [`WindowOptions::origin`] until then.
+    pub fn origin(&self) -> Option<nd_core::Point> {
+        self.origin
+    }
+
+    pub(crate) fn set_origin(&mut self, origin: nd_core::Point) {
+        self.origin = Some(origin);
     }
 
     /// Whether the window answers a new tab request, so a drawn tab bar shows its `+`.

@@ -94,3 +94,30 @@ fn a_window_that_becomes_key_runs_its_activate_handler() {
     assert_eq!(ran.get(), 1);
     assert_eq!(cx.active_window(), Some(second.id()));
 }
+
+#[test]
+fn a_window_that_moves_runs_its_frame_handler_with_the_new_origin() {
+    let mut cx = TestApp::new();
+    let seen = Rc::new(Cell::new(None));
+    let kept = seen.clone();
+    let window = cx.open_window(Size { width: 300., height: 200. }, move |window, cx| {
+        let kept = kept.clone();
+        window.on_frame_changed(move |window, _| kept.set(window.origin()));
+        cx.new(|_| Plain)
+    });
+    cx.window_frame_changed(window.id(), Some(nd_core::Point { x: 40., y: 60. }));
+    assert_eq!(seen.get(), Some(nd_core::Point { x: 40., y: 60. }));
+}
+
+#[test]
+fn a_window_keeps_its_place_only_while_its_title_bar_is_on_a_display() {
+    let main = Rect::new(0., 0., 1512., 945.);
+    let gone = Rect::new(1512., -400., 2560., 1415.);
+    assert!(title_bar_on_a_display(Rect::new(100., 100., 1280., 800.), &[main]));
+    assert!(title_bar_on_a_display(Rect::new(1800., 0., 1280., 800.), &[main, gone]));
+    assert!(!title_bar_on_a_display(Rect::new(1800., 0., 1280., 800.), &[main]), "its display is gone");
+    assert!(!title_bar_on_a_display(Rect::new(100., 930., 1280., 800.), &[main]), "the title bar is below the screen");
+    assert!(!title_bar_on_a_display(Rect::new(100., -60., 1280., 800.), &[main]), "the title bar is above the screen");
+    assert!(title_bar_on_a_display(Rect::new(-1200., 100., 1280., 800.), &[main]), "80 points still show");
+    assert!(!title_bar_on_a_display(Rect::new(-1260., 100., 1280., 800.), &[main]), "20 points cannot be grabbed");
+}

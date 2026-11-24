@@ -735,7 +735,23 @@ impl Inner {
         }
         let origin = self.app.try_borrow().ok().and_then(|app| app.window(id)?.options().origin);
         let extent = gpui::size(px(size.width), px(size.height));
-        let bounds = match origin {
+        let displays: Vec<_> = cx
+            .displays()
+            .iter()
+            .map(|d| {
+                let b = d.visible_bounds();
+                nd_ui::Rect::new(
+                    b.origin.x.as_f32(),
+                    b.origin.y.as_f32(),
+                    b.size.width.as_f32(),
+                    b.size.height.as_f32(),
+                )
+            })
+            .collect();
+        // A window kept on a display that is gone, or dragged almost off every one, is centred.
+        let bounds = match origin.filter(|at| {
+            nd_ui::title_bar_on_a_display(nd_ui::Rect::new(at.x, at.y, size.width, size.height), &displays)
+        }) {
             Some(at) => Bounds::new(gpui::point(px(at.x), px(at.y)), extent),
             None => Bounds::centered(None, extent, cx),
         };
@@ -871,6 +887,20 @@ impl Inner {
             });
             self.subscriptions.borrow_mut().push(activation);
             if !self.single_canvas {
+                let weak = Rc::downgrade(self);
+                let moved = cx.observe_window_bounds(window, move |_, window, cx| {
+                    let b = window.bounds();
+                    let origin = nd_ui::Point { x: b.origin.x.as_f32(), y: b.origin.y.as_f32() };
+                    let weak = weak.clone();
+                    cx.defer(move |cx| {
+                        let Some(inner) = weak.upgrade() else { return };
+                        if let Ok(mut app) = inner.app.try_borrow_mut() {
+                            app.window_frame_changed(id, Some(origin));
+                        }
+                        inner.pump(cx);
+                    });
+                });
+                self.subscriptions.borrow_mut().push(moved);
                 window.on_window_should_close(cx, move |window, cx| {
                     if let Some(inner) = weak_close.upgrade() {
                         inner.os_close(window.window_handle(), cx);

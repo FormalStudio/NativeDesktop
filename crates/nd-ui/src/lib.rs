@@ -64,7 +64,9 @@ pub use styled_text::{
     TextFill, TextStyler,
 };
 pub use surface::{InputCounts, SurfaceProps, SurfaceSource, native_surface};
-pub use window::{ForeignParent, Titlebar, TitlebarInsets, Window, WindowHandle, WindowKind, WindowOptions};
+pub use window::{
+    ForeignParent, Titlebar, TitlebarInsets, Window, WindowHandle, WindowKind, WindowOptions, title_bar_on_a_display,
+};
 
 /// What an app imports: the vocabulary plus GPUI's geometry and colour helpers.
 pub mod prelude {

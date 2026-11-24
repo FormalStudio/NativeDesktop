@@ -110,11 +110,24 @@ impl Host {
                 (None, _) => {
                     match options.origin {
                         Some(at) => {
-                            let primary = objc2_app_kit::NSScreen::screens(MainThreadMarker::from(&*ns_window))
-                                .firstObject()
-                                .map_or(0., |s| s.frame().size.height);
+                            let screens = objc2_app_kit::NSScreen::screens(MainThreadMarker::from(&*ns_window));
+                            let primary = screens.firstObject().map_or(0., |s| s.frame().size.height);
                             let top_left = objc2_foundation::NSPoint::new(f64::from(at.x), primary - f64::from(at.y));
                             ns_window.setFrameTopLeftPoint(top_left);
+                            let flip = |r: objc2_foundation::NSRect| {
+                                let top = primary - (r.origin.y + r.size.height);
+                                nd_ui::Rect::new(
+                                    r.origin.x as f32,
+                                    top as f32,
+                                    r.size.width as f32,
+                                    r.size.height as f32,
+                                )
+                            };
+                            let visible: Vec<_> = screens.iter().map(|s| flip(s.visibleFrame())).collect();
+                            if !nd_ui::title_bar_on_a_display(flip(ns_window.frame()), &visible) {
+                                // Its display is gone, or it was dragged almost off every one.
+                                ns_window.center();
+                            }
                         }
                         None => ns_window.center(),
                     }
