@@ -519,6 +519,8 @@ impl FormLook {
             subtle_hover: if dark { with_alpha(ink, 0.059) } else { with_alpha(black, 0.035) },
             subtle_active: if dark { with_alpha(ink, 0.039) } else { with_alpha(black, 0.024) },
             item_pill: true,
+            // ComboBoxItem: 5 and 7 px around a 21 px line, measured in the WinUI 3 Gallery.
+            menu_row_height: px(33.),
             popover_pad: (px(5.), px(6.)),
             item_gap: px(4.),
             menu_over: true,

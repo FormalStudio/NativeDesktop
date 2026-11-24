@@ -59,6 +59,9 @@ fn name(p: &SelectProps) -> gpui::SharedString {
     p.label.clone().or_else(|| p.tooltip.clone()).unwrap_or_default()
 }
 
+/// The select's button, whose press its elevation edge shows.
+const SELECT_GROUP: &str = "nd-select";
+
 fn popup(b: &Build, id: NodeId, p: &SelectProps, window: &mut Window, cx: &mut App) -> gpui::AnyElement {
     let (ctl, menu) = b.ctl(id, p.enabled, window, cx, Menu::default);
     let look = ctl.look;
@@ -88,11 +91,18 @@ fn popup(b: &Build, id: NodeId, p: &SelectProps, window: &mut Window, cx: &mut A
         .child(div().flex_1().child(title))
         .child(glyph(Glyph::ChevronDown, look.chevron_size, look.chevron_color, look.glyph_stroke));
     button = match elevation_edge(look, look.radius) {
+        // ComboBoxBorderBrushPressed is ControlStrokeColorDefault alone. The edge's press state
+        // needs the hitbox GPUI gives only with a hover style.
         Some(edge) => button
             .relative()
+            .group(SELECT_GROUP)
             .border_1()
             .border_color(look.border)
-            .child(edge)
+            .child(
+                edge.id("edge")
+                    .group_hover(SELECT_GROUP, |s| s)
+                    .group_active(SELECT_GROUP, |s| s.border_color(gpui::transparent_black())),
+            )
             .when(ctl.ring(), |b| b.child(focus_visual(look, look.radius))),
         None => button.border_2().border_color(if ctl.ring() { look.focus_ring } else { gpui::transparent_black() }),
     };
@@ -109,10 +119,8 @@ fn popup(b: &Build, id: NodeId, p: &SelectProps, window: &mut Window, cx: &mut A
         })
     };
     let keys = {
-        let (menu, sink, pick, selected) = (menu.clone(), ctl.sink.clone(), pick.clone(), p.selected);
+        let (menu, pick, selected) = (menu.clone(), pick.clone(), p.selected);
         move |event: &KeyDownEvent, window: &mut Window, cx: &mut App| {
-            sink.keyboard();
-            window.refresh();
             let mut m = menu.borrow_mut();
             let key = event.keystroke.key.as_str();
             if !m.open {
@@ -162,9 +170,7 @@ fn popup(b: &Build, id: NodeId, p: &SelectProps, window: &mut Window, cx: &mut A
             window.refresh();
         }
     };
-    button = button
-        .track_focus(ctl.focus())
-        .cursor(look.cursor)
+    button = pressable(button, &ctl)
         .hover(move |s| s.bg(look.fill_hover))
         .active(move |s| s.bg(look.fill_active))
         .on_key_down(keys)
@@ -186,7 +192,7 @@ fn popup(b: &Build, id: NodeId, p: &SelectProps, window: &mut Window, cx: &mut A
         });
         // Over the button with the current item on it (WinUI), or below it.
         let (lift, width) = if look.menu_over {
-            let row = look.control_height + look.item_gap;
+            let row = look.menu_row_height + look.item_gap;
             let lift = look.control_height + px(4.) + px(1.) + look.popover_pad.1 + row * p.selected as f32;
             (lift, ctl.bounds.borrow().get(&id).map(|r| px(r.size.width)))
         } else {
