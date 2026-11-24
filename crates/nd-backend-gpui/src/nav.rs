@@ -722,7 +722,7 @@ pub fn source_tree_view(
                     };
                     // WinUI's ToolTipService: an icon button's tooltip shows on hover.
                     if fluent && let Some(text) = action.tooltip.clone() {
-                        let tip = crate::render::FluentTip::of(&theme, text);
+                        let tip = crate::render::FluentTip::of(theme, text);
                         button = button.tooltip(move |_, cx| {
                             use gpui::AppContext as _;
                             cx.new(|_| tip.clone()).into()
