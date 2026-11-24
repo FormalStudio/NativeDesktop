@@ -3,4 +3,4 @@ mod linux;
 
 pub use linux::{current_platform, linux_platform};
 #[cfg(feature = "wayland")]
-pub use linux::{SelectionKind, read_serial, selection, set_toplevel_tag};
+pub use linux::{SelectionKind, dnd, read_serial, selection, set_toplevel_tag};

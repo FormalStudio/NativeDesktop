@@ -10,6 +10,7 @@ mod window;
 pub mod layer_shell;
 
 pub(crate) use client::*;
+pub use client::dnd;
 pub use clipboard::{SelectionKind, read_serial, selection};
 pub use window::set_toplevel_tag;
 

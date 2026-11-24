@@ -124,6 +124,8 @@ use wayland_protocols::wp::linux_dmabuf::zv1::client::{
     zwp_linux_dmabuf_feedback_v1, zwp_linux_dmabuf_v1,
 };
 
+pub mod dnd;
+
 /// Used to convert evdev scancode to xkb scancode
 const MIN_KEYCODE: u32 = 8;
 
@@ -417,6 +419,7 @@ pub(crate) struct WaylandClientState {
     compose_state: Option<xkb::compose::State>,
     drag: DragState,
     external_drag: Option<ExternalDrag>,
+    dnd: dnd::DndState,
     click: ClickState,
     repeat: KeyRepeat,
     pub modifiers: Modifiers,
@@ -1315,6 +1318,7 @@ impl WaylandConnection {
                 uri_read_generation: 0,
             },
             external_drag: None,
+            dnd: dnd::DndState::default(),
             click: ClickState {
                 last_click: Instant::now(),
                 last_mouse_button: None,
@@ -1369,6 +1373,7 @@ impl WaylandConnection {
         // From here on, `Drop` removes whatever was registered if a later step fails.
         let client = Self(state);
         let pointer = WaylandClientStatePtr(Rc::downgrade(&client.0));
+        dnd::set_client(pointer.clone());
 
         client.register_source(
             handle.insert_source(frame_ping_source, {
@@ -3376,6 +3381,82 @@ impl Dispatch<wl_data_device::WlDataDevice, ()> for WaylandClientStatePtr {
                 state.clipboard.set_offer(offer);
             }
 
+            // Drag and drop run by the embedder
+            event @ (wl_data_device::Event::Enter { .. }
+            | wl_data_device::Event::Motion { .. }
+            | wl_data_device::Event::Leave
+            | wl_data_device::Event::Drop)
+                if dnd::has_handler() =>
+            {
+                let event = match event {
+                    wl_data_device::Event::Enter {
+                        serial,
+                        surface,
+                        x,
+                        y,
+                        id,
+                    } => {
+                        state.serial_tracker.update(SerialKind::DataDevice, serial);
+                        if let Some(old) = state.dnd.drop.take() {
+                            old.offer.inner.destroy();
+                        }
+                        let Some(offer) = id else {
+                            return;
+                        };
+                        // The offer leaves the clipboard's list, which destroys its oldest
+                        // entry, so it lives until the drop is done with it.
+                        let mime_types = state
+                            .data_offers
+                            .iter()
+                            .find(|o| o.inner.id() == offer.id())
+                            .map(|o| o.mime_types().to_vec())
+                            .unwrap_or_default();
+                        state.data_offers.retain(|o| o.inner.id() != offer.id());
+                        let source_actions = match state.dnd.offered_actions.take() {
+                            Some((id, actions)) if id == offer.id() => actions,
+                            _ => 0,
+                        };
+                        state.dnd.drop = Some(dnd::DropState {
+                            offer: DataOffer::with_mime_types(offer, mime_types.clone()),
+                            serial,
+                            dropped: false,
+                        });
+                        dnd::DndEvent::Enter {
+                            surface: surface.id().as_ptr() as usize,
+                            x,
+                            y,
+                            mime_types,
+                            source_actions,
+                        }
+                    }
+                    wl_data_device::Event::Motion { x, y, .. } => {
+                        if state.dnd.drop.as_ref().is_none_or(|d| d.dropped) {
+                            return;
+                        }
+                        dnd::DndEvent::Motion { x, y }
+                    }
+                    wl_data_device::Event::Drop => {
+                        let Some(drop) = state.dnd.drop.as_mut() else {
+                            return;
+                        };
+                        drop.dropped = true;
+                        dnd::DndEvent::Drop
+                    }
+                    _ => {
+                        // A leave after the drop leaves the offer to the drop.
+                        if state.dnd.drop.as_ref().is_none_or(|d| d.dropped) {
+                            return;
+                        }
+                        if let Some(old) = state.dnd.drop.take() {
+                            old.offer.inner.destroy();
+                        }
+                        dnd::DndEvent::Leave
+                    }
+                };
+                drop(state);
+                dnd::emit(event);
+            }
+
             // Drag and drop
             wl_data_device::Event::Enter {
                 serial,
@@ -3507,9 +3588,31 @@ impl Dispatch<wl_data_offer::WlDataOffer, ()> for WaylandClientStatePtr {
         let client = this.get_client();
         let mut state = client.borrow_mut();
 
+        if let wl_data_offer::Event::SourceActions { source_actions } = event {
+            if !dnd::has_handler() {
+                return;
+            }
+            let actions = match source_actions {
+                WEnum::Value(actions) => actions.bits(),
+                WEnum::Unknown(bits) => bits,
+            };
+            if state
+                .dnd
+                .drop
+                .as_ref()
+                .is_some_and(|d| d.offer.inner.id() == data_offer.id())
+            {
+                drop(state);
+                dnd::emit(dnd::DndEvent::SourceActions(actions));
+            } else {
+                state.dnd.offered_actions = Some((data_offer.id(), actions));
+            }
+            return;
+        }
+
         if let wl_data_offer::Event::Offer { mime_type } = event {
             // Drag and drop
-            if mime_type == FILE_LIST_MIME_TYPE {
+            if mime_type == FILE_LIST_MIME_TYPE && !dnd::has_handler() {
                 let serial = state.serial_tracker.get(SerialKind::DataDevice);
                 let mime_type = mime_type.clone();
                 data_offer.accept(serial.as_raw(), Some(mime_type));
@@ -3632,6 +3735,44 @@ impl Dispatch<wl_data_source::WlDataSource, DataSourceKind> for WaylandClientSta
             }
             (DataSourceKind::Clipboard, wl_data_source::Event::Cancelled) => {
                 data_source.destroy();
+            }
+            (DataSourceKind::Drag, event)
+                if state
+                    .dnd
+                    .source
+                    .as_ref()
+                    .is_some_and(|s| s.source == *data_source) =>
+            {
+                let event = match event {
+                    wl_data_source::Event::Send { mime_type, fd } => {
+                        let bytes = state.dnd.source.as_ref().and_then(|s| s.bytes(&mime_type));
+                        if let Some(bytes) = bytes {
+                            state.clipboard.send_bytes(fd, bytes);
+                        }
+                        return;
+                    }
+                    wl_data_source::Event::Target { mime_type } => dnd::DndEvent::Target(mime_type),
+                    wl_data_source::Event::Action { dnd_action } => dnd::DndEvent::Action(match dnd_action {
+                        WEnum::Value(action) => action.bits(),
+                        WEnum::Unknown(bits) => bits,
+                    }),
+                    wl_data_source::Event::DndDropPerformed => dnd::DndEvent::DropPerformed,
+                    wl_data_source::Event::DndFinished => {
+                        if let Some(source) = state.dnd.source.take() {
+                            source.destroy();
+                        }
+                        dnd::DndEvent::Finished
+                    }
+                    wl_data_source::Event::Cancelled => {
+                        if let Some(source) = state.dnd.source.take() {
+                            source.destroy();
+                        }
+                        dnd::DndEvent::Cancelled
+                    }
+                    _ => return,
+                };
+                drop(state);
+                dnd::emit(event);
             }
             (DataSourceKind::Drag, wl_data_source::Event::Send { fd, .. }) => {
                 let Some(external_drag) = state.external_drag.as_ref() else {

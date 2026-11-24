@@ -47,3 +47,4 @@
 0048-gpui-update-part-of-a-drawn-image-in-place.patch
 0049-gpui-Window-set_corner_curve-continuous-corners-in-t.patch
 0050-gpui_wgpu-configure-surfaces-on-a-drained-queue.patch
+0052-gpui_linux-drag-and-drop-run-by-the-embedder.patch

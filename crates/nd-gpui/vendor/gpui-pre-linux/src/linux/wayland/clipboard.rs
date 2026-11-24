@@ -164,6 +164,10 @@ impl<T: ReceiveData> DataOffer<T> {
         }
     }
 
+    pub(crate) fn mime_types(&self) -> &[String] {
+        &self.mime_types
+    }
+
     pub fn add_mime_type(&mut self, mime_type: String) {
         self.mime_types.push(mime_type)
     }
@@ -172,7 +176,7 @@ impl<T: ReceiveData> DataOffer<T> {
         self.mime_types.iter().any(|t| t == mime_type)
     }
 
-    fn read_bytes(&self, connection: &Connection, mime_type: &str) -> Option<Vec<u8>> {
+    pub(crate) fn read_bytes(&self, connection: &Connection, mime_type: &str) -> Option<Vec<u8>> {
         let pipe = Pipe::new().unwrap();
         self.inner.receive_data(mime_type.to_string(), unsafe {
             BorrowedFd::borrow_raw(pipe.write.as_raw_fd())
@@ -239,6 +243,10 @@ impl<T: ReceiveData> DataOffer<T> {
 }
 
 impl Clipboard {
+    pub(crate) fn connection(&self) -> &Connection {
+        &self.connection
+    }
+
     pub fn new(connection: Connection, loop_handle: LoopHandle<'static, ()>) -> Self {
         Self {
             connection,
