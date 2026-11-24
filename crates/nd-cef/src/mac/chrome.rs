@@ -611,10 +611,11 @@ impl Chrome {
 /// Hands key back whenever Chromium activates `anchor`: the anchor is invisible, and key on it
 /// would take the app window's title bar out of its active look and its keys into the page. On a
 /// later turn, since AppKit finishes the anchor's own key change after the notification and would
-/// take key back. Straight to the host's overlay that had key just before (a palette with its
-/// field), never to another one such as a popover that did not: handing it to the window first
-/// leaves a turn in which Chromium activates its widget again and the overlay never gets key back.
-/// A page in no window (a tab in the background) activates too.
+/// take key back. Straight to the window that had key just before, whichever window that is (a
+/// palette over the host, another app window), never to one such as a popover that did not:
+/// handing a palette's key to its host first leaves a turn in which Chromium activates its widget
+/// again and the palette never gets key back. A page in no window (a tab in the background)
+/// activates too.
 fn key_back(anchor: &NSWindow, id: u64) -> Observer {
     watch_last_key();
     let weak = Weak::from_retained(&anchor.retain());
@@ -625,19 +626,15 @@ fn key_back(anchor: &NSWindow, id: u64) -> Observer {
         super::run_later(move || {
             let anchor = weak.load();
             let host = page::get(id).and_then(|p| p.view.window()).or_else(app_window);
-            let overlay = before.filter(|w| {
-                w.isVisible()
-                    && w.canBecomeKeyWindow()
-                    && host.as_ref().is_some_and(|h| w.parentWindow().is_some_and(|p| *p == **h))
-            });
+            let before = before.filter(|w| w.isVisible() && w.canBecomeKeyWindow());
             let target = key_target(
                 anchor.as_ref().is_some_and(|a| a.isKeyWindow()),
+                before.is_some(),
                 host.as_ref().is_some_and(|h| h.isVisible()),
-                overlay.is_some(),
             );
-            match (target, host, overlay) {
-                (KeyTarget::Overlay, _, Some(overlay)) => overlay.makeKeyWindow(),
-                (KeyTarget::Host, Some(host), _) => host.makeKeyWindow(),
+            match (target, before, host) {
+                (KeyTarget::Before, Some(before), _) => before.makeKeyWindow(),
+                (KeyTarget::Host, _, Some(host)) => host.makeKeyWindow(),
                 _ => {}
             }
         });
@@ -680,18 +677,20 @@ fn watch_last_key() {
 
 #[derive(Debug, PartialEq)]
 enum KeyTarget {
-    Overlay,
+    /// The window that had key before the anchor took it.
+    Before,
     Host,
     Nothing,
 }
 
-/// Where key goes on the turn after Chromium activated an anchor. Nowhere once the anchor lost
-/// key by then (AppKit or the user already put it somewhere) or the host is gone.
-fn key_target(anchor_still_key: bool, host_visible: bool, overlay_shows: bool) -> KeyTarget {
-    match (anchor_still_key, host_visible, overlay_shows) {
-        (false, _, _) | (_, false, _) => KeyTarget::Nothing,
-        (true, true, true) => KeyTarget::Overlay,
-        (true, true, false) => KeyTarget::Host,
+/// Where key goes on the turn after Chromium activated an anchor: back where it was while that
+/// window still shows, else the page's own window. Nowhere once the anchor lost key by then
+/// (AppKit or the user already put it somewhere), or with neither window left.
+fn key_target(anchor_still_key: bool, before_shows: bool, host_visible: bool) -> KeyTarget {
+    match (anchor_still_key, before_shows, host_visible) {
+        (false, _, _) | (true, false, false) => KeyTarget::Nothing,
+        (true, true, _) => KeyTarget::Before,
+        (true, false, true) => KeyTarget::Host,
     }
 }
 
@@ -883,9 +882,10 @@ mod tests {
 
     #[test]
     fn key_goes_back_only_while_the_anchor_still_has_it() {
-        assert_eq!(key_target(true, true, true), KeyTarget::Overlay);
-        assert_eq!(key_target(true, true, false), KeyTarget::Host, "the overlay closed during the turn");
-        assert_eq!(key_target(true, false, true), KeyTarget::Nothing, "the host closed during the turn");
+        assert_eq!(key_target(true, true, true), KeyTarget::Before, "the palette, or another window, that had key");
+        assert_eq!(key_target(true, true, false), KeyTarget::Before, "another window, the page's own gone");
+        assert_eq!(key_target(true, false, true), KeyTarget::Host, "what had key closed during the turn");
+        assert_eq!(key_target(true, false, false), KeyTarget::Nothing, "both windows closed during the turn");
         assert_eq!(key_target(false, true, true), KeyTarget::Nothing, "the user clicked another window");
     }
 }
