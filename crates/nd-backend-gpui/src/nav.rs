@@ -470,8 +470,9 @@ pub fn source_tree_view(
         }
     }
     // A closing drawer keeps its rows until it has shut.
-    let visible = index
-        .visible_with(&props.nodes, |i| props.nodes[i].expanded || motion.is_some_and(|m| m.in_flight(&props.nodes[i].id)));
+    let visible = index.visible_with(&props.nodes, |i| {
+        props.nodes[i].expanded || motion.is_some_and(|m| m.in_flight(&props.nodes[i].id))
+    });
     let held = rows_under(&visible);
     if let Some(m) = motion
         && props.selected.as_ref().is_some_and(|s| visible.iter().any(|&(i, _)| props.nodes[i].id == *s))
@@ -975,11 +976,8 @@ impl<'a> Blocks<'a> {
             return self.push(row.into_any_element());
         }
         let row = row.opacity(shown).into_any_element();
-        let row = if self.reduce() {
-            row
-        } else {
-            crate::gestures::offset(row, point(px(0.), px(-RISE * (1. - shown))))
-        };
+        let row =
+            if self.reduce() { row } else { crate::gestures::offset(row, point(px(0.), px(-RISE * (1. - shown)))) };
         self.push(row);
     }
 
@@ -1006,7 +1004,8 @@ impl<'a> Blocks<'a> {
                 .size_full()
         });
         // The list's gap before the drawer moves inside it, so a shut drawer takes no room.
-        let inner = div().relative().flex_shrink_0().flex().flex_col().pt(gap).gap(gap).children(d.rows).children(measure);
+        let inner =
+            div().relative().flex_shrink_0().flex().flex_col().pt(gap).gap(gap).children(d.rows).children(measure);
         let mut drawer = div().flex_shrink_0().flex().flex_col().overflow_hidden().mt(-gap);
         if !self.reduce() {
             drawer = drawer.h(px(d.height * d.shown));

@@ -60,7 +60,9 @@ fn install_host() {
     let Some(root) = std::env::var_os("ND_CEF_CACHE").map(PathBuf::from) else {
         fail("ND_CEF_CACHE must name the profile directory");
     };
-    let host = std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.join(format!("nd-test-host{}", std::env::consts::EXE_SUFFIX))));
+    let host = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(|d| d.join(format!("nd-test-host{}", std::env::consts::EXE_SUFFIX))));
     let Some(host) = host.filter(|h| h.exists()) else { fail("nd-test-host is not built next to browser") };
     let dir = root.join("NativeMessagingHosts");
     let manifest = serde_json::json!({

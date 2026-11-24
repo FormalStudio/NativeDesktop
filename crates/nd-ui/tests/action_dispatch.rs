@@ -71,7 +71,10 @@ fn a_fullscreen_request_reaches_the_backend_as_a_window_command() {
     cx.set_window_fullscreen(window.id(), false);
     assert_eq!(
         cx.backend().window_commands(),
-        [(window.id(), backend::WindowCommand::Fullscreen(true)), (window.id(), backend::WindowCommand::Fullscreen(false))]
+        [
+            (window.id(), backend::WindowCommand::Fullscreen(true)),
+            (window.id(), backend::WindowCommand::Fullscreen(false))
+        ]
     );
 }
 

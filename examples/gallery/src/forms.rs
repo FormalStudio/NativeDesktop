@@ -180,11 +180,13 @@ impl FormsPage {
                         .on_change(on!(cx, TextChanged, |p, e| p.zone = e.text.to_string())),
                 ),
             )
-            .child(form_row("Unavailable").child(text_field("name-off").text("Ada Lovelace").label("Name").w(px(220.)).disabled(true)))
             .child(
-                form_row("Unavailable choice").child(
-                    combo_box("zone-off", ["UTC"]).text("UTC").label("Time zone").w(px(220.)).disabled(true),
-                ),
+                form_row("Unavailable")
+                    .child(text_field("name-off").text("Ada Lovelace").label("Name").w(px(220.)).disabled(true)),
+            )
+            .child(
+                form_row("Unavailable choice")
+                    .child(combo_box("zone-off", ["UTC"]).text("UTC").label("Time zone").w(px(220.)).disabled(true)),
             )
     }
 
@@ -228,8 +230,13 @@ impl FormsPage {
                 |p, _e| p.did("Pushed the destructive button")
             ))))
             .child(form_row("Unavailable").child(button("push-off", "Save draft").disabled(true)))
-            .child(form_row("Unavailable prominent").child(button("prominent-off", "Upgrade").prominent().disabled(true)))
-            .child(form_row("Unavailable borderless").child(button("borderless-off", "Skip for now").borderless().disabled(true)))
+            .child(
+                form_row("Unavailable prominent").child(button("prominent-off", "Upgrade").prominent().disabled(true)),
+            )
+            .child(
+                form_row("Unavailable borderless")
+                    .child(button("borderless-off", "Skip for now").borderless().disabled(true)),
+            )
     }
 
     fn toggles(&self, cx: &mut Context<Self>) -> FormSection {
@@ -316,12 +323,15 @@ impl FormsPage {
                     |p, e| p.sort = e.index
                 )),
             ))
-            .child(form_row("Unavailable").child(
-                radio_group("appearance-off", ["Light", "Dark"]).selected(0).label("Appearance").disabled(true),
-            ))
-            .child(form_row("Unavailable menu").child(
-                select("sort-off", ["Name", "Size"]).selected(0).label("Sort by").disabled(true),
-            ))
+            .child(
+                form_row("Unavailable").child(
+                    radio_group("appearance-off", ["Light", "Dark"]).selected(0).label("Appearance").disabled(true),
+                ),
+            )
+            .child(
+                form_row("Unavailable menu")
+                    .child(select("sort-off", ["Name", "Size"]).selected(0).label("Sort by").disabled(true)),
+            )
     }
 
     fn values(&self, cx: &mut Context<Self>) -> FormSection {
@@ -359,9 +369,10 @@ impl FormsPage {
                     |p, e| p.day = e.value
                 )),
             ))
-            .child(form_row("Unavailable").child(
-                slider("volume-off", 40.).range(0.0..=100.0).label("Volume").w(px(220.)).disabled(true),
-            ))
+            .child(
+                form_row("Unavailable")
+                    .child(slider("volume-off", 40.).range(0.0..=100.0).label("Volume").w(px(220.)).disabled(true)),
+            )
     }
 
     fn dates(&self, cx: &mut Context<Self>) -> FormSection {

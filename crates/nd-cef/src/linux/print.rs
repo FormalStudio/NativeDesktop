@@ -57,9 +57,7 @@ fn apply(setup: &Setup, settings: &mut PrintSettings) {
 
 fn number(map: &HashMap<String, OwnedValue>, key: &str) -> Option<f64> {
     let v = map.get(key)?;
-    f64::try_from(v)
-        .ok()
-        .or_else(|| String::try_from(v.try_clone().ok()?).ok().and_then(|s| s.parse().ok()))
+    f64::try_from(v).ok().or_else(|| String::try_from(v.try_clone().ok()?).ok().and_then(|s| s.parse().ok()))
 }
 
 fn text(map: &HashMap<String, OwnedValue>, key: &str) -> Option<String> {
@@ -69,9 +67,8 @@ fn text(map: &HashMap<String, OwnedValue>, key: &str) -> Option<String> {
 /// The portal's `page-setup` and `settings` results as the paper Chromium lays out on.
 fn setup_from(page: &HashMap<String, OwnedValue>, settings: &HashMap<String, OwnedValue>) -> Setup {
     let base = Setup::default();
-    let landscape = text(page, "Orientation")
-        .or_else(|| text(settings, "orientation"))
-        .is_some_and(|o| o.contains("landscape"));
+    let landscape =
+        text(page, "Orientation").or_else(|| text(settings, "orientation")).is_some_and(|o| o.contains("landscape"));
     Setup {
         width_mm: number(page, "Width").unwrap_or(base.width_mm),
         height_mm: number(page, "Height").unwrap_or(base.height_mm),
@@ -111,8 +108,7 @@ where
         .build();
     let mut responses =
         zbus::blocking::MessageIterator::for_match_rule(rule, &conn, Some(4)).map_err(|e| e.to_string())?;
-    conn.call_method(Some(DESKTOP), PATH, Some(PRINT), method, body)
-        .map_err(|e| format!("{PRINT}.{method}: {e}"))?;
+    conn.call_method(Some(DESKTOP), PATH, Some(PRINT), method, body).map_err(|e| format!("{PRINT}.{method}: {e}"))?;
     let message = responses.next().ok_or("the portal closed the request")?.map_err(|e| e.to_string())?;
     let (code, results): (u32, HashMap<String, OwnedValue>) =
         message.body().deserialize().map_err(|e| format!("{method} response: {e}"))?;

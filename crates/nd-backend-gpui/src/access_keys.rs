@@ -6,8 +6,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use nd_gpui::gpui::{self, prelude::*};
 use gpui::{AnyElement, Keystroke, div, px, rgb};
+use nd_gpui::gpui::{self, prelude::*};
 use nd_ui::backend::{Backend, NodeKind};
 use nd_ui::semantics::{ActionError, SemanticAction};
 use nd_ui::{ButtonProps, DivProps, NodeId, WindowId};
@@ -58,8 +58,7 @@ impl GpuiBackend {
         let Some(root) = state.windows.get(&window).and_then(|w| w.root) else { return Vec::new() };
         let control = |id: NodeId| {
             state.nodes.get(&id).is_some_and(|n| {
-                matches!(n.kind, NodeKind::Widget(_))
-                    && n.props.downcast_ref::<ButtonProps>().is_none_or(|p| p.enabled)
+                matches!(n.kind, NodeKind::Widget(_)) && n.props.downcast_ref::<ButtonProps>().is_none_or(|p| p.enabled)
             })
         };
         let first_control = |from: NodeId| {
@@ -164,26 +163,19 @@ impl GpuiBackend {
             let below = b.origin.y + b.size.height;
             let top = if below + HEIGHT <= height { below } else { b.origin.y - HEIGHT };
             Some(
-                div()
-                    .absolute()
-                    .left(px(b.origin.x))
-                    .top(px(top))
-                    .w(px(b.size.width))
-                    .flex()
-                    .justify_center()
-                    .child(
-                        div()
-                            .flex_none()
-                            .p(px(PAD))
-                            .border_1()
-                            .border_color(gpui::transparent_black())
-                            .bg(rgb(FILL))
-                            .text_color(gpui::white())
-                            .text_size(px(TEXT))
-                            .line_height(px(LINE))
-                            .whitespace_nowrap()
-                            .child(k.key),
-                    ),
+                div().absolute().left(px(b.origin.x)).top(px(top)).w(px(b.size.width)).flex().justify_center().child(
+                    div()
+                        .flex_none()
+                        .p(px(PAD))
+                        .border_1()
+                        .border_color(gpui::transparent_black())
+                        .bg(rgb(FILL))
+                        .text_color(gpui::white())
+                        .text_size(px(TEXT))
+                        .line_height(px(LINE))
+                        .whitespace_nowrap()
+                        .child(k.key),
+                ),
             )
         });
         Some(div().absolute().inset_0().children(tips).into_any_element())

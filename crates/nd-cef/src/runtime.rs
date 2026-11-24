@@ -92,7 +92,8 @@ pub(crate) fn start() -> Result<(), String> {
     };
     let args = cef::args::Args::new();
     let mut app = crate::client::app(nd_webview::schemes());
-    let ok = keep_signals(|| initialize(Some(args.as_main_args()), Some(&settings), Some(&mut app), std::ptr::null_mut()));
+    let ok =
+        keep_signals(|| initialize(Some(args.as_main_args()), Some(&settings), Some(&mut app), std::ptr::null_mut()));
     if ok != 1 {
         return Err("CefInitialize failed (another instance holding the profile, or a broken runtime)".into());
     }

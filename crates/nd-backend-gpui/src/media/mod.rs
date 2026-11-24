@@ -18,8 +18,8 @@ pub(crate) use video::released as video_released;
 use std::any::TypeId;
 
 use nd_components::{
-    AvatarKind, ChatBubbleKind, EqualizerKind, IconKind, IconProps, ImageKind, LyricsKind, SeekBarKind, SeekBarProps, ShelfKind,
-    VideoKind,
+    AvatarKind, ChatBubbleKind, EqualizerKind, IconKind, IconProps, ImageKind, LyricsKind, SeekBarKind, SeekBarProps,
+    ShelfKind, VideoKind,
 };
 use nd_core::NodeId;
 use nd_core::time::Instant;

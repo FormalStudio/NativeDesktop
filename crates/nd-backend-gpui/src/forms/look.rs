@@ -669,7 +669,11 @@ mod tests {
         for (scheme, shade) in [(Scheme::Light, "#004a83"), (Scheme::Dark, "#99ebff")] {
             let palette = Palette::baked_for(Preset::Fluent, scheme);
             let theme = Theme::derive(Preset::Fluent, scheme, palette, Metrics::preset(Preset::Fluent), 1.);
-            assert_eq!(super::FormLook::of(&theme).accent_text, nd_theme::color::parse_hex(shade).unwrap(), "{scheme:?}");
+            assert_eq!(
+                super::FormLook::of(&theme).accent_text,
+                nd_theme::color::parse_hex(shade).unwrap(),
+                "{scheme:?}"
+            );
         }
     }
 

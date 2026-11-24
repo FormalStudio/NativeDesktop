@@ -162,7 +162,11 @@ pub(crate) fn checkbox(
         indicator = indicator
             .group_hover(CHECK_GROUP, move |s| s.bg(hover).border_color(if on { hover } else { look.check_stroke }))
             .group_active(CHECK_GROUP, move |s| {
-                s.bg(active).border_color(if on { active } else { look.check_stroke_active.unwrap_or(look.check_stroke) })
+                s.bg(active).border_color(if on {
+                    active
+                } else {
+                    look.check_stroke_active.unwrap_or(look.check_stroke)
+                })
             });
     }
     let toggled = if p.mixed {

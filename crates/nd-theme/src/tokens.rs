@@ -184,7 +184,9 @@ impl Theme {
                 // Links, mentions and search matches sit inside body text, so a derived link keeps a
                 // step of lightness from it: a pastel accent lifted for legibility otherwise
                 // reads as the text itself.
-                accent: p.accent_text.unwrap_or_else(|| crate::color::apart_from(role_text(p.accent), text_primary, &surfaces, 1.6)),
+                accent: p
+                    .accent_text
+                    .unwrap_or_else(|| crate::color::apart_from(role_text(p.accent), text_primary, &surfaces, 1.6)),
                 success: role_text(p.success),
                 warning: role_text(p.warning),
             },

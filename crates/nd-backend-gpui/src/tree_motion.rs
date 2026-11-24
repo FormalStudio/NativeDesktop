@@ -104,7 +104,13 @@ impl TreeMotion {
     /// The frame at `now`, after taking in the rows `nodes` asks for: a row whose `expanded`
     /// flipped since the last frame starts its drawer and a newly selected row starts the pill
     /// sliding over from the last one.
-    pub fn frame(&self, nodes: &[SourceNode], selected: Option<&gpui::SharedString>, now: f64, reduce: bool) -> TreeFrame {
+    pub fn frame(
+        &self,
+        nodes: &[SourceNode],
+        selected: Option<&gpui::SharedString>,
+        now: f64,
+        reduce: bool,
+    ) -> TreeFrame {
         let frame = TreeFrame { motion: self.clone(), now, reduce };
         frame.sync(nodes, selected);
         frame
@@ -144,7 +150,9 @@ impl TreeFrame {
         let next = match (s.pill.take(), selected) {
             (Some(p), Some(id)) if p.id == *id => Some(p),
             (Some(p), Some(id)) => {
-                let to = s.rows.get(id).and_then(|r| Some((r.bounds.origin.y - r.list?.y).as_f32()).zip(Some(r.bounds.size.height.as_f32())));
+                let to = s.rows.get(id).and_then(|r| {
+                    Some((r.bounds.origin.y - r.list?.y).as_f32()).zip(Some(r.bounds.size.height.as_f32()))
+                });
                 let (dy, dh) = match (p.drawn, to) {
                     (Some((y, h)), Some((to_y, to_h))) if !reduce => {
                         let v = |m: &Option<SpringMotion>| m.map_or(0., |m| m.sample(now).1);
@@ -238,13 +246,7 @@ impl TreeFrame {
 
     /// Paints the selection pill under the rows of a list laid out at `list`: on the selected
     /// row, plus what is left of its slide from the last one.
-    pub(crate) fn paint_pill(
-        &self,
-        list: Bounds<Pixels>,
-        fill: gpui::Hsla,
-        radius: Pixels,
-        window: &mut gpui::Window,
-    ) {
+    pub(crate) fn paint_pill(&self, list: Bounds<Pixels>, fill: gpui::Hsla, radius: Pixels, window: &mut gpui::Window) {
         let now = self.now;
         let mut s = self.motion.0.borrow_mut();
         for row in s.rows.values_mut() {

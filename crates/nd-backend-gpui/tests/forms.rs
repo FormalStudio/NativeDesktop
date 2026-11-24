@@ -546,8 +546,10 @@ mod forms {
         let (x0, y0) = ((b.origin.x * scale).round() as u32, (b.origin.y * scale).round() as u32);
         let (x1, y1) = (x0 + (b.size.width * scale).round() as u32, y0 + (b.size.height * scale).round() as u32);
         // The knob is TextFillColorSecondary, darker than the ControlStrongStroke outline.
-        let knob: Vec<(u32, u32)> =
-            (y0..y1).flat_map(|y| (x0..x1).map(move |x| (x, y))).filter(|&(x, y)| image.get_pixel(x, y).0[0] < 120).collect();
+        let knob: Vec<(u32, u32)> = (y0..y1)
+            .flat_map(|y| (x0..x1).map(move |x| (x, y)))
+            .filter(|&(x, y)| image.get_pixel(x, y).0[0] < 120)
+            .collect();
         let left = knob.iter().map(|p| p.0).min().expect("knob drawn") - x0;
         let top = knob.iter().map(|p| p.1).min().expect("knob drawn") - y0;
         let bottom = y1 - 1 - knob.iter().map(|p| p.1).max().expect("knob drawn");

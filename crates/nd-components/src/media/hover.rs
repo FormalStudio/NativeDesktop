@@ -151,20 +151,18 @@ impl IntoElement for ArtworkActions {
             .flex_col()
             .justify_end()
             .children(mark)
-            .child(
-                reveal(
-                    h_flex()
-                        .id(child("buttons"))
-                        .w_full()
-                        .p(px(INSET))
-                        .justify_between()
-                        .child(match play {
-                            Some(play) => disc(child("play"), "Play", Icon::Play).on_tap(play),
-                            None => div().id(child("play")),
-                        })
-                        .children(more),
-                ),
-            )
+            .child(reveal(
+                h_flex()
+                    .id(child("buttons"))
+                    .w_full()
+                    .p(px(INSET))
+                    .justify_between()
+                    .child(match play {
+                        Some(play) => disc(child("play"), "Play", Icon::Play).on_tap(play),
+                        None => div().id(child("play")),
+                    })
+                    .children(more),
+            ))
             .into_any_element()
     }
 }

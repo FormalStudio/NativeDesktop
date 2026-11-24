@@ -317,21 +317,15 @@ impl IntoElement for Composer {
             }
         };
         let attach_button = attach.then(|| {
-            square(icon_button(child("attach"), Icon::Plus))
-                .tooltip("Attach Files")
-                .disabled(!enabled)
-                .on_click({
-                    let f = send(ComposerEvent::Attach);
-                    move |_, w, cx| f(w, cx)
-                })
-        });
-        let emoji = square(icon_button(child("emoji"), Icon::Smile))
-            .tooltip("Emoji")
-            .disabled(!enabled)
-            .on_click({
-                let f = send(ComposerEvent::EmojiPicker);
+            square(icon_button(child("attach"), Icon::Plus)).tooltip("Attach Files").disabled(!enabled).on_click({
+                let f = send(ComposerEvent::Attach);
                 move |_, w, cx| f(w, cx)
-            });
+            })
+        });
+        let emoji = square(icon_button(child("emoji"), Icon::Smile)).tooltip("Emoji").disabled(!enabled).on_click({
+            let f = send(ComposerEvent::EmojiPicker);
+            move |_, w, cx| f(w, cx)
+        });
         // Only a message that can go shows the send button, a filled arrow in the accent (or the
         // app's fill), as in Messages; Return sends either way.
         let has_send = enabled && draft.can_send();
@@ -350,12 +344,12 @@ impl IntoElement for Composer {
                 _ => button.bezel(nd_ui::Bezel::Circle),
             }
             .prominent()
-                .when_some(send_fill, |button, fill| button.bg(fill))
-                .tooltip(send_tooltip)
-                .on_click({
-                    let f = send(ComposerEvent::Send);
-                    move |_, w, cx| f(w, cx)
-                })
+            .when_some(send_fill, |button, fill| button.bg(fill))
+            .tooltip(send_tooltip)
+            .on_click({
+                let f = send(ComposerEvent::Send);
+                move |_, w, cx| f(w, cx)
+            })
         });
         // Messages' bar: 9 pt between the plus button, the field and the emoji button.
         let row = h_flex().w_full().items_end().gap(px(9.)).children(attach_button);

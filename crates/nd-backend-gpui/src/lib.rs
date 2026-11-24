@@ -30,9 +30,9 @@ mod reveal;
 mod rich;
 mod scrollbar;
 mod split;
-mod tree_motion;
 pub mod status;
 pub mod tab_bar;
+mod tree_motion;
 mod virtual_list;
 mod window_tabs;
 

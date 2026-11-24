@@ -90,8 +90,7 @@ pub struct Equalizer(NativeElement<EqualizerProps>);
 #[track_caller]
 pub fn equalizer(size: f32, playing: bool) -> Equalizer {
     let props = EqualizerProps { playing, size, enabled: true, tooltip: None, style: StyleRefinement::default() };
-    let el =
-        NativeElement::described::<EqualizerKind>(Key::Site(Location::caller()), props).size(px(size)).flex_none();
+    let el = NativeElement::described::<EqualizerKind>(Key::Site(Location::caller()), props).size(px(size)).flex_none();
     Equalizer(el)
 }
 
