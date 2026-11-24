@@ -266,10 +266,19 @@ impl WebView {
                 tracing::error!(engine = self.0.engine.name(), "web view: {error}");
                 *self.0.error.borrow_mut() = Some(error.clone());
                 for command in self.0.queue.take() {
-                    fail(command, &error);
+                    self.fail(command, &error);
                 }
                 Err(error)
             }
+        }
+    }
+
+    /// Answers a command the page can no longer run. A close is approved: a page that never
+    /// came up has no `beforeunload` to hold it, and its window must not wait on it.
+    fn fail(&self, command: Command, error: &str) {
+        match command {
+            Command::RequestClose => self.page().emit(crate::CloseApproved { approved: true }),
+            command => fail(command, error),
         }
     }
 
@@ -278,7 +287,7 @@ impl WebView {
         match view {
             Some(view) => view.command(command),
             None => match self.0.error.borrow().as_ref() {
-                Some(error) => fail(command, error),
+                Some(error) => self.fail(command, error),
                 None => self.0.queue.borrow_mut().push(command),
             },
         }
@@ -595,5 +604,40 @@ pub(crate) fn fail(command: Command, error: &str) {
         Command::RunExtensionAction { done, .. } => done(Err(error.to_owned())),
         Command::PrintToPdf { done, .. } => done(Err(error.to_owned())),
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use nd_core::NodeId;
+    use nd_ui::events::EventQueue;
+
+    use super::*;
+    use crate::engine::Target;
+
+    /// A page on an engine this build lacks (Chromium is not linked into this crate's tests),
+    /// shown by an element whose events land in the returned queue.
+    fn failed_page() -> (WebView, EventQueue) {
+        let page = WebView::with_options(WebViewOptions { engine: Some(Engine::Cef), ..Default::default() });
+        let queue = EventQueue::default();
+        *page.0.shared.target.borrow_mut() = Some(Target { emit: queue.emitter(NodeId(1)), wake: Rc::new(|| {}) });
+        (page, queue)
+    }
+
+    #[test]
+    fn a_page_that_failed_to_create_approves_its_close() {
+        let (page, queue) = failed_page();
+        assert!(page.view().is_err());
+        page.request_close();
+        assert!(!queue.is_empty(), "the close was answered");
+    }
+
+    #[test]
+    fn a_close_asked_before_creation_failed_is_approved() {
+        let (page, queue) = failed_page();
+        page.request_close();
+        assert!(queue.is_empty());
+        assert!(page.view().is_err());
+        assert!(!queue.is_empty(), "the queued close was answered");
     }
 }
