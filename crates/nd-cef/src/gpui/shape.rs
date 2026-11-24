@@ -87,7 +87,8 @@ pub(crate) fn shape(frame: R, visible: Option<R>, overlays: &[(R, bool, bool)], 
     let mut bounding = vec![visible];
     let mut cut = false;
     for &(bounds, draws, _) in overlays {
-        if draws && bounds.inflate(pad).intersect(visible).is_some() {
+        // An element laid out to nothing draws nothing, and its shadow pad would still cut.
+        if draws && !bounds.is_empty() && bounds.inflate(pad).intersect(visible).is_some() {
             bounding = subtract(&bounding, bounds.inflate(pad));
             cut = true;
         }
@@ -126,6 +127,14 @@ mod tests {
         assert!(subtract(&[R::new(10, 10, 50, 50)], R::new(0, 0, 100, 100)).is_empty());
         let page = [R::new(10, 10, 50, 50)];
         assert_eq!(subtract(&page, R::new(70, 70, 10, 10)), page);
+    }
+
+    #[test]
+    fn an_overlay_laid_out_to_nothing_cuts_nothing() {
+        let frame = R::new(0, 0, 800, 600);
+        let s = shape(frame, Some(frame), &[(R::new(10, 590, 0, 0), true, false)], 1.);
+        assert!(!s.cut);
+        assert_eq!(s.bounding, vec![frame]);
     }
 
     #[test]
