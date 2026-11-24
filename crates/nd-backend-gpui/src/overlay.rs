@@ -698,7 +698,8 @@ impl Build<'_> {
                 Some(look) => list
                     .py(px(2.))
                     .text_size(body)
-                    .line_height(px(20.))
+                    // Segoe UI's natural line at 14 px, which a MenuFlyoutItem's TextBlock keeps.
+                    .line_height(px(19.))
                     .rounded(theme.radius.lg)
                     .border_color(look.popover_stroke)
                     .shadow(vec![gpui::BoxShadow {
