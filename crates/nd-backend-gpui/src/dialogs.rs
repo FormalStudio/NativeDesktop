@@ -575,9 +575,10 @@ impl ContentDialog {
             .flex_col()
             .min_w(px(CONTENT_DIALOG_MIN.min(room)))
             .max_w(px(CONTENT_DIALOG_MAX.min(room)))
-            .bg(self.bottom)
+            // SurfaceStrokeColorDefault over the smoke: the fills sit inside the border
+            // (InnerBorderEdge), so the card itself has none.
             .border_1()
-            .border_color(theme.border.subtle)
+            .border_color(gpui::rgba(0x75757566))
             .rounded(theme.radius.lg)
             .shadow(shadow())
             .text_color(theme.text.primary)
@@ -594,10 +595,10 @@ impl ContentDialog {
                     // 1 px border the corners are 1 px tighter.
                     .rounded_t(theme.radius.lg - px(1.))
                     .border_b_1()
-                    .border_color(theme.separator)
+                    .border_color(nd_theme::color::over(crate::drawn::card_stroke(theme), self.bottom))
                     .child(content),
             )
-            .child(commands.flex().gap(s.sm).p(s.xl))
+            .child(commands.flex().gap(s.sm).p(s.xl).bg(self.bottom).rounded_b(theme.radius.lg - px(1.)))
     }
 
     /// A WinUI button in the command row: AccentButton when `accent`, else the standard button
@@ -615,10 +616,10 @@ impl ContentDialog {
         marks: &Marks,
     ) -> gpui::Stateful<gpui::Div> {
         let under = [self.scrim, self.bottom];
-        let (fill, text, stroke, what) = if accent {
-            (theme.accent, theme.text.on_accent, gpui::transparent_black(), "suggested button")
+        let (fill, text, what) = if accent {
+            (theme.accent, theme.text.on_accent, "suggested button")
         } else {
-            (look.fill, theme.text.primary, look.border, "button")
+            (look.fill, theme.text.primary, "button")
         };
         marks.fill(what, fill, &under);
         marks.text(label, text, &[self.scrim, self.bottom, fill], look.text_size, FontWeight::NORMAL);
@@ -633,10 +634,8 @@ impl ContentDialog {
             .justify_center()
             .h(look.control_height)
             .px(look.padding_x)
-            .rounded(look.radius)
-            .border_1()
-            .border_color(stroke)
-            .bg(fill)
+            .rounded(look.radius);
+        let button = crate::render::fluent_bezel(button, look, accent, true, fill, look.radius, theme.is_dark())
             .text_color(text)
             .text_size(look.text_size)
             .line_height(look.line_height)

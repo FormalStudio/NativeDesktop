@@ -30,7 +30,7 @@ use nd_components::{FieldStyle, TextChanged, TextFieldKind, TextFieldProps};
 use nd_gpui::gpui::SharedString;
 
 /// CardStrokeColorDefault: #0F000000 light, #19000000 dark.
-fn card_stroke(theme: &nd_theme::Theme) -> gpui::Hsla {
+pub(crate) fn card_stroke(theme: &nd_theme::Theme) -> gpui::Hsla {
     nd_theme::color::with_alpha(gpui::black(), if theme.is_dark() { 0.1 } else { 0.059 })
 }
 

@@ -1271,38 +1271,7 @@ impl<'a> Build<'a> {
         let edge_radius = if circle { px(999.) } else { theme.radius.md };
         if bezel {
             button = match &fluent {
-                Some(f) if accent && settled => {
-                    // ControlStrokeColorOnAccentDefault, with ControlStrokeColorOnAccentSecondary
-                    // on the bottom row in its place. GPUI draws a div's own border over its
-                    // children, so the ring is a child, open at the bottom for the row.
-                    let shade = with_alpha(gpui::black(), if dark { 0.137 } else { 0.4 });
-                    let row = crate::forms::Elevation { stroke: shade, top: false };
-                    let ring = div()
-                        .absolute()
-                        .top(px(-1.))
-                        .left(px(-1.))
-                        .right(px(-1.))
-                        .bottom(px(-1.))
-                        .rounded(edge_radius)
-                        .border_t_1()
-                        .border_l_1()
-                        .border_r_1()
-                        .border_color(with_alpha(gpui::white(), 0.078));
-                    button.relative().border_1().border_color(gpui::transparent_black()).bg(fill).child(ring).children(
-                        crate::forms::toggle::elevation_edge(
-                            // Nothing under the row: the button's own border is clear.
-                            crate::forms::FormLook { elevation: Some(row), border: gpui::transparent_black(), ..*f },
-                            edge_radius,
-                        ),
-                    )
-                }
-                Some(_) if accent => button.border_1().border_color(gpui::transparent_black()).bg(fill),
-                Some(f) => button
-                    .relative()
-                    .border_1()
-                    .border_color(f.border)
-                    .bg(fill)
-                    .children(settled.then(|| crate::forms::toggle::elevation_edge(*f, edge_radius)).flatten()),
+                Some(f) => fluent_bezel(button, f, accent, settled, fill, edge_radius, dark),
                 // libadwaita's buttons have no border.
                 None if adwaita.is_some() => button.bg(fill),
                 None => button.border_1().border_color(look.border).bg(fill),
@@ -1485,6 +1454,50 @@ fn readable_ink(fill: Hsla) -> Hsla {
     use nd_gpui::gpui::{black, white};
     use nd_theme::color::contrast;
     if contrast(white(), fill) >= contrast(black(), fill) { white() } else { black() }
+}
+
+/// A Fluent bezel button's fill and outline. AccentButton: ControlStrokeColorOnAccentDefault,
+/// with ControlStrokeColorOnAccentSecondary on the bottom row in its place; the standard button:
+/// its stroke and elevation row. `settled` (not pressed) shows the rows.
+pub(crate) fn fluent_bezel(
+    button: gpui::Stateful<gpui::Div>,
+    f: &crate::forms::FormLook,
+    accent: bool,
+    settled: bool,
+    fill: gpui::Hsla,
+    radius: gpui::Pixels,
+    dark: bool,
+) -> gpui::Stateful<gpui::Div> {
+    let button = button.relative().border_1().bg(fill);
+    if !accent {
+        return button
+            .border_color(f.border)
+            .children(settled.then(|| crate::forms::toggle::elevation_edge(*f, radius)).flatten());
+    }
+    let button = button.border_color(gpui::transparent_black());
+    if !settled {
+        return button;
+    }
+    // GPUI draws a div's own border over its children, so the ring is a child, open at the
+    // bottom for the row.
+    let shade = with_alpha(gpui::black(), if dark { 0.137 } else { 0.4 });
+    let row = crate::forms::Elevation { stroke: shade, top: false };
+    let ring = div()
+        .absolute()
+        .top(px(-1.))
+        .left(px(-1.))
+        .right(px(-1.))
+        .bottom(px(-1.))
+        .rounded(radius)
+        .border_t_1()
+        .border_l_1()
+        .border_r_1()
+        .border_color(with_alpha(gpui::white(), 0.078));
+    button.child(ring).children(crate::forms::toggle::elevation_edge(
+        // Nothing under the row: the button's own border is clear.
+        crate::forms::FormLook { elevation: Some(row), border: gpui::transparent_black(), ..*f },
+        radius,
+    ))
 }
 
 /// WinUI's ToolTip (ToolTip_themeresources.xaml): Caption text in 9,6,9,8 of padding, at most

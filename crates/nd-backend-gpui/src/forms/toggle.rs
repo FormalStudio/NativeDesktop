@@ -83,8 +83,6 @@ pub(crate) fn focus_visual(look: FormLook, radius: Pixels) -> gpui::Div {
         .child(div().size_full().rounded(radius + px(2.)).border_2().border_color(inner))
 }
 
-/// The elevation row of WinUI's border for a control of `radius` with a 1 px `look.border`,
-/// drawn over that border; `None` for a look without one.
 /// `edge` as drawn over `border`, so that together they show `edge`: WinUI's edge rows replace
 /// the border, and over it only what the edge adds to the border's own ink (both the same black
 /// or white) gives the same colour.
@@ -92,6 +90,8 @@ pub(crate) fn over_border(edge: gpui::Hsla, border: gpui::Hsla) -> gpui::Hsla {
     with_alpha(edge, (1. - (1. - edge.a) / (1. - border.a)).max(0.))
 }
 
+/// The elevation row of WinUI's border for a control of `radius` with a 1 px `look.border`,
+/// drawn over that border; `None` for a look without one.
 pub(crate) fn elevation_edge(look: FormLook, radius: Pixels) -> Option<gpui::Div> {
     let e = look.elevation?;
     let color = over_border(e.stroke, look.border);
