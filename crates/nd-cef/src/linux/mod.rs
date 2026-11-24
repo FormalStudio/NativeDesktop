@@ -120,6 +120,7 @@ pub(crate) fn after_work() {
     if chrome::live() == 0 {
         return;
     }
+    chrome::forward_keys();
     type Iteration = unsafe extern "C" fn(*mut c_void, c_int) -> c_int;
     static ITERATION: OnceLock<Option<Iteration>> = OnceLock::new();
     let iteration = ITERATION.get_or_init(|| {

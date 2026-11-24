@@ -19,9 +19,11 @@ use std::rc::Rc;
 use cef::{BrowserSettings, CefString, Client, RequestContext, RuntimeStyle, WindowInfo, browser_host_create_browser};
 use x11rb::connection::Connection;
 use x11rb::protocol::shape::{ConnectionExt as _, SK, SO};
+use x11rb::protocol::Event;
+use x11rb::protocol::xinput::{self, ConnectionExt as _};
 use x11rb::protocol::xproto::{
-    ClipOrdering, ConfigureWindowAux, ConnectionExt as _, CreateWindowAux, ImageFormat, InputFocus, Rectangle,
-    StackMode, Window, WindowClass,
+    ClipOrdering, ConfigureWindowAux, ConnectionExt as _, CreateWindowAux, EventMask, ImageFormat, InputFocus,
+    KEY_PRESS_EVENT, KEY_RELEASE_EVENT, KeyPressEvent, Rectangle, StackMode, Window, WindowClass,
 };
 use x11rb::rust_connection::RustConnection;
 use x11rb::wrapper::ConnectionExt as _;
@@ -64,6 +66,16 @@ thread_local! {
     /// Containers of closed pages, until Chromium's browser in each is gone.
     static RELEASED: RefCell<HashMap<u64, Window>> = RefCell::default();
     static LIVE: Cell<usize> = const { Cell::new(0) };
+    /// Chromium's windows whose page does not have the keyboard, and the GPUI window each is in.
+    static KEYS_TO: RefCell<HashMap<Window, Window>> = RefCell::default();
+}
+
+/// Forwards the keys Chromium's windows got without the keyboard (`X::forward_key`); the pump
+/// calls it while a Chrome-style page is open.
+pub(crate) fn forward_keys() {
+    if let Some(x) = CONN.with(|c| c.borrow().clone()) {
+        x.flush();
+    }
 }
 
 /// nd-cef's own connection to the X server the app's windows are on.
@@ -101,7 +113,42 @@ impl X {
     /// to a window that just unmapped).
     fn flush(&self) {
         let _ = self.conn.flush();
-        while let Ok(Some(_)) = self.conn.poll_for_event() {}
+        while let Ok(Some(event)) = self.conn.poll_for_event() {
+            self.forward_key(event);
+        }
+    }
+
+    /// X hands a key to the window under the pointer when that is inside the focus window, so
+    /// Chromium's window gets the keys over the page while GPUI's window has the focus, and
+    /// drops them. They go on to the GPUI window as core events, as they would over any other
+    /// element. Chromium selects keys through XInput2, which takes them from core delivery, so
+    /// they are read the same way.
+    fn forward_key(&self, event: Event) {
+        let (kind, key) = match event {
+            Event::XinputKeyPress(key) => (KEY_PRESS_EVENT, key),
+            Event::XinputKeyRelease(key) => (KEY_RELEASE_EVENT, key),
+            _ => return,
+        };
+        let Some(parent) = KEYS_TO.with(|k| k.borrow().get(&key.event).copied()) else { return };
+        let point = |v: i32| (v >> 16) as i16;
+        let state = key.mods.effective as u16 | (key.group.effective as u16) << 13;
+        let core = KeyPressEvent {
+            response_type: kind,
+            detail: key.detail as u8,
+            sequence: 0,
+            time: key.time,
+            root: key.root,
+            event: parent,
+            child: x11rb::NONE,
+            root_x: point(key.root_x),
+            root_y: point(key.root_y),
+            event_x: 0,
+            event_y: 0,
+            state: state.into(),
+            same_screen: true,
+        };
+        let _ = self.conn.send_event(false, parent, EventMask::NO_EVENT, core);
+        let _ = self.conn.flush();
     }
 }
 
@@ -115,11 +162,15 @@ struct St {
     /// The GPUI window the container is in; the root while parked.
     parent: Window,
     mapped: bool,
+    /// Unmapped by `park`, so the next map shows a page that was out of sight.
+    parked: bool,
     frame: R,
     shape: Option<Shape>,
     /// Chromium's window and the size it was given: it only exists once the browser does, and
     /// does not follow the container on its own.
     browser: Option<(Window, i32, i32)>,
+    /// The page has the keyboard: Chromium keeps the keys its window gets.
+    keyboard: bool,
 }
 
 pub(crate) struct Chrome {
@@ -224,6 +275,13 @@ impl Chrome {
         {
             let aux = ConfigureWindowAux::new().x(0).y(0).width(w.max(1) as u32).height(h.max(1) as u32);
             let _ = conn.configure_window(window, &aux);
+            if st.browser.is_none_or(|(old, ..)| old != window) {
+                let keys = xinput::EventMask {
+                    deviceid: xinput::Device::ALL_MASTER.into(),
+                    mask: vec![(xinput::XIEventMask::KEY_PRESS | xinput::XIEventMask::KEY_RELEASE).into()],
+                };
+                let _ = conn.xinput_xi_select_events(window, &[keys]);
+            }
             st.browser = browser;
             resized = true;
         }
@@ -246,8 +304,18 @@ impl Chrome {
         if !st.mapped {
             let _ = conn.map_window(self.container);
             st.mapped = true;
+            // A GPU process that went down while the page was out of sight leaves it blank once
+            // shown again until its size changes: a one-pixel step and back gets it a new frame.
+            // Only after a park, since the step costs a fresh page its first click.
+            if let (true, Some((window, w, h))) = (std::mem::take(&mut st.parked), st.browser) {
+                for h in [h + 1, h] {
+                    let aux = ConfigureWindowAux::new().width(w.max(1) as u32).height(h.max(1) as u32);
+                    let _ = conn.configure_window(window, &aux);
+                }
+            }
         }
         drop(st);
+        self.route_keys();
         self.x.flush();
         resized
     }
@@ -256,6 +324,7 @@ impl Chrome {
     pub(crate) fn park(&self) {
         let mut st = self.st.borrow_mut();
         if std::mem::take(&mut st.mapped) {
+            st.parked = true;
             let _ = self.x.conn.unmap_window(self.container);
             self.x.flush();
         }
@@ -263,12 +332,24 @@ impl Chrome {
 
     /// The keyboard goes to the page, or with `false` back to the GPUI window it is in.
     pub(crate) fn focus(&self, focused: bool) {
+        self.st.borrow_mut().keyboard = focused;
+        self.route_keys();
         let st = self.st.borrow();
         let target = if focused { self.browser_window() } else { Some(st.parent).filter(|w| *w != self.x.root) };
         if let (true, Some(target)) = (st.mapped || !focused, target) {
             let _ = self.x.conn.set_input_focus(InputFocus::PARENT, target, x11rb::CURRENT_TIME);
             self.x.flush();
         }
+    }
+
+    /// Keeps `KEYS_TO` in step with whether the page has the keyboard.
+    fn route_keys(&self) {
+        let st = self.st.borrow();
+        let Some((browser, ..)) = st.browser else { return };
+        KEYS_TO.with(|k| match st.keyboard || st.parent == self.x.root {
+            true => k.borrow_mut().remove(&browser),
+            false => k.borrow_mut().insert(browser, st.parent),
+        });
     }
 
     /// What the page shows now, as GPUI's BGRA, for the holes overlays cut into it.
@@ -291,6 +372,9 @@ impl Chrome {
     /// Chromium's browser in it is gone ([`released`]).
     pub(crate) fn teardown(&self) {
         self.park();
+        if let Some((browser, ..)) = self.st.borrow().browser {
+            KEYS_TO.with(|k| k.borrow_mut().remove(&browser));
+        }
         let _ = self.x.conn.reparent_window(self.container, self.x.root, 0, 0);
         self.x.flush();
         RELEASED.with(|r| r.borrow_mut().insert(self.page, self.container));

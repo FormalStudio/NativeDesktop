@@ -530,6 +530,14 @@ impl OsrView {
             R::new(x, y, right - x, bottom - y)
         };
         let frame = device(bounds);
+        // Chromium takes an empty frame as a 1x1 window, which lays the page out again and
+        // loses its scroll position; an element laid out to nothing shows nothing, so the page
+        // stays at its last size, out of sight.
+        if frame.w <= 0 || frame.h <= 0 {
+            self.st.borrow_mut().keyboard = false;
+            chrome.park();
+            return;
+        }
         let visible = device(window.content_mask().bounds).intersect(frame);
         let overlays: Vec<(R, bool, bool)> = nd_backend_gpui::occlusion::occluders(window)
             .iter()
