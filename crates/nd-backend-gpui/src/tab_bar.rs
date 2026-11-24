@@ -668,6 +668,9 @@ pub fn switcher_view(
             ..BarLayout::default()
         };
     }
+    if theme.preset == nd_theme::Preset::Fluent {
+        return selector_switcher(key, bar, theme, on_input, sink, marks);
+    }
     let toggle_height = look.tab_height - look.padding * 2.;
     marks.fill("view switcher", look.track, &[]);
     let mut track = div()
@@ -737,6 +740,52 @@ pub enum OverviewInput {
     Pick(usize),
     /// A press on the overview outside every card.
     Dismiss,
+}
+
+/// The view switcher as WinUI's SelectorBar: the views as its items on 8 px spacing, the
+/// selected one under the accent pill.
+fn selector_switcher(
+    key: &str,
+    bar: &Bar,
+    theme: &Theme,
+    on_input: Option<OnInput<BarInput>>,
+    sink: Option<LayoutSink>,
+    marks: &Marks,
+) -> AnyElement {
+    let look = crate::forms::FormLook::of(theme);
+    let text = if bar.enabled { look.text } else { theme.disabled(look.text) };
+    let mut row = div()
+        .id(ElementId::Name(format!("{key}-switcher").into()))
+        .role(gpui::Role::TabList)
+        .aria_label(bar.label.clone().unwrap_or_else(|| "Views".into()))
+        .flex()
+        .flex_row()
+        .gap(px(8.))
+        .py(px(4.))
+        .text_size(look.text_size)
+        .line_height(look.line_height)
+        .text_color(text);
+    for (i, tab) in bar.tabs.iter().enumerate() {
+        let selected = bar.selected == Some(i);
+        marks.text(&tab.title, text, &[], look.text_size, FontWeight::NORMAL);
+        let id = ElementId::Name(format!("{key}-view-{i}").into());
+        let mut item = crate::forms::selector_item(id, tab.title.clone(), selected, bar.enabled, &look)
+            .role(gpui::Role::Tab)
+            .aria_label(tab.title.clone())
+            .aria_selected(selected);
+        if let Some(on_input) = on_input.clone() {
+            item = item.when(bar.menus, |e| e.on_mouse_down(MouseButton::Right, menu_press(&on_input, i)));
+            item = item.on_mouse_down(MouseButton::Left, move |event: &MouseDownEvent, window, cx| {
+                on_input(BarInput::Press(i, event.position), window, cx)
+            });
+        }
+        row = row.child(measured(item, sink.as_ref(), move |l, r| {
+            if let Some(slot) = l.tabs.get_mut(i) {
+                *slot = r;
+            }
+        }));
+    }
+    measured(row, sink.as_ref(), |l, r| l.bar = Some(r))
 }
 
 /// The drawn `AdwTabOverview`: a card per tab over the window's background, the selected card

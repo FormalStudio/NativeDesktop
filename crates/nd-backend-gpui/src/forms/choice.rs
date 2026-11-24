@@ -203,8 +203,6 @@ fn popup(b: &Build, id: NodeId, p: &SelectProps, window: &mut Window, cx: &mut A
     root.into_any_element()
 }
 
-/// WinUI's SelectorBar: transparent items padded 12,10,12,7 on 8 px spacing, the selected one
-/// marked by a 16x3 accent pill along its bottom edge.
 /// A segment's face: its icon where it has one nd can draw, else its title.
 fn face(p: &SelectProps, index: usize, color: gpui::Hsla) -> gpui::AnyElement {
     match p.icons.get(index).copied().flatten().filter(|i| i.shape().is_some()) {
@@ -225,6 +223,48 @@ fn titled<E: StatefulInteractiveElement>(segment: E, p: &SelectProps, index: usi
     })
 }
 
+/// One item of WinUI's SelectorBar: transparent, padded 12,10,12,7 inside a 2 px focus ring's
+/// room, the selected one marked by a 16x3 accent pill along its bottom edge. Also the view
+/// switcher's tabs under the Fluent preset.
+pub(crate) fn selector_item(
+    id: ElementId,
+    face: impl IntoElement,
+    selected: bool,
+    enabled: bool,
+    look: &FormLook,
+) -> gpui::Stateful<gpui::Div> {
+    let mut item = div()
+        .id(id)
+        .relative()
+        .pl(px(12.))
+        .pr(px(12.))
+        .pt(px(10.))
+        .pb(px(7.))
+        .rounded(look.radius)
+        .border_2()
+        .border_color(gpui::transparent_black())
+        .whitespace_nowrap()
+        .child(face);
+    if selected {
+        item = item.child(
+            div()
+                .absolute()
+                .left_0()
+                .right_0()
+                .bottom_0()
+                .flex()
+                .justify_center()
+                .child(div().w(px(16.)).h(px(3.)).rounded_full().bg(look.accent)),
+        );
+    }
+    if enabled {
+        let (hover, pressed) = (look.secondary_text, with_alpha(look.secondary_text, look.secondary_text.a * 0.75));
+        item = item.cursor(look.cursor).hover(move |s| s.text_color(hover)).active(move |s| s.text_color(pressed));
+    }
+    item
+}
+
+/// WinUI's SelectorBar: [`selector_item`]s on 8 px spacing.
 fn selector_bar(id: NodeId, p: &SelectProps, ctl: Ctl, theme: &nd_theme::Theme) -> gpui::AnyElement {
     let look = ctl.look;
     let mut bar = div()
@@ -240,45 +280,19 @@ fn selector_bar(id: NodeId, p: &SelectProps, ctl: Ctl, theme: &nd_theme::Theme) 
         .text_color(look.text);
     for (index, option) in p.options.iter().enumerate() {
         let selected = index == p.selected;
-        let mut item = div()
-            .id(ElementId::Integer(index as u64))
-            .role(gpui::Role::RadioButton)
-            .aria_label(option.clone())
-            .aria_toggled(if selected { gpui::Toggled::True } else { gpui::Toggled::False })
-            .relative()
-            .pl(px(12.))
-            .pr(px(12.))
-            .pt(px(10.))
-            .pb(px(7.))
-            .rounded(look.radius)
-            .border_2()
-            .border_color(if ctl.ring() && selected { look.focus_ring } else { gpui::transparent_black() })
-            .whitespace_nowrap()
-            .child(face(p, index, look.text));
+        let mut item =
+            selector_item(ElementId::Integer(index as u64), face(p, index, look.text), selected, p.enabled, &look)
+                .role(gpui::Role::RadioButton)
+                .aria_label(option.clone())
+                .aria_toggled(if selected { gpui::Toggled::True } else { gpui::Toggled::False })
+                .when(ctl.ring() && selected, |i| i.border_color(look.focus_ring));
         item = titled(item, p, index, theme);
-        if selected {
-            item = item.child(
-                div()
-                    .absolute()
-                    .left_0()
-                    .right_0()
-                    .bottom_0()
-                    .flex()
-                    .justify_center()
-                    .child(div().w(px(16.)).h(px(3.)).rounded_full().bg(look.accent)),
-            );
-        }
         if p.enabled {
             let sink = ctl.sink.clone();
-            let (hover, pressed) = (look.secondary_text, with_alpha(look.secondary_text, look.secondary_text.a * 0.75));
-            item = item
-                .cursor(look.cursor)
-                .hover(move |s| s.text_color(hover))
-                .active(move |s| s.text_color(pressed))
-                .on_click(move |_, window, cx| {
-                    sink.take_focus(window, cx);
-                    sink.send(SelectChanged { index }, cx);
-                });
+            item = item.on_click(move |_, window, cx| {
+                sink.take_focus(window, cx);
+                sink.send(SelectChanged { index }, cx);
+            });
         }
         bar = bar.child(item);
     }
