@@ -101,6 +101,20 @@ pub fn click(at: (f64, f64)) {
     std::thread::sleep(Duration::from_millis(150));
 }
 
+/// Moves to `at` and holds the left button down there, for a capture of a pressed control.
+/// [`release`] lets go.
+pub fn hold(at: (f64, f64)) {
+    move_to(at);
+    std::thread::sleep(Duration::from_millis(80));
+    mouse(CGEventType::LeftMouseDown, at);
+}
+
+/// Lets go of a [`hold`] at `at`.
+pub fn release(at: (f64, f64)) {
+    mouse(CGEventType::LeftMouseUp, at);
+    std::thread::sleep(Duration::from_millis(150));
+}
+
 /// Moves to `at`, then presses and releases the right button there.
 pub fn right_click(at: (f64, f64)) {
     move_to(at);
