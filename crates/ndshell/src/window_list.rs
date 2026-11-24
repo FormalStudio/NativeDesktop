@@ -28,6 +28,16 @@ unsafe fn number(dict: &CFDictionary, key: &CFString) -> Option<i64> {
 
 /// The normal-layer, on-screen windows of `pid`, front to back.
 pub fn of_pid(pid: u32) -> Vec<WindowInfo> {
+    on_screen(pid, false)
+}
+
+/// Every on-screen window of `pid` on any layer, front to back: panels, sheets, popovers and
+/// menus as well as normal windows.
+pub fn every_layer_of_pid(pid: u32) -> Vec<WindowInfo> {
+    on_screen(pid, true)
+}
+
+fn on_screen(pid: u32, every_layer: bool) -> Vec<WindowInfo> {
     let options = CGWindowListOption::OptionOnScreenOnly | CGWindowListOption::ExcludeDesktopElements;
     let Some(list) = CGWindowListCopyWindowInfo(options, kCGNullWindowID) else { return Vec::new() };
     let list: &CFArray = &list;
@@ -36,7 +46,7 @@ pub fn of_pid(pid: u32) -> Vec<WindowInfo> {
         let dict = unsafe { list.value_at_index(index).cast::<CFDictionary>().as_ref() };
         let Some(dict) = dict else { continue };
         unsafe {
-            if number(dict, kCGWindowOwnerPID) != Some(i64::from(pid)) || number(dict, kCGWindowLayer) != Some(0) {
+            if number(dict, kCGWindowOwnerPID) != Some(i64::from(pid)) || (!every_layer && number(dict, kCGWindowLayer) != Some(0)) {
                 continue;
             }
             let Some(id) = number(dict, kCGWindowNumber) else { continue };
