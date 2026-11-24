@@ -58,11 +58,39 @@ pub struct TabLook {
     /// Gaps of the overview grid and its margin.
     pub grid_gap: Pixels,
     pub margin: Pixels,
+    /// WinUI's TabView for attached tabs under the Fluent preset; `None` draws `AdwTabBar`'s.
+    pub fluent: Option<FluentTabs>,
 }
 
 /// Width of an overview card, and the height of its thumbnail.
 const CARD_WIDTH: f32 = 220.;
 const THUMBNAIL_HEIGHT: f32 = 140.;
+
+/// WinUI's TabView (TabView_themeresources.xaml): tabs of their own width with left-aligned
+/// Caption titles, a close button on each, 8 px corners on the selected tab and 4 px ears where
+/// it meets the strip's line.
+#[derive(Clone, Copy, Debug)]
+pub struct FluentTabs {
+    /// TabViewItemMaxWidth and TabViewItemMinWidth.
+    pub width: (Pixels, Pixels),
+    /// TabViewItemMinHeight, the strip's line running along the bottom row of the others.
+    pub height: Pixels,
+    /// TabViewHeaderPadding above the tabs, and as much before them.
+    pub margin: Pixels,
+    pub radius: Pixels,
+    /// Caption: 12 on a 16 px line.
+    pub text_size: Pixels,
+    pub line_height: Pixels,
+    /// An unselected tab's title (TextFillColorSecondary).
+    pub idle_text: Hsla,
+    /// An unselected tab pressed (LayerOnMicaBaseAltFillColorDefault).
+    pub pressed: Hsla,
+    /// The selected tab's outline and the strip's line (CardStrokeColorDefault).
+    pub stroke: Hsla,
+    /// The close and add buttons' subtle fills.
+    pub button_hover: Hsla,
+    pub button_pressed: Hsla,
+}
 
 impl TabLook {
     /// `background` is what the bar sits on; the bar paints it, so the tabs read the same over any
@@ -73,6 +101,32 @@ impl TabLook {
         // one with a little less.
         let selected = theme.hover(background);
         let strip = theme.surface.sidebar;
+        let dark = theme.is_dark();
+        let fluent = (theme.preset == nd_theme::Preset::Fluent).then(|| {
+            let form = crate::forms::FormLook::fluent(theme);
+            FluentTabs {
+                width: (px(240.), px(100.)),
+                height: px(32.),
+                margin: px(8.),
+                radius: theme.radius.lg,
+                text_size: theme.type_scale.caption,
+                line_height: px(16.),
+                idle_text: theme.text.secondary,
+                pressed: if dark { gpui::rgba(0x3a3a3a73).into() } else { gpui::rgba(0xffffffb3).into() },
+                stroke: crate::drawn::card_stroke(theme),
+                button_hover: form.subtle_hover,
+                button_pressed: form.subtle_active,
+            }
+        });
+        // LayerOnMicaBaseAltFillColorSecondary under the pointer, SolidBackgroundFillColorTertiary
+        // for the selected tab and DividerStrokeColorDefault between tabs.
+        let (strip_hover, content, separator) = match fluent {
+            Some(_) if dark => {
+                (gpui::rgba(0xffffff0f).into(), gpui::rgb(0x282828).into(), gpui::rgba(0xffffff15).into())
+            }
+            Some(_) => (gpui::rgba(0x0000000a).into(), gpui::rgb(0xf9f9f9).into(), gpui::rgba(0x0000000f).into()),
+            None => (theme.hover(strip), theme.surface.base, theme.separator),
+        };
         Self {
             tab_height: theme.control.regular,
             padding: theme.spacing.xs,
@@ -85,11 +139,11 @@ impl TabLook {
             hover: nd_theme::color::mix(background, selected, 0.6),
             selected,
             strip,
-            strip_hover: theme.hover(strip),
-            content: theme.surface.base,
+            strip_hover,
+            content,
             text: theme.text.primary,
             disabled_text: theme.disabled(theme.text.primary),
-            separator: theme.separator,
+            separator,
             border: theme.border.subtle,
             track: selected,
             // The active toggle stands off the track: the raised surface on light schemes, where
@@ -100,6 +154,7 @@ impl TabLook {
             shadow: theme.scrim,
             grid_gap: theme.spacing.lg,
             margin: theme.spacing.xl,
+            fluent,
         }
     }
 
@@ -302,6 +357,7 @@ pub fn tab_bar_view(
         };
     }
     let attached = bar.attached;
+    let fluent = look.fluent.filter(|_| attached);
     let (background, hover, selected_fill) = if attached {
         (look.strip, look.strip_hover, look.content)
     } else {
@@ -310,11 +366,13 @@ pub fn tab_bar_view(
     marks.fill("tab bar", background, &[]);
     let under = [background];
     // An attached selected tab runs down over the bar's padding and bottom line.
-    let tall = look.tab_height + look.padding + px(1.);
+    let tall = fluent.map_or(look.tab_height + look.padding + px(1.), |f| f.height);
+    let text_size = fluent.map_or(look.text_size, |f| f.text_size);
+    // WinUI's tabs keep their own width, so the add button follows the last one.
     let mut row = div()
         .flex()
         .flex_row()
-        .flex_1()
+        .when(fluent.is_none(), |r| r.flex_1())
         .min_w_0()
         .occlude()
         .map(|r| if attached { r.items_start().h(tall) } else { r.items_center().h(look.tab_height) });
@@ -327,25 +385,37 @@ pub fn tab_bar_view(
             marks.fill("selected tab", selected_fill, &under);
             tab_under.push(selected_fill);
         }
-        marks.text(&tab.title, text, &tab_under, look.text_size, regular);
+        let ink = match fluent {
+            Some(f) if bar.enabled && !selected => f.idle_text,
+            _ => text,
+        };
+        marks.text(&tab.title, ink, &tab_under, text_size, regular);
         let close = tab.closable.then(|| {
-            marks.text("\u{00d7}", text, &tab_under, look.text_size, regular);
-            let hover = theme.hover(if selected { selected_fill } else { hover });
-            let mut button = div()
+            marks.text("\u{00d7}", text, &tab_under, text_size, regular);
+            let button = div()
                 .id(ElementId::Name(format!("{key}-close-{i}").into()))
                 .role(gpui::Role::Button)
                 .aria_label(SharedString::from(format!("Close {}", tab.title)))
                 .flex_none()
-                .size(look.button)
                 .flex()
                 .items_center()
-                .justify_center()
-                .rounded_full()
-                .hover(move |s| s.bg(hover))
-                .child("\u{00d7}");
-            if !selected {
-                button = button.opacity(0.).group_hover(group.clone(), |s| s.opacity(1.));
-            }
+                .justify_center();
+            let mut button = match fluent {
+                // TabViewCloseButtonStyle: 32 by 24 after a 4 px margin, on every tab.
+                Some(f) => button
+                    .w(px(32.))
+                    .h(px(24.))
+                    .ml(px(4.))
+                    .rounded(look.radius)
+                    .hover(move |s| s.bg(f.button_hover))
+                    .active(move |s| s.bg(f.button_pressed))
+                    .child(crate::forms::glyph::glyph(crate::forms::glyph::Glyph::Clear, px(12.), text, px(1.))),
+                None => {
+                    let hover = theme.hover(if selected { selected_fill } else { hover });
+                    let button = button.size(look.button).rounded_full().hover(move |s| s.bg(hover)).child("\u{00d7}");
+                    if selected { button } else { button.opacity(0.).group_hover(group.clone(), |s| s.opacity(1.)) }
+                }
+            };
             if let Some(on_input) = on_input.clone() {
                 button = button.on_click(move |_, window, cx| {
                     cx.stop_propagation();
@@ -365,22 +435,81 @@ pub fn tab_bar_view(
             .aria_label(tab.title.clone())
             .aria_selected(selected)
             .relative()
-            .flex_1()
-            .min_w_0()
-            .h(look.tab_height)
             .flex()
             .flex_row()
             .items_center()
-            .px(look.padding)
-            .gap(look.padding)
-            .text_size(look.text_size)
-            .text_color(text)
-            // The close button's width on the leading side too, so the title centres in the tab.
-            .child(div().flex_none().w(look.button))
-            .child(div().flex_1().min_w_0().flex().justify_center().child(div().truncate().child(tab.title.clone())))
-            .child(close.unwrap_or_else(|| div().flex_none().w(look.button).into_any_element()));
-        element = match (selected, attached) {
-            (true, true) => element
+            .text_size(text_size)
+            .when_some(fluent, |e, f| e.line_height(f.line_height))
+            .text_color(ink);
+        element = match fluent {
+            // TabViewItemHeaderPadding: 8 before the title, 4 after the close button or 8 without.
+            Some(f) => element
+                .w(f.width.0)
+                .min_w(f.width.1)
+                .h(f.height - px(1.))
+                .pl(px(8.))
+                .pr(px(if tab.closable { 4. } else { 8. }))
+                .child(div().flex_1().min_w_0().truncate().child(tab.title.clone()))
+                .children(close),
+            None => element
+                .flex_1()
+                .min_w_0()
+                .h(look.tab_height)
+                .px(look.padding)
+                .gap(look.padding)
+                // The close button's width on the leading side too, so the title centres in the tab.
+                .child(div().flex_none().w(look.button))
+                .child(
+                    div().flex_1().min_w_0().flex().justify_center().child(div().truncate().child(tab.title.clone())),
+                )
+                .child(close.unwrap_or_else(|| div().flex_none().w(look.button).into_any_element())),
+        };
+        element = match (selected, fluent) {
+            (true, Some(f)) => {
+                // The fillets where the tab's sides turn into the strip's line: the tab's fill
+                // with a quarter of a stroked circle in the strip's colour cut from it.
+                let ear = |left: bool| {
+                    let cut = div().absolute().size(px(8.)).top(px(-4.)).rounded_full().bg(background);
+                    let cut = if left { cut.left(px(-4.)) } else { cut.right(px(-4.)) };
+                    let ear = div().absolute().bottom_0().w(px(5.)).h(px(4.)).overflow_hidden().bg(selected_fill);
+                    let ear = if left { ear.left(px(-5.)) } else { ear.right(px(-5.)) };
+                    ear.child(cut.border_1().border_color(f.stroke))
+                };
+                // TabViewSelectedItemHeaderMargin: 1 px over each neighbour.
+                element
+                    .w(f.width.0 + px(2.))
+                    .mx(px(-1.))
+                    .h(f.height)
+                    .pb(px(1.))
+                    .rounded_t(f.radius)
+                    .bg(selected_fill)
+                    .border_t_1()
+                    .border_l_1()
+                    .border_r_1()
+                    .border_color(gpui::transparent_black())
+                    // GPUI draws a div's own border over its children, so the outline is a child
+                    // whose sides stop where the ears' arcs take over. WinUI's sits over the strip
+                    // rather than the tab's fill.
+                    .child(
+                        div()
+                            .absolute()
+                            .top(px(-1.))
+                            .left(px(-1.))
+                            .right(px(-1.))
+                            .bottom(px(4.))
+                            .rounded_t(f.radius)
+                            .border_t_1()
+                            .border_l_1()
+                            .border_r_1()
+                            .border_color(nd_theme::color::over(f.stroke, background)),
+                    )
+                    .child(ear(true))
+                    .child(ear(false))
+            }
+            (false, Some(f)) => {
+                element.rounded_t(f.radius).hover(move |s| s.bg(hover)).active(move |s| s.bg(f.pressed))
+            }
+            (true, None) if attached => element
                 .h(tall)
                 .pb(look.padding)
                 .rounded_t(look.radius)
@@ -389,8 +518,8 @@ pub fn tab_bar_view(
                 .border_l_1()
                 .border_r_1()
                 .border_color(look.border),
-            (true, false) => element.rounded(look.radius).bg(selected_fill),
-            (false, _) => element.rounded(look.radius).hover(move |s| s.bg(hover)),
+            (true, None) => element.rounded(look.radius).bg(selected_fill),
+            (false, None) => element.rounded(look.radius).hover(move |s| s.bg(hover)),
         };
         if let Some(on_input) = on_input.clone() {
             let press = on_input.clone();
@@ -419,18 +548,19 @@ pub fn tab_bar_view(
                 *slot = r;
             }
         }));
-        if i + 1 < bar.tabs.len() {
+        // WinUI keeps the separator after the last tab, before the add button.
+        if i + 1 < bar.tabs.len() || fluent.is_some() {
             let shown = !selected && !next_selected;
             if shown {
                 marks.fill("tab separator", look.separator, &under);
             }
+            // TabViewItemSeparatorMargin: 8 above and below on a 32 px tab.
+            let (tall, top) = match fluent {
+                Some(_) => (px(16.), px(8.)),
+                None => (look.tab_height - look.inset, look.inset / 2.),
+            };
             row = row.child(
-                div()
-                    .flex_none()
-                    .w(px(1.))
-                    .h(look.tab_height - look.inset)
-                    .when(attached, |d| d.mt(look.inset / 2.))
-                    .when(shown, |d| d.bg(look.separator)),
+                div().flex_none().w(px(1.)).h(tall).when(attached, |d| d.mt(top)).when(shown, |d| d.bg(look.separator)),
             );
         }
     }
@@ -440,19 +570,20 @@ pub fn tab_bar_view(
         .aria_label(bar.label.clone().unwrap_or_else(|| "Tabs".into()))
         .w_full()
         .flex_none()
-        .h(px(look.bar_height()))
+        .h(fluent.map_or(px(look.bar_height()), |f| f.margin + f.height))
         .flex()
         .flex_row()
-        .gap(look.padding)
-        .pl(look.padding + px(bar.insets.0))
+        .gap(fluent.map_or(look.padding, |_| px(6.)))
+        .pl(fluent.map_or(look.padding, |f| f.margin) + px(bar.insets.0))
         .pr(look.padding + px(bar.insets.1))
         .bg(background)
         .text_color(text)
         .map(|b| {
             if attached {
                 // The line goes first so the selected tab paints over its stretch of it.
-                let line = div().absolute().left_0().right_0().bottom_0().h(px(1.)).bg(look.border);
-                b.relative().items_start().pt(look.padding).child(line)
+                let stroke = fluent.map_or(look.border, |f| f.stroke);
+                let line = div().absolute().left_0().right_0().bottom_0().h(px(1.)).bg(stroke);
+                b.relative().items_start().pt(fluent.map_or(look.padding, |f| f.margin)).child(line)
             } else {
                 b.items_center().border_b_1().border_color(look.border)
             }
@@ -460,10 +591,18 @@ pub fn tab_bar_view(
         .child(row);
     if bar.add {
         marks.text("+", text, &under, look.text_size, regular);
-        let mut add = flat_button(ElementId::Name(format!("{key}-add").into()), &look, hover, "New Tab")
-            .text_size(look.text_size)
-            .occlude()
-            .child("+");
+        let add_hover = fluent.map_or(hover, |f| f.button_hover);
+        let add = flat_button(ElementId::Name(format!("{key}-add").into()), &look, add_hover, "New Tab").occlude();
+        let mut add = match fluent {
+            // TabViewItemAddButton: 32 by 24, 3 px off the strip's line.
+            Some(f) => add
+                .w(px(32.))
+                .h(px(24.))
+                .mt(f.height - px(27.))
+                .active(move |s| s.bg(f.button_pressed))
+                .child(crate::forms::glyph::glyph(crate::forms::glyph::Glyph::Plus, px(12.), text, px(1.))),
+            None => add.text_size(look.text_size).child("+"),
+        };
         if let Some(on_input) = on_input.clone() {
             add = add.on_click(move |_, window, cx| on_input(BarInput::Add, window, cx));
         }
@@ -792,5 +931,24 @@ impl Build<'_> {
         let mut wrapper = div();
         wrapper.style().refine(&props.style);
         wrapper.flex().child(element).children(ring).into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use nd_theme::{Metrics, Palette, Preset, Scheme, Theme};
+
+    fn theme(preset: Preset, scheme: Scheme) -> Theme {
+        Theme::derive(preset, scheme, Palette::baked_for(preset, scheme), Metrics::preset(preset), 1.)
+    }
+
+    #[test]
+    fn only_fluent_tabs_take_the_tabview_strip_with_its_selected_fill() {
+        for (scheme, fill) in [(Scheme::Light, "#f9f9f9"), (Scheme::Dark, "#282828")] {
+            let look = super::TabLook::of(&theme(Preset::Fluent, scheme));
+            assert!(look.fluent.is_some(), "{scheme:?}");
+            assert_eq!(look.content, nd_theme::color::parse_hex(fill).unwrap(), "{scheme:?}");
+        }
+        assert!(super::TabLook::of(&theme(Preset::Adwaita, Scheme::Light)).fluent.is_none());
     }
 }
