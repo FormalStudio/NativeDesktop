@@ -35,8 +35,8 @@ use objc2_app_kit::{
     NSIndexPathNSCollectionViewAdditions, NSOutlineView, NSOutlineViewDataSource, NSOutlineViewDelegate,
     NSPasteboardItem, NSPasteboardWriting, NSResponder, NSScrollView, NSTableColumn, NSTableColumnResizingOptions,
     NSTableRowView, NSTableView, NSTableViewAnimationOptions, NSTableViewColumnAutoresizingStyle,
-    NSTableViewDataSource, NSTableViewDelegate, NSTableViewSelectionHighlightStyle, NSTableViewStyle, NSTrackingArea, NSTrackingAreaOptions, NSView,
-    NSViewBoundsDidChangeNotification,
+    NSTableViewDataSource, NSTableViewDelegate, NSTableViewSelectionHighlightStyle, NSTableViewStyle, NSTrackingArea,
+    NSTrackingAreaOptions, NSView, NSViewBoundsDidChangeNotification,
 };
 use objc2_core_foundation::CGFloat;
 use objc2_foundation::{

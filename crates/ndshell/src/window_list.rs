@@ -46,7 +46,9 @@ fn on_screen(pid: u32, every_layer: bool) -> Vec<WindowInfo> {
         let dict = unsafe { list.value_at_index(index).cast::<CFDictionary>().as_ref() };
         let Some(dict) = dict else { continue };
         unsafe {
-            if number(dict, kCGWindowOwnerPID) != Some(i64::from(pid)) || (!every_layer && number(dict, kCGWindowLayer) != Some(0)) {
+            if number(dict, kCGWindowOwnerPID) != Some(i64::from(pid))
+                || (!every_layer && number(dict, kCGWindowLayer) != Some(0))
+            {
                 continue;
             }
             let Some(id) = number(dict, kCGWindowNumber) else { continue };
