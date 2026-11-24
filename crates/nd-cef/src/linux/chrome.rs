@@ -18,8 +18,8 @@ use std::rc::Rc;
 
 use cef::{BrowserSettings, CefString, Client, RequestContext, RuntimeStyle, WindowInfo, browser_host_create_browser};
 use x11rb::connection::Connection;
-use x11rb::protocol::shape::{ConnectionExt as _, SK, SO};
 use x11rb::protocol::Event;
+use x11rb::protocol::shape::{ConnectionExt as _, SK, SO};
 use x11rb::protocol::xinput::{self, ConnectionExt as _};
 use x11rb::protocol::xproto::{
     ClipOrdering, ConfigureWindowAux, ConnectionExt as _, CreateWindowAux, EventMask, ImageFormat, InputFocus,
@@ -235,7 +235,8 @@ impl Chrome {
     /// so every placement puts the page's canvas back once the theme has moved it.
     fn canvas_base(&self) {
         let canvas = crate::page::canvas(self.page);
-        let mut browser = crate::page::get(self.page).and_then(|p| p.host()).and_then(|h| cef::ImplBrowserHost::browser(&h));
+        let mut browser =
+            crate::page::get(self.page).and_then(|p| p.host()).and_then(|h| cef::ImplBrowserHost::browser(&h));
         if let Some(view) = cef::browser_view_get_for_browser(browser.as_mut())
             && cef::ImplView::background_color(&view) != canvas
         {
