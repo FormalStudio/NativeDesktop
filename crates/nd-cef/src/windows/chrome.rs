@@ -668,7 +668,15 @@ wrap_browser_view_delegate! {
         id: u64,
     }
 
-    impl ViewDelegate {}
+    impl ViewDelegate {
+        /// Pins the page base background to white over the Views theme; see the macOS
+        /// `NdBrowserView` for why and its limit.
+        fn on_theme_changed(&self, view: Option<&mut View>) {
+            if let Some(view) = view {
+                view.set_background_color(crate::page::PAGE_BACKGROUND);
+            }
+        }
+    }
 
     impl BrowserViewDelegate {
         fn browser_runtime_style(&self) -> RuntimeStyle {

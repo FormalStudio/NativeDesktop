@@ -138,7 +138,7 @@ impl CefPage {
     fn browser_settings() -> BrowserSettings {
         BrowserSettings {
             windowless_frame_rate: 60,
-            background_color: 0xffff_ffff,
+            background_color: PAGE_BACKGROUND,
             // Chrome style anchors it to a toolbar nobody sees; zoom is reported to the app.
             chrome_zoom_bubble: cef::State::DISABLED,
             ..BrowserSettings::default()
@@ -1113,6 +1113,9 @@ impl CefPage {
         });
     }
 }
+
+/// What a page with no background of its own sits on, as in Chrome: opaque white.
+pub(crate) const PAGE_BACKGROUND: u32 = 0xffff_ffff;
 
 /// How long a `beforeunload` probe may go unanswered before the page closes anyway.
 const BEFOREUNLOAD_WAIT: std::time::Duration = std::time::Duration::from_secs(1);

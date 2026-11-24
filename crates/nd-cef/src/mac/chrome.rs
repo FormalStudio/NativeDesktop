@@ -663,7 +663,19 @@ wrap_browser_view_delegate! {
         id: u64,
     }
 
-    impl ViewDelegate {}
+    impl ViewDelegate {
+        /// Chrome style hands the BrowserView's colour to the page as its base background, and
+        /// the Views theme makes that dark grey under a dark appearance, where Chrome shows a
+        /// page with no colours of its own on white. A theme change resets it, so it is set
+        /// again on each. shortcut: the override also wins over a page's own
+        /// `color-scheme: dark` canvas (its text stays light); lift it once CEF lets Chrome style
+        /// leave the page base background unset.
+        fn on_theme_changed(&self, view: Option<&mut View>) {
+            if let Some(view) = view {
+                view.set_background_color(crate::page::PAGE_BACKGROUND);
+            }
+        }
+    }
 
     impl BrowserViewDelegate {
         fn browser_runtime_style(&self) -> RuntimeStyle {
