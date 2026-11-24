@@ -110,6 +110,8 @@ pub struct VirtualInput {
     mod_masks: [u32; 4],
     /// Modifiers [`VirtualInput::hold`] keeps down across clicks, drags and keys.
     held: Vec<Modifier>,
+    /// The XKB group (layout) [`VirtualInput::set_group`] locked.
+    group: u32,
     started: Instant,
 }
 
@@ -134,32 +136,7 @@ impl VirtualInput {
         let pointer = pointers.create_virtual_pointer_with_output(Some(&seat), Some(&output), &qh, ());
         let keyboard = keyboards.create_virtual_keyboard(&seat, &qh, ());
 
-        let context = xkbcommon::xkb::Context::new(xkbcommon::xkb::CONTEXT_NO_FLAGS);
-        let keymap = xkbcommon::xkb::Keymap::new_from_names(
-            &context,
-            "",
-            "",
-            "us",
-            "",
-            None,
-            xkbcommon::xkb::KEYMAP_COMPILE_NO_FLAGS,
-        )
-        .ok_or("xkbcommon could not compile the us keymap")?;
-        let text = keymap.get_as_string(xkbcommon::xkb::KEYMAP_FORMAT_TEXT_V1);
-        let mask = |name: &str| {
-            let index = keymap.mod_get_index(name);
-            if index == xkbcommon::xkb::MOD_INVALID { 0 } else { 1 << index }
-        };
-        let mod_masks = [
-            mask(xkbcommon::xkb::MOD_NAME_SHIFT),
-            mask(xkbcommon::xkb::MOD_NAME_CTRL),
-            mask(xkbcommon::xkb::MOD_NAME_ALT),
-            mask(xkbcommon::xkb::MOD_NAME_LOGO),
-        ];
-        let fd = rustix::fs::memfd_create("nd-keymap", rustix::fs::MemfdFlags::CLOEXEC).map_err(|e| e.to_string())?;
-        let mut file = File::from(fd);
-        file.write_all(text.as_bytes()).and_then(|()| file.write_all(&[0])).map_err(|e| e.to_string())?;
-        keyboard.keymap(xkbcommon::xkb::KEYMAP_FORMAT_TEXT_V1, file.as_fd(), text.len() as u32 + 1);
+        let mod_masks = upload_keymap(&keyboard, "us", "")?;
 
         let mut this = Self {
             conn,
@@ -170,10 +147,28 @@ impl VirtualInput {
             position: (0., 0.),
             mod_masks,
             held: Vec::new(),
+            group: 0,
             started: Instant::now(),
         };
         this.sync()?;
         Ok(this)
+    }
+
+    /// Gives the keyboard the XKB `layout` and `variant`, comma lists for several ("us,de",
+    /// ",nodeadkeys"), as a session's input config does. [`keys`] stay evdev codes: what they type
+    /// follows the layout.
+    pub fn set_layout(&mut self, layout: &str, variant: &str) -> Result<(), String> {
+        self.mod_masks = upload_keymap(&self.keyboard, layout, variant)?;
+        self.group = 0;
+        self.sync()
+    }
+
+    /// Switches to the `group`th of [`VirtualInput::set_layout`]'s layouts, as a layout switch
+    /// in the session does.
+    pub fn set_group(&mut self, group: u32) -> Result<(), String> {
+        self.group = group;
+        self.set_modifiers(&[]);
+        self.sync()
     }
 
     fn time(&self) -> u32 {
@@ -309,7 +304,7 @@ impl VirtualInput {
                 Modifier::Super => self.mod_masks[3],
             }
         });
-        self.keyboard.modifiers(depressed, 0, 0, 0);
+        self.keyboard.modifiers(depressed, 0, 0, self.group);
     }
 
     /// Presses and releases `key` (an evdev code, see [`keys`]) with `mods` held, and any
@@ -327,6 +322,41 @@ impl VirtualInput {
         }
         self.sync()
     }
+}
+
+/// Compiles `layout` and `variant`, hands the keymap to `keyboard` and returns the masks of
+/// Shift, Ctrl, Alt and Super in it.
+fn upload_keymap(
+    keyboard: &zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1,
+    layout: &str,
+    variant: &str,
+) -> Result<[u32; 4], String> {
+    let context = xkbcommon::xkb::Context::new(xkbcommon::xkb::CONTEXT_NO_FLAGS);
+    let keymap = xkbcommon::xkb::Keymap::new_from_names(
+        &context,
+        "",
+        "",
+        layout,
+        variant,
+        None,
+        xkbcommon::xkb::KEYMAP_COMPILE_NO_FLAGS,
+    )
+    .ok_or_else(|| format!("xkbcommon could not compile the {layout}({variant}) keymap"))?;
+    let text = keymap.get_as_string(xkbcommon::xkb::KEYMAP_FORMAT_TEXT_V1);
+    let mask = |name: &str| {
+        let index = keymap.mod_get_index(name);
+        if index == xkbcommon::xkb::MOD_INVALID { 0 } else { 1 << index }
+    };
+    let fd = rustix::fs::memfd_create("nd-keymap", rustix::fs::MemfdFlags::CLOEXEC).map_err(|e| e.to_string())?;
+    let mut file = File::from(fd);
+    file.write_all(text.as_bytes()).and_then(|()| file.write_all(&[0])).map_err(|e| e.to_string())?;
+    keyboard.keymap(xkbcommon::xkb::KEYMAP_FORMAT_TEXT_V1, file.as_fd(), text.len() as u32 + 1);
+    Ok([
+        mask(xkbcommon::xkb::MOD_NAME_SHIFT),
+        mask(xkbcommon::xkb::MOD_NAME_CTRL),
+        mask(xkbcommon::xkb::MOD_NAME_ALT),
+        mask(xkbcommon::xkb::MOD_NAME_LOGO),
+    ])
 }
 
 fn modifier_key(m: Modifier) -> u32 {
