@@ -277,7 +277,7 @@ impl WebView {
     /// came up has no `beforeunload` to hold it, and its window must not wait on it.
     fn fail(&self, command: Command, error: &str) {
         match command {
-            Command::RequestClose => self.page().emit(crate::CloseApproved { approved: true }),
+            Command::RequestClose => self.page().answer(crate::CloseApproved { approved: true }),
             command => fail(command, error),
         }
     }
@@ -639,5 +639,15 @@ mod tests {
         assert!(queue.is_empty());
         assert!(page.view().is_err());
         assert!(!queue.is_empty(), "the queued close was answered");
+    }
+
+    /// A backend updating an element in place (a replacement page under a reused key) runs the
+    /// update programmatically, which drops what the element emits meanwhile.
+    #[test]
+    fn a_close_approved_while_an_element_updates_still_arrives() {
+        let (page, queue) = failed_page();
+        page.request_close();
+        queue.programmatic(|| assert!(page.view().is_err()));
+        assert!(!queue.is_empty(), "the approval outlived the update");
     }
 }

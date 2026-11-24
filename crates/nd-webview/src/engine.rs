@@ -356,6 +356,16 @@ impl Page {
         }
     }
 
+    /// Like [`emit`](Self::emit) for the answer to a request the app made: it survives a
+    /// backend updating the element at the time.
+    pub fn answer<E: 'static>(&self, event: E) {
+        let target = self.shared.target.borrow();
+        if let Some(t) = target.as_ref() {
+            t.emit.answer(event);
+            (t.wake)();
+        }
+    }
+
     fn update<T: PartialEq + Clone>(&self, get: impl Fn(&mut PageState) -> &mut T, value: T) -> bool {
         let mut state = self.shared.state.borrow_mut();
         let slot = get(&mut state);

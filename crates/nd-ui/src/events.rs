@@ -63,6 +63,12 @@ impl EventQueue {
         }
     }
 
+    /// Queues `event` even inside a programmatic scope: an answer to something the app asked
+    /// for, which no setter echoes.
+    pub fn push_answer(&self, node: NodeId, event: Box<dyn Any>) {
+        self.0.borrow_mut().events.push_back(Queued::Event(NativeEvent { node, event }));
+    }
+
     /// Queues `call` to run with `window` when the queue drains, like a native event.
     pub fn push_call(&self, window: WindowId, call: Delivery) {
         let mut queue = self.0.borrow_mut();
@@ -95,6 +101,12 @@ impl Emit {
     /// Emits an event already boxed, such as a [`Response`](crate::semantics::Response)'s.
     pub fn emit_boxed(&self, event: Box<dyn Any>) {
         self.queue.push(self.node, event);
+    }
+
+    /// Emits the answer to a request the app made. It arrives even when it comes up during a
+    /// programmatic update, which would drop a plain [`emit`](Self::emit).
+    pub fn answer<E: 'static>(&self, event: E) {
+        self.queue.push_answer(self.node, Box::new(event));
     }
 
     pub fn node(&self) -> NodeId {
