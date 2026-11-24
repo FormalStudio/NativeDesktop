@@ -785,6 +785,7 @@ impl Inner {
         };
         let opened = self.app.try_borrow().ok().and_then(|app| app.window(id).map(|w| w.options().clone()));
         options.focus = opened.as_ref().is_none_or(|o| o.activate);
+        options.window_min_size = opened.as_ref().and_then(|o| o.min_size);
         if opened.as_ref().is_some_and(|o| o.kind == nd_ui::WindowKind::Popup) {
             options.kind = gpui::WindowKind::PopUp;
             options.is_resizable = false;
