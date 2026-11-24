@@ -112,15 +112,18 @@ fn toggles(element: gpui::Stateful<gpui::Div>, ctl: &Ctl, next: bool) -> gpui::S
     })
 }
 
-/// Focusable, with the focus ring turning on at the first key.
+/// Focusable, with the focus ring turning on at the first key. GPUI focuses the control on the
+/// press itself, before any click, so the press is what hides the ring.
 pub(crate) fn pressable(element: gpui::Stateful<gpui::Div>, ctl: &Ctl) -> gpui::Stateful<gpui::Div> {
-    let key: Sink = ctl.sink.clone();
-    element.track_focus(ctl.focus()).cursor(ctl.look.cursor).on_key_down(
-        move |_: &KeyDownEvent, window: &mut Window, _: &mut App| {
+    let (key, press): (Sink, Sink) = (ctl.sink.clone(), ctl.sink.clone());
+    element
+        .track_focus(ctl.focus())
+        .cursor(ctl.look.cursor)
+        .on_mouse_down(gpui::MouseButton::Left, move |_, _, _| press.pressed())
+        .on_key_down(move |_: &KeyDownEvent, window: &mut Window, _: &mut App| {
             key.keyboard();
             window.refresh();
-        },
-    )
+        })
 }
 
 pub(crate) fn checkbox(

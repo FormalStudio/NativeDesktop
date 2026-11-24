@@ -25,6 +25,10 @@ The rules and values are in [docs/dev/hig/windows.md](../dev/hig/windows.md).
   | nd after | 4 | 4 | 4 |
 
   Label: Settings and nd both set the text's cap centre 1 px below the track's centre.
+- [x] A click left the focus visual on a switch, check box or radio, which WinUI shows for
+  keyboard focus only: GPUI focuses on the press, before the click marked it as the pointer's.
+  Now the press marks it. `forms::a_click_draws_no_focus_ring`, and a VM click on the gallery's
+  Wi-Fi switch.
 - [x] Radio button: 6 px dot, no states. Now 12/14/10 dot, 32 px rows 8 apart. VM capture
   side by side with the RadioButton page (40 px pitch, same ring and dot).
 - [x] Slider: plain white knob. Now a 20 px thumb with a 1 px elevation border and a 12/14/10

@@ -555,6 +555,26 @@ mod forms {
         assert_eq!((left, top, bottom), (inset, inset, inset), "knob insets left, top, bottom at {scale}x");
     }
 
+    /// WinUI shows a focus visual for keyboard focus only: a click on a switch draws no ring,
+    /// a key on it then does.
+    pub fn a_click_draws_no_focus_ring() {
+        let mut rig = open_in(Preset::Fluent, WindowAppearance::Light, false);
+        let ring = |rig: &Rig| {
+            let b = rig.node("switch").bounds.expect("switch laid out");
+            let capture = rig.host.job(|app| app.capture(rig.window)).expect("capture");
+            let image = image::load_from_memory(&capture.png).expect("png").to_luma8();
+            let scale = image.width() as f32 / SIZE.0;
+            // FocusStrokeColorOuter, 3 px left of the track, halfway down.
+            let (x, y) = ((b.origin.x - 3.) * scale, (b.origin.y + b.size.height / 2.) * scale);
+            image.get_pixel(x as u32, y as u32).0[0] < 128
+        };
+        rig.click("switch");
+        assert!(!ring(&rig), "ring after a click");
+        rig.keys(&["space"]);
+        assert!(ring(&rig), "no ring after a key");
+        rig.take();
+    }
+
     pub fn typing_arrives_as_text_changed() {
         let mut rig = open();
         rig.click("text");
@@ -899,6 +919,7 @@ fn main() {
         ),
         ("forms::switch_click_and_space_toggle", forms::switch_click_and_space_toggle),
         ("forms::fluent_switch_knob_is_centred", forms::fluent_switch_knob_is_centred),
+        ("forms::a_click_draws_no_focus_ring", forms::a_click_draws_no_focus_ring),
         ("forms::typing_arrives_as_text_changed", forms::typing_arrives_as_text_changed),
         ("forms::an_app_write_replaces_the_text", forms::an_app_write_replaces_the_text),
         ("forms::secure_and_search_fields", forms::secure_and_search_fields),
