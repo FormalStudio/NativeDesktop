@@ -356,9 +356,9 @@ pub(crate) fn vertical(look: ScrollbarLook, f: Frame<'_>, window: &mut Window) -
     let thumb = div()
         .absolute()
         .top(px(thumb_top))
-        // Measured on the WinUI Gallery: the 2 px indicator sits 6 px into the bar, 4 px from its
-        // outer edge; the 6 px thumb is centred.
-        .left(px(6. + ((size - look.thick) / 2. - 6.) * e))
+        // Measured on the WinUI Gallery: the indicator and the expanded thumb both keep 4 px
+        // from the bar's outer edge, so the 6 px thumb sits 1 px off centre.
+        .left(px(size - 4. - width))
         .w(px(width))
         .h(px(thumb_len))
         .rounded(px(width / 2.))
