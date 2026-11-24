@@ -49,6 +49,7 @@ fn palette() -> PaletteRefinement {
         on_accent: hsla(NSColor::alternateSelectedControlTextColor()),
         accent_container: hsla(NSColor::selectedTextBackgroundColor()),
         on_accent_container: hsla(NSColor::labelColor()),
+        accent_text: None,
         separator: hsla(NSColor::separatorColor()),
         selection: hsla(NSColor::selectedContentBackgroundColor()),
         danger: hsla(NSColor::systemRedColor()),

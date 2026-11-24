@@ -43,7 +43,8 @@ pub struct TextTokens {
     pub on_osd: Hsla,
     /// Error text: `danger`, darkened or lightened until it reads at 4.5:1 on every surface.
     pub danger: Hsla,
-    /// Links and mentions: the accent, made legible on every surface the same way.
+    /// Links and mentions: `accent.text` where a source sets it, otherwise the accent made
+    /// legible on every surface the same way.
     pub accent: Hsla,
     pub success: Hsla,
     pub warning: Hsla,
@@ -180,10 +181,10 @@ impl Theme {
                 on_accent: p.on_accent,
                 on_osd: if preset == Preset::Adwaita { nd_gpui::gpui::white() } else { text_primary },
                 danger: role_text(p.danger),
-                // Links, mentions and search matches sit inside body text, so the accent keeps a
+                // Links, mentions and search matches sit inside body text, so a derived link keeps a
                 // step of lightness from it: a pastel accent lifted for legibility otherwise
                 // reads as the text itself.
-                accent: crate::color::apart_from(role_text(p.accent), text_primary, &surfaces, 1.6),
+                accent: p.accent_text.unwrap_or_else(|| crate::color::apart_from(role_text(p.accent), text_primary, &surfaces, 1.6)),
                 success: role_text(p.success),
                 warning: role_text(p.warning),
             },

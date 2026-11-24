@@ -110,7 +110,9 @@ accent = "#3d6bff"
 The 16 color keys are `surface.base`, `surface.sidebar`, `surface.raised`,
 `surface.overlay`, `text.primary`, `text.secondary`, `text.tertiary`, `accent`, `text.on_accent`,
 `accent.container`, `accent.on_container`, `separator`, `selection`, `danger`, `success`, and
-`warning`. An unknown key, a value that isn't hex, or an unknown `appearance` rejects the whole
+`warning`. `accent.text` is optional: it sets link text outright, and left unset, links take the
+accent moved far enough from body text to read as a link. On Windows it comes from the system
+accent (WinUI's AccentTextFillColorPrimary). An unknown key, a value that isn't hex, or an unknown `appearance` rejects the whole
 file, so you notice a typo instead of having it ignored. After a rejected edit, the app keeps the
 last good theme.
 

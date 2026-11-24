@@ -1,6 +1,6 @@
 //! The system accent, read the way WinUI reads it: `UISettings` gives the accent and three
 //! lighter and three darker shades, and each scheme takes the shade WinUI's resources use
-//! (AccentFillColorDefault is AccentDark1 in light, AccentLight2 in dark).
+//! (AccentFillColorDefault is AccentDark1 in light, AccentLight2 in dark; link text Dark2 and Light3).
 
 use nd_gpui::gpui::{Hsla, Rgba};
 use nd_theme::{PaletteRefinement, SchemePalettes};
@@ -28,6 +28,8 @@ pub fn os_palettes() -> SchemePalettes {
             on_accent: Some(white),
             accent_container: Some(light3),
             on_accent_container: Some(dark3),
+            // AccentTextFillColorPrimary.
+            accent_text: Some(dark2),
             selection: Some(light2.opacity(0.4)),
             ..PaletteRefinement::default()
         },
@@ -36,6 +38,7 @@ pub fn os_palettes() -> SchemePalettes {
             on_accent: Some(black),
             accent_container: Some(dark2),
             on_accent_container: Some(white),
+            accent_text: Some(light3),
             selection: Some(dark1.opacity(0.5)),
             ..PaletteRefinement::default()
         },

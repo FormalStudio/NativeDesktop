@@ -21,7 +21,8 @@ use crate::palette::{PaletteRefinement, Scheme, SchemePalettes};
 /// Material You role to nd token. `green` and `yellow` are matugen `custom_colors`, since
 /// Material has no success or warning role. Sidebars sit on `surface_container` beside cards,
 /// as the GTK colours the same desktop renders place them (FormalShell's
-/// `gtk-colors.css.tmpl`), so a sidebar matches the GNOME apps next to it.
+/// `gtk-colors.css.tmpl`), so a sidebar matches the GNOME apps next to it. Material has no
+/// link role either, so `accent.text` stays unset and links derive from `primary`.
 pub const ROLE_MAP: &[(&str, &str)] = &[
     ("surface", "surface.base"),
     ("surface_container", "surface.sidebar"),

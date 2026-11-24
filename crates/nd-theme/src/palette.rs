@@ -1,5 +1,6 @@
-//! The base colours every theme derives from: sixteen keys per scheme, named like the tokens
-//! they feed (ARCHITECTURE.md 4). Sources fill them in order (`theme.toml`, matugen
+//! The base colours every theme derives from: sixteen keys per scheme, and optional keys a
+//! source sets only where it has the real colour, named like the tokens they feed
+//! (ARCHITECTURE.md 4). Sources fill them in order (`theme.toml`, matugen
 //! `theme.json`, the OS, the baked-in palettes) and the first source to set a key wins.
 
 use nd_gpui::gpui::Hsla;
@@ -28,38 +29,43 @@ impl Scheme {
 }
 
 macro_rules! palette {
-    ($($field:ident = $key:literal),* $(,)?) => {
-        /// One scheme's base colours.
+    ($($field:ident = $key:literal),* ; optional $($opt:ident = $okey:literal),* $(,)?) => {
+        /// One scheme's base colours. An optional key left unset derives its token from the
+        /// required keys.
         #[derive(Clone, Copy, Debug, PartialEq)]
         pub struct Palette {
             $(pub $field: Hsla,)*
+            $(pub $opt: Option<Hsla>,)*
         }
 
         /// A partial [`Palette`]: what one source sets.
         #[derive(Clone, Copy, Debug, Default, PartialEq)]
         pub struct PaletteRefinement {
             $(pub $field: Option<Hsla>,)*
+            $(pub $opt: Option<Hsla>,)*
         }
 
         /// The token name of every key, as `theme.toml` spells it.
-        pub const KEYS: &[&str] = &[$($key),*];
+        pub const KEYS: &[&str] = &[$($key,)* $($okey,)*];
 
         impl PaletteRefinement {
             /// Keys this refinement sets, by token name.
             pub fn keys(&self) -> Vec<&'static str> {
                 let mut keys = Vec::new();
                 $(if self.$field.is_some() { keys.push($key); })*
+                $(if self.$opt.is_some() { keys.push($okey); })*
                 keys
             }
 
             pub fn is_empty(&self) -> bool {
-                $(self.$field.is_none())&&*
+                $(self.$field.is_none())&&* $(&& self.$opt.is_none())*
             }
 
             /// Sets `key` (a token name) to `color`. False for an unknown key.
             pub fn set(&mut self, key: &str, color: Hsla) -> bool {
                 match key {
                     $($key => self.$field = Some(color),)*
+                    $($okey => self.$opt = Some(color),)*
                     _ => return false,
                 }
                 true
@@ -67,18 +73,24 @@ macro_rules! palette {
 
             /// Keys set here win over `below`.
             pub fn over(self, below: PaletteRefinement) -> PaletteRefinement {
-                PaletteRefinement { $($field: self.$field.or(below.$field),)* }
+                PaletteRefinement {
+                    $($field: self.$field.or(below.$field),)*
+                    $($opt: self.$opt.or(below.$opt),)*
+                }
             }
 
             /// Fills every unset key from `base`.
             pub fn complete(self, base: &Palette) -> Palette {
-                Palette { $($field: self.$field.unwrap_or(base.$field),)* }
+                Palette {
+                    $($field: self.$field.unwrap_or(base.$field),)*
+                    $($opt: self.$opt.or(base.$opt),)*
+                }
             }
         }
 
         impl From<Palette> for PaletteRefinement {
             fn from(p: Palette) -> Self {
-                PaletteRefinement { $($field: Some(p.$field),)* }
+                PaletteRefinement { $($field: Some(p.$field),)* $($opt: p.$opt,)* }
             }
         }
     };
@@ -100,7 +112,10 @@ palette! {
     selection = "selection",
     danger = "danger",
     success = "success",
-    warning = "warning",
+    warning = "warning";
+    optional
+    // Link text, where the system names its own shade instead of the derived one.
+    accent_text = "accent.text",
 }
 
 fn hex(text: &str) -> Hsla {
@@ -127,6 +142,8 @@ impl Palette {
                 on_accent: hex("#ffffff"),
                 accent_container: hex("#cce4f6"),
                 on_accent_container: hex("#003e73"),
+                // AccentTextFillColorPrimary: the accent's Dark2.
+                accent_text: Some(hex("#004a83")),
                 separator: hex("#0000000f"),
                 selection: hex("#cce4f6"),
                 danger: hex("#c42b1c"),
@@ -146,6 +163,8 @@ impl Palette {
                 on_accent: hex("#000000"),
                 accent_container: hex("#004a83"),
                 on_accent_container: hex("#ffffff"),
+                // AccentTextFillColorPrimary: the accent's Light3.
+                accent_text: Some(hex("#99ebff")),
                 separator: hex("#ffffff15"),
                 selection: hex("#004a83"),
                 danger: hex("#ff99a4"),
@@ -167,6 +186,7 @@ impl Palette {
                 on_accent: hex("#ffffff"),
                 accent_container: hex("#cce0f8"),
                 on_accent_container: hex("#000006cc"),
+                accent_text: None,
                 separator: hex("#00000626"),
                 selection: hex("#3584e440"),
                 danger: hex("#e01b24"),
@@ -186,6 +206,7 @@ impl Palette {
                 on_accent: hex("#ffffff"),
                 accent_container: hex("#233751"),
                 on_accent_container: hex("#ffffff"),
+                accent_text: None,
                 separator: hex("#ffffff26"),
                 selection: hex("#3584e466"),
                 danger: hex("#c01c28"),
@@ -211,6 +232,7 @@ impl Palette {
                 on_accent: hex("#ffffff"),
                 accent_container: hex("#d9e5ff"),
                 on_accent_container: hex("#0b2a66"),
+                accent_text: None,
                 separator: hex("#0000001a"),
                 selection: hex("#cfdfff"),
                 danger: hex("#d93025"),
@@ -231,6 +253,7 @@ impl Palette {
                 on_accent: hex("#0b1a33"),
                 accent_container: hex("#1f3a6e"),
                 on_accent_container: hex("#d9e5ff"),
+                accent_text: None,
                 separator: hex("#ffffff1f"),
                 selection: hex("#2c4a80"),
                 danger: hex("#ff6b5e"),

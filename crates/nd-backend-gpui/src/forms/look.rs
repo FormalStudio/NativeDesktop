@@ -600,3 +600,18 @@ pub(crate) fn cubic_bezier(c: [f32; 4], x: f32) -> f32 {
     }
     at(c[1], c[3], (lo + hi) / 2.)
 }
+
+#[cfg(test)]
+mod tests {
+    use nd_theme::{Metrics, Palette, Preset, Scheme, Theme};
+
+    #[test]
+    fn fluent_links_take_the_accents_dark2_in_light_and_light3_in_dark() {
+        // The default Windows accent's shades, as WinUI's resources give them.
+        for (scheme, shade) in [(Scheme::Light, "#004a83"), (Scheme::Dark, "#99ebff")] {
+            let palette = Palette::baked_for(Preset::Fluent, scheme);
+            let theme = Theme::derive(Preset::Fluent, scheme, palette, Metrics::preset(Preset::Fluent), 1.);
+            assert_eq!(super::FormLook::of(&theme).accent_text, nd_theme::color::parse_hex(shade).unwrap(), "{scheme:?}");
+        }
+    }
+}
