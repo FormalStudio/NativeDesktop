@@ -14,15 +14,23 @@ The rules and values are in [docs/dev/hig/windows.md](../dev/hig/windows.md).
 - [x] Toggle switch: off fill and outline colours, no knob growth. Now ControlAltFillSecondary
   off fill, strong outline, knob 12/14/17x14. Pixel-sampled against the ToggleSwitch page.
 - [x] Toggle switch: off knob sat 1 px right and down, since absolute insets start inside the
-  outline. Now the outline stays on (clear when on) and the knob is placed from the outer edge.
-  `forms::fluent_switch_knob_is_centred`; [capture](windows-shots/toggle-light-100.png) (before,
-  after, Settings), 8x at 100%:
+  track's border. Now the outline is drawn over the track and the knob is placed from its outer
+  edge. `forms::fluent_switch_knob_is_centred`; captures, nd beside Settings:
+  [light 100%](windows-shots/toggle-light-100.png) (before, after, Settings),
+  [dark 100%](windows-shots/toggle-dark-100.png), [dark 150%](windows-shots/toggle-dark-150.png).
 
-  | Off knob inset (px) | left | top | bottom |
+  | Off knob inset, device px (left, top, bottom) | 100% light | 100% dark | 150% dark |
   | --- | --- | --- | --- |
-  | Settings (WinUI) | 4 | 4 | 4 |
-  | nd before | 5 | 5 | 3 |
-  | nd after | 4 | 4 | 4 |
+  | Settings (WinUI) | 4, 4, 4 | 4, 4, 4 | 5, 6, 6 |
+  | nd before | 5, 5, 3 | | |
+  | nd after | 4, 4, 4 | 4, 4, 4 | 6, 6, 6 |
+
+  Fills follow the theme resources: off ControlAltFillColorSecondary, hover Tertiary, pressed
+  Quarternary (nd 249/240/231 over its white card; Settings 245 at rest, 227 pressed over a
+  `#fbfbfb` card; a synthetic pointer move never put Settings in its hover state, so hover is
+  from the resources only). Dark fill, outline and knob within one level. The paler look beside Settings
+  is the card under it: nd's cards are `#ffffff` on the layer fill, Settings' are
+  CardBackgroundFillColorDefault on Mica. Knob 12 px at rest in both, 17x14 pressed in both.
 
   Label: Settings and nd both set the text's cap centre 1 px below the track's centre.
 - [x] A click left the focus visual on a switch, check box or radio, which WinUI shows for

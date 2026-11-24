@@ -227,10 +227,7 @@ pub(crate) fn switch(b: &Build, id: NodeId, p: &SwitchProps, window: &mut Window
     };
     let knob = look.switch_height - look.switch_inset * 2.;
     let travel = look.switch_width - look.switch_inset * 2. - knob;
-    // Absolute insets start inside the track's outline, and WinUI measures the knob's inset
-    // from the outer edge, so the outline stays on in both states (clear when on).
-    let outline = if look.switch_outline.is_some() { px(1.) } else { px(0.) };
-    let (top, left) = (look.switch_inset - outline, look.switch_inset - outline + travel * at);
+    let (top, left) = (look.switch_inset, look.switch_inset + travel * at);
     let (grow, press) = (look.knob_hover_grow, look.knob_press);
     // WinUI's off track: ControlAltFillColorSecondary, Tertiary and Quarternary, as a checkbox.
     let [off_fill, off_hover, off_active] =
@@ -264,8 +261,11 @@ pub(crate) fn switch(b: &Build, id: NodeId, p: &SwitchProps, window: &mut Window
             (false, Some(_)) => off_fill,
             (false, None) => look.track,
         })
-        .when_some(look.switch_outline, |track, outline| {
-            track.border_1().border_color(if p.checked { gpui::transparent_black() } else { outline })
+        // Over the track, not a border of it: absolute insets start inside a border, which
+        // pixel snapping makes uneven at fractional scales, and WinUI measures the knob's
+        // inset from the outer edge.
+        .when_some(look.switch_outline.filter(|_| !p.checked), |track, outline| {
+            track.child(div().absolute().size_full().rounded_full().border_1().border_color(outline))
         });
     if p.enabled && look.trough_states {
         // libadwaita: the trough darkens hovered and pressed; checked, a 10% veil and a 20% shade.
