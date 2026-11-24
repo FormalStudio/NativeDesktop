@@ -292,7 +292,7 @@ impl Chrome {
             if st.browser.is_none_or(|(old, ..)| old != window) {
                 let keys = xinput::EventMask {
                     deviceid: xinput::Device::ALL_MASTER.into(),
-                    mask: vec![(xinput::XIEventMask::KEY_PRESS | xinput::XIEventMask::KEY_RELEASE).into()],
+                    mask: vec![xinput::XIEventMask::KEY_PRESS | xinput::XIEventMask::KEY_RELEASE],
                 };
                 let _ = conn.xinput_xi_select_events(window, &[keys]);
             }
