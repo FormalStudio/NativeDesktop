@@ -347,6 +347,10 @@ pub struct PaletteModel {
     /// What the field holds as far as nd knows (3.13 rule 2): the last query applied or typed.
     /// An app feeding a reported query back finds it equal and nothing is reset.
     native_query: Option<SharedString>,
+    /// Queries reported to the app that it has not fed back yet, oldest first. The app's echo
+    /// trails the field: one keystroke's query can arrive after the next keystroke landed, and
+    /// that late echo must not reseed the field with the shorter text.
+    unechoed: Vec<SharedString>,
     /// What the user typed, without a completion shown after it.
     typed: String,
     /// The completion drawn selected after `typed`.
@@ -401,10 +405,15 @@ impl PaletteModel {
     /// selected): only while presented and only when it differs from what the field holds.
     pub fn set_query(&mut self, query: &SharedString) -> bool {
         self.controlled_query = query.clone();
+        if let Some(at) = self.unechoed.iter().position(|q| q == query) {
+            self.unechoed.drain(..=at);
+            return false;
+        }
         if self.native_query.as_ref() == Some(query) {
             return false;
         }
         self.native_query = Some(query.clone());
+        self.unechoed.clear();
         if !self.presented {
             return false;
         }
@@ -442,6 +451,7 @@ impl PaletteModel {
         self.presented = true;
         self.typed = self.controlled_query.to_string();
         self.native_query = Some(self.controlled_query.clone());
+        self.unechoed.clear();
         self.suffix.clear();
         self.may_complete = false;
         self.select_all = true;
@@ -468,6 +478,7 @@ impl PaletteModel {
         self.suffix.clear();
         self.select_all = false;
         self.native_query = Some(text.into());
+        self.unechoed.push(text.to_owned().into());
         let events = vec![PaletteEvent::QueryChanged(text.to_owned().into())];
         self.apply_completion();
         events
@@ -582,6 +593,7 @@ impl PaletteModel {
         self.may_complete = false;
         self.select_all = false;
         self.native_query = Some(self.typed.clone().into());
+        self.unechoed.push(self.typed.clone().into());
         Some(vec![PaletteEvent::QueryChanged(self.typed.clone().into())])
     }
 
@@ -627,6 +639,19 @@ mod tests {
         m.set_items(&items);
         m.present();
         m
+    }
+
+    #[test]
+    fn a_late_echo_of_an_earlier_keystroke_keeps_what_was_typed_since() {
+        let mut m = open(rows(&["a"]), "");
+        m.edited("h");
+        m.edited("ha");
+        assert!(!m.set_query(&"h".into()), "the echo of the first keystroke");
+        assert_eq!(m.field_text(), "ha");
+        assert!(!m.set_query(&"ha".into()));
+        assert!(m.set_query(&"h".into()), "the same text set again by the app is a reseed");
+        assert_eq!(m.field_text(), "h");
+        assert_eq!(m.selection(), FieldSelection::All);
     }
 
     #[test]
