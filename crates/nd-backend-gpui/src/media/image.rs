@@ -83,7 +83,7 @@ fn render_image(decoded: &Decoded, frame: usize, crop: Option<f32>) -> Option<Ar
         let row = ((y * w + x0) * 4) as usize;
         bgra.extend_from_slice(rgba.get(row..row + (cw * 4) as usize)?);
     }
-    for pixel in bgra.chunks_exact_mut(4) {
+    for pixel in bgra.as_chunks_mut::<4>().0 {
         pixel.swap(0, 2);
     }
     let buffer = ::image::RgbaImage::from_raw(cw, ch, bgra)?;

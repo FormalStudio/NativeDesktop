@@ -1321,10 +1321,9 @@ define_class!(
 );
 
 impl NdGridView {
-    fn new(mtm: MainThreadMarker, shared: Rc<Shared>) -> Retained<NSCollectionView> {
+    fn new(mtm: MainThreadMarker, shared: Rc<Shared>) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(GridViewIvars { shared });
-        let this: Retained<Self> = unsafe { msg_send![super(this), init] };
-        Retained::into_super(this)
+        unsafe { msg_send![super(this), init] }
     }
 }
 
@@ -1448,7 +1447,7 @@ impl GridNative {
         let shared = Rc::new(Shared::new(mtm, props, emit, wake));
         let source = NdGridSource::alloc(mtm).set_ivars(GridIvars { shared: shared.clone() });
         let source: Retained<NdGridSource> = unsafe { msg_send![super(source), init] };
-        let collection = NdGridView::new(mtm, shared.clone());
+        let collection: Retained<NSCollectionView> = Retained::into_super(NdGridView::new(mtm, shared.clone()));
         let layout = NSCollectionViewFlowLayout::new(mtm);
         if let Some(g) = props.handle.0.borrow().grid() {
             layout.setItemSize(objc2_foundation::NSSize::new(g.item_width, g.item_height));

@@ -431,7 +431,7 @@ impl Opened {
 
     fn keys(&mut self, keys: &[&'static str]) {
         for key in keys {
-            self.input(vec![SyntheticInput::Key(Keystroke::parse(*key).expect("keystroke"))]);
+            self.input(vec![SyntheticInput::Key(Keystroke::parse(key).expect("keystroke"))]);
         }
     }
 

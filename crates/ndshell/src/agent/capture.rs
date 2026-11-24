@@ -91,7 +91,7 @@ impl Image {
         encoder.set_color(png::ColorType::Rgba);
         encoder.set_depth(png::BitDepth::Eight);
         let mut rgba = self.bgra.clone();
-        for px in rgba.chunks_exact_mut(4) {
+        for px in rgba.as_chunks_mut::<4>().0 {
             px.swap(0, 2);
         }
         let mut writer = encoder.write_header().map_err(|e| e.to_string())?;

@@ -1503,7 +1503,7 @@ pub(crate) fn text_area(
     let mut look = ctl.look;
     // The app's text size sets the area's, its line height scaled with it.
     if let Some(text_size) = p.style.text.font_size.map(|s| s.to_pixels(look.text_size)) {
-        look.line_height = look.line_height * (text_size / look.text_size);
+        look.line_height *= text_size / look.text_size;
         look.text_size = text_size;
     }
     let name = p.label.clone().or_else(|| p.tooltip.clone()).or_else(|| p.placeholder.clone()).unwrap_or_default();

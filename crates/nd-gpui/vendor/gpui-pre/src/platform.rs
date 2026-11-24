@@ -866,8 +866,9 @@ pub struct Configure {
     pub surface: Size<Pixels>,
     /// The decorations in force for this configure, tiling included.
     pub decorations: Decorations,
-    /// Whether this configure leaves the window maximized, or fullscreen.
+    /// Whether this configure leaves the window maximized.
     pub maximized: bool,
+    /// Whether this configure leaves the window fullscreen.
     pub fullscreen: bool,
 }
 

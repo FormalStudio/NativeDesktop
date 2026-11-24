@@ -701,7 +701,7 @@ impl TerminalElement {
                 // advances on Linux, which read as a glyph a whole line tall above the baseline.
                 let text = window.text_system();
                 let next = shaped_run.glyphs.get(i + 1).map(|n| n.position.x);
-                let advance = next.map_or(shaped.width, |x| x) - gl.position.x;
+                let advance = next.unwrap_or(shaped.width) - gl.position.x;
                 let ascent = text.ascent(shaped_run.font_id, fonts.size).as_f32();
                 let descent = text.descent(shaped_run.font_id, fonts.size).as_f32().abs();
                 let ink = Ink { x: 0., y: -ascent, width: advance.as_f32(), height: ascent + descent };

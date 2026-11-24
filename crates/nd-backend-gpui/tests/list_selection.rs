@@ -341,7 +341,7 @@ fn keys(cx: &mut HeadlessAppContext, host: &GpuiHost, window: WindowId, keys: &[
     cx.update(|cx| {
         host.update(cx, |app| {
             for k in keys {
-                let key = nd_ui::semantics::SyntheticInput::Key(Keystroke::parse(*k).expect("keystroke"));
+                let key = nd_ui::semantics::SyntheticInput::Key(Keystroke::parse(k).expect("keystroke"));
                 app.synthesize(window, &key).expect("posted");
             }
         })

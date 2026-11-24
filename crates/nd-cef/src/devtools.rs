@@ -111,7 +111,7 @@ impl Devtools {
             "Runtime.bindingCalled" if params["name"].as_str() == Some(BINDING) => {
                 let context = params["executionContextId"].as_i64().unwrap_or_default();
                 let contexts = self.contexts.borrow();
-                let Some((frame, name, default, origin)) = contexts.get(&context) else { return None };
+                let (frame, name, default, origin) = contexts.get(&context)?;
                 let world = if *default { String::new() } else { name.clone() };
                 let main = *frame == *self.main_frame.borrow();
                 return Some((world, origin.clone(), main, params["payload"].as_str().unwrap_or_default().to_owned()));

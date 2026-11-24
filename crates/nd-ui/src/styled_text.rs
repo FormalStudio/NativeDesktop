@@ -431,9 +431,7 @@ mod tests {
     fn fenced(line: &str, state: u32) -> StyledParagraph {
         let fence = line.starts_with("```");
         let code = state == 1 || fence;
-        let mut style = SpanStyle::default();
-        style.mono = code;
-        style.bold = !code && line.starts_with('#');
+        let style = SpanStyle { mono: code, bold: !code && line.starts_with('#'), ..Default::default() };
         StyledParagraph {
             runs: vec![(0..line.len(), style)],
             state: if fence { 1 - state } else { state },

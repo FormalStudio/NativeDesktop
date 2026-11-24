@@ -46,7 +46,7 @@ pub(crate) fn cg_image(width: u32, height: u32, rgba: &[u8]) -> Option<CFRetaine
         // SAFETY: the context owns `stride * h` bytes and nothing else touches them yet.
         let row = unsafe { std::slice::from_raw_parts_mut(data.add(y * stride), w * 4) };
         let src = &rgba[y * w * 4..(y + 1) * w * 4];
-        for (d, s) in row.chunks_exact_mut(4).zip(src.chunks_exact(4)) {
+        for (d, s) in row.as_chunks_mut::<4>().0.iter_mut().zip(src.as_chunks::<4>().0) {
             let a = u16::from(s[3]);
             d[0] = ((u16::from(s[0]) * a + 127) / 255) as u8;
             d[1] = ((u16::from(s[1]) * a + 127) / 255) as u8;

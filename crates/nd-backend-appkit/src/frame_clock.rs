@@ -66,7 +66,7 @@ define_class!(
             clock.now.set(tick.target_timestamp);
             clock.ticks.set(clock.ticks.get() + 1);
             clock.pending.set(Some(tick));
-            let run = clock.run.get().map_or((tick.target_timestamp, tick.target_timestamp, 0), |r| r);
+            let run = clock.run.get().unwrap_or((tick.target_timestamp, tick.target_timestamp, 0));
             clock.run.set(Some((run.0, tick.target_timestamp, run.2 + 1)));
             let callback = clock.callback.borrow().clone();
             if let Some(callback) = callback {

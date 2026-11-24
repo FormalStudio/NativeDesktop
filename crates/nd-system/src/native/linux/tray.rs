@@ -146,9 +146,11 @@ fn argb_icon(png_bytes: &[u8]) -> Result<ksni::Icon> {
     let info = reader.next_frame(&mut buf).map_err(|e| Error::Invalid(format!("tray icon: {e}")))?;
     let pixels = &buf[..info.buffer_size()];
     let data = match info.color_type {
-        png::ColorType::Rgba => pixels.chunks_exact(4).flat_map(|p| [p[3], p[0], p[1], p[2]]).collect(),
-        png::ColorType::Rgb => pixels.chunks_exact(3).flat_map(|p| [255, p[0], p[1], p[2]]).collect(),
-        png::ColorType::GrayscaleAlpha => pixels.chunks_exact(2).flat_map(|p| [p[1], p[0], p[0], p[0]]).collect(),
+        png::ColorType::Rgba => pixels.as_chunks::<4>().0.iter().flat_map(|p| [p[3], p[0], p[1], p[2]]).collect(),
+        png::ColorType::Rgb => pixels.as_chunks::<3>().0.iter().flat_map(|p| [255, p[0], p[1], p[2]]).collect(),
+        png::ColorType::GrayscaleAlpha => {
+            pixels.as_chunks::<2>().0.iter().flat_map(|p| [p[1], p[0], p[0], p[0]]).collect()
+        }
         png::ColorType::Grayscale => pixels.iter().flat_map(|&g| [255, g, g, g]).collect(),
         png::ColorType::Indexed => return Err(Error::Invalid("tray icon: indexed PNG after expansion".into())),
     };

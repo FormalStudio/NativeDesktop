@@ -402,7 +402,7 @@ impl Rig {
     }
 
     fn keys(&mut self, keys: &[&'static str]) {
-        let inputs = keys.iter().map(|k| SyntheticInput::Key(Keystroke::parse(*k).expect("keystroke"))).collect();
+        let inputs = keys.iter().map(|k| SyntheticInput::Key(Keystroke::parse(k).expect("keystroke"))).collect();
         self.input(inputs);
     }
 

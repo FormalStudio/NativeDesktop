@@ -66,7 +66,9 @@ pub fn parse(svg: &str) -> Result<(Vec<Piece>, f32), String> {
                     .map(|s| s.parse().map_err(|_| "bad point"))
                     .collect::<Result<_, _>>()?;
                 let mut segs: Vec<Seg> = nums
-                    .chunks_exact(2)
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
                     .enumerate()
                     .map(|(i, p)| if i == 0 { Seg::Move(p[0], p[1]) } else { Seg::Line(p[0], p[1]) })
                     .collect();

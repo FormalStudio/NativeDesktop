@@ -216,7 +216,7 @@ fn fence(line: &str) -> Option<u8> {
     if line.len() - trimmed.len() > 3 {
         return None;
     }
-    [b'`', b'~'].into_iter().find(|c| trimmed.len() >= 3 && trimmed.as_bytes()[..3].iter().all(|b| b == c))
+    (*b"`~").into_iter().find(|c| trimmed.len() >= 3 && trimmed.as_bytes()[..3].iter().all(|b| b == c))
 }
 
 /// About how wide `text` sets in the system font, in ems: where a list item's wrapped lines
@@ -699,7 +699,7 @@ mod tests {
         style_line(line, 0).runs.into_iter().map(|(r, s)| (&line[r], s)).collect()
     }
 
-    fn find<'a>(line: &'a str, part: &str) -> SpanStyle {
+    fn find(line: &str, part: &str) -> SpanStyle {
         let start = line.find(part).unwrap_or_else(|| panic!("{part} in {line}"));
         let styled = style_line(line, 0);
         styled.runs.iter().find(|(r, _)| r.start <= start && start < r.end).map(|(_, s)| s.clone()).unwrap_or_default()

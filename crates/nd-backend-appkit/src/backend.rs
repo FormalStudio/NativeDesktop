@@ -1887,10 +1887,10 @@ impl Backend for AppKitBackend {
                     unsafe { split.toggleSidebar(None) };
                 }
             }
-            nd_ui::backend::WindowCommand::Fullscreen(on) => {
-                if ns.styleMask().contains(objc2_app_kit::NSWindowStyleMask::FullScreen) != on {
-                    ns.toggleFullScreen(None);
-                }
+            nd_ui::backend::WindowCommand::Fullscreen(on)
+                if ns.styleMask().contains(objc2_app_kit::NSWindowStyleMask::FullScreen) != on =>
+            {
+                ns.toggleFullScreen(None);
             }
             _ => {}
         }

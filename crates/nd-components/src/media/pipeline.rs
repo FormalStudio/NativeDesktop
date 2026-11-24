@@ -838,7 +838,7 @@ fn decode_svg(bytes: &[u8], request: &DecodeRequest) -> Result<Decoded, String> 
 fn apply_tint(decoded: &mut Decoded, [r, g, b, a]: [u8; 4]) {
     for frame in &mut decoded.frames {
         let mut rgba = frame.rgba.to_vec();
-        for px in rgba.chunks_exact_mut(4) {
+        for px in rgba.as_chunks_mut::<4>().0 {
             px[3] = ((u16::from(px[3]) * u16::from(a) + 127) / 255) as u8;
             px[..3].copy_from_slice(&[r, g, b]);
         }
