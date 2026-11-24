@@ -164,10 +164,13 @@ impl Build<'_> {
             // with the title row, and the content beside it sits on an opaque layer whose leading
             // corner takes the window's radius, as Windows' own apps lay it out.
             let clear_sidebar = self.backdrop_shows(theme.materials.sidebar);
-            let (pane, fill) = match p.role {
-                PaneRole::Sidebar | PaneRole::Inspector if clear_sidebar => (pane, None),
-                PaneRole::Sidebar => (pane.border_r_1().border_color(look.border).bg(sidebar), Some(sidebar)),
-                PaneRole::Inspector => (pane.border_l_1().border_color(look.border).bg(sidebar), Some(sidebar)),
+            // The divider is drawn over the pane's edge rather than as a border, so the pane's
+            // content is as wide as its width, as beside NSSplitView's divider.
+            let divider = || div().absolute().top_0().bottom_0().w(px(1.)).bg(look.border);
+            let (pane, fill, edge) = match p.role {
+                PaneRole::Sidebar | PaneRole::Inspector if clear_sidebar => (pane, None, None),
+                PaneRole::Sidebar => (pane.relative().bg(sidebar), Some(sidebar), Some(divider().right_0())),
+                PaneRole::Inspector => (pane.relative().bg(sidebar), Some(sidebar), Some(divider().left_0())),
                 PaneRole::Content if clear_sidebar && self.beside_sidebar(node) => {
                     // NavigationView's content grid: CardStrokeColorDefault on its top and
                     // leading edges (NavigationViewContentGridBorderThickness 1,1,0,0).
@@ -177,9 +180,9 @@ impl Build<'_> {
                         .bg(theme.surface.layer)
                         .rounded_tl(theme.radius.lg)
                         .when(fluent, |p| p.border_t_1().border_l_1().border_color(stroke));
-                    (layer, Some(theme.surface.layer))
+                    (layer, Some(theme.surface.layer), None)
                 }
-                PaneRole::Content | PaneRole::Overlay => (pane, None),
+                PaneRole::Content | PaneRole::Overlay => (pane, None, None),
             };
             let header = self.take_pane_header(node, p.role);
             let pane = self.painted(id, fill, None, "pane", || match header {
@@ -190,8 +193,9 @@ impl Build<'_> {
                     .child(
                         div().flex_1().min_h_0().w_full().flex().flex_col().relative().children(children(window, cx)),
                     )
+                    .children(edge)
                     .into_any_element(),
-                None => pane.children(children(window, cx)).into_any_element(),
+                None => pane.children(children(window, cx)).children(edge).into_any_element(),
             });
             match slide {
                 // Clipped to the share of its width shown, the pane held at full width against
