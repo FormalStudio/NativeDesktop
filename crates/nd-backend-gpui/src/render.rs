@@ -1315,15 +1315,8 @@ impl<'a> Build<'a> {
         }
         let mut button = crate::forms::with_style(button, &props.style);
         // WinUI's ToolTipService: a button's tooltip shows on hover.
-        if let (Some(f), Some(text)) = (&fluent, props.tooltip.clone()) {
-            let tip = FluentTip {
-                text,
-                fill: theme.surface.overlay,
-                ink: theme.text.primary,
-                stroke: f.popover_stroke,
-                shadow: f.popover_shadow,
-                family: theme.fonts.body.family.clone(),
-            };
+        if let (Some(_), Some(text)) = (&fluent, props.tooltip.clone()) {
+            let tip = FluentTip::of(&theme, text);
             button = button.tooltip(move |_, cx| {
                 use gpui::AppContext as _;
                 cx.new(|_| tip.clone()).into()
@@ -1495,16 +1488,21 @@ fn readable_ink(fill: Hsla) -> Hsla {
 }
 
 /// WinUI's ToolTip (ToolTip_themeresources.xaml): Caption text in 9,6,9,8 of padding, at most
-/// 320 wide, on the control radius with the flyout stroke and shadow.
+/// 320 wide, on the control radius with the flyout stroke and [`TIP_SHADOW`].
 #[derive(Clone)]
 pub(crate) struct FluentTip {
     text: gpui::SharedString,
     fill: gpui::Hsla,
     ink: gpui::Hsla,
     stroke: gpui::Hsla,
-    shadow: (gpui::Hsla, gpui::Pixels, gpui::Pixels),
+    shadow: gpui::Hsla,
     family: gpui::SharedString,
 }
+
+/// The y offset and blur of the shadow under a WinUI tooltip, in the flyout shadow's colour:
+/// its popup casts a tighter one than a flyout, about 4 px at the sides, measured in the WinUI 3
+/// Gallery.
+pub(crate) const TIP_SHADOW: (gpui::Pixels, gpui::Pixels) = (px(2.), px(3.));
 
 impl FluentTip {
     /// A tooltip on the theme's overlay surface, for drawn controls that show one on hover.
@@ -1515,7 +1513,7 @@ impl FluentTip {
             fill: theme.surface.overlay,
             ink: theme.text.primary,
             stroke: look.popover_stroke,
-            shadow: look.popover_shadow,
+            shadow: look.popover_shadow.0,
             family: theme.fonts.body.family.clone(),
         }
     }
@@ -1533,9 +1531,9 @@ impl gpui::Render for FluentTip {
             .border_color(self.stroke)
             .bg(self.fill)
             .shadow(vec![gpui::BoxShadow {
-                color: self.shadow.0,
-                offset: gpui::point(px(0.), self.shadow.1),
-                blur_radius: self.shadow.2,
+                color: self.shadow,
+                offset: gpui::point(px(0.), TIP_SHADOW.0),
+                blur_radius: TIP_SHADOW.1,
                 spread_radius: px(0.),
                 inset: false,
             }])

@@ -420,10 +420,12 @@ impl Build<'_> {
             content = if theme.preset == nd_theme::Preset::Fluent {
                 // SurfaceStrokeColorFlyout and the flyout shadow, as the drawn menus.
                 let look = crate::forms::look::FormLook::fluent(&theme);
+                let (offset, blur) =
+                    if fluent_tip { crate::render::TIP_SHADOW } else { (look.popover_shadow.1, look.popover_shadow.2) };
                 content.border_color(look.popover_stroke).shadow(vec![gpui::BoxShadow {
                     color: look.popover_shadow.0,
-                    offset: point(px(0.), look.popover_shadow.1),
-                    blur_radius: look.popover_shadow.2,
+                    offset: point(px(0.), offset),
+                    blur_radius: blur,
                     spread_radius: px(0.),
                     inset: false,
                 }])
