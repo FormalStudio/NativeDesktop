@@ -161,6 +161,9 @@ pub struct FormLook {
     /// (ControlAltFillColorSecondary, Tertiary, Quarternary), outlined in `check_stroke`.
     pub check_fill: [Hsla; 3],
     pub check_stroke: Hsla,
+    /// What a password field shows for each character, and whether it has a button to peek.
+    pub password_mask: char,
+    pub password_peek: bool,
     /// The unchecked box's outline while pressed, where it differs from `check_stroke`.
     pub check_stroke_active: Option<Hsla>,
     pub check_stroke_width: Pixels,
@@ -310,6 +313,8 @@ impl FormLook {
             // libadwaita's check button: an inset ring of 15% of the text colour.
             check_stroke: tint(0.15),
             check_stroke_active: None,
+            password_mask: '\u{2022}',
+            password_peek: false,
             check_stroke_width: px(2.),
             check_glyph: px(14.),
             chevron_size: px(16.),
@@ -502,6 +507,9 @@ impl FormLook {
             field_focus_fill: if dark { gpui::rgba(0x1e1e1eb3).into() } else { gpui::white() },
             check_fill,
             check_stroke: strong,
+            // PasswordBox's default PasswordChar and its reveal button.
+            password_mask: '\u{25cf}',
+            password_peek: true,
             // ControlStrongStrokeColorDisabled.
             check_stroke_active: Some(if dark { with_alpha(ink, 0.157) } else { with_alpha(black, 0.216) }),
             check_stroke_width: px(1.),

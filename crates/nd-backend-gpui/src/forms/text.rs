@@ -83,6 +83,9 @@ pub(crate) struct Editor {
     line_height: Pixels,
     multiline: bool,
     secure: bool,
+    /// What a secure field shows for each character, and whether its peek button is held.
+    mask: char,
+    peek: bool,
     editable: bool,
     /// Combo box suggestions and whether typed text completes from them.
     options: Vec<SharedString>,
@@ -136,6 +139,8 @@ impl Editor {
             line_height: px(20.),
             multiline,
             secure: false,
+            mask: '\u{2022}',
+            peek: false,
             editable: true,
             options: Vec::new(),
             completes: false,
@@ -464,19 +469,30 @@ impl Editor {
         }
     }
 
+    /// The mask a secure field draws, unless its peek button shows the text.
+    fn masked(&self) -> Option<char> {
+        (self.secure && !self.peek).then_some(self.mask)
+    }
+
     fn display(&self) -> String {
-        if self.secure { "\u{2022}".repeat(self.text.chars().count()) } else { self.text.clone() }
+        match self.masked() {
+            Some(mask) => mask.to_string().repeat(self.text.chars().count()),
+            None => self.text.clone(),
+        }
     }
 
     fn text_to_display(&self, offset: usize) -> usize {
-        if self.secure { self.text[..offset].chars().count() * '\u{2022}'.len_utf8() } else { offset }
+        match self.masked() {
+            Some(mask) => self.text[..offset].chars().count() * mask.len_utf8(),
+            None => offset,
+        }
     }
 
     fn display_to_text(&self, offset: usize) -> usize {
-        if !self.secure {
+        let Some(mask) = self.masked() else {
             return self.floor(offset.min(self.text.len()));
-        }
-        let n = offset / '\u{2022}'.len_utf8();
+        };
+        let n = offset / mask.len_utf8();
         self.text.char_indices().nth(n).map_or(self.text.len(), |(i, _)| i)
     }
 
@@ -1126,7 +1142,11 @@ pub(crate) fn chrome(ctl: &Ctl, editor: &Rc<std::cell::RefCell<Editor>>, f: &Fie
         Some(underline) => {
             let (fill, hover) =
                 if ctl.focused { (look.field_focus_fill, look.field_focus_fill) } else { (look.fill, look.fill_hover) };
-            let (edge, width) = if ctl.focused { (look.accent, px(2.)) } else { (underline, px(1.)) };
+            let (edge, width) = if ctl.focused {
+                (look.accent, px(2.))
+            } else {
+                (super::toggle::over_border(underline, look.field_stroke.unwrap_or(look.border)), px(1.))
+            };
             // Absolute insets start inside the border: -1 puts the underline on its bottom edge.
             let bottom = div()
                 .absolute()
@@ -1341,6 +1361,41 @@ fn edge_button<E: Clone + 'static>(
         .on_click(move |_, _, cx| sink.send(event.clone(), cx))
 }
 
+fn peek_button(ctl: &Ctl, editor: &Rc<std::cell::RefCell<Editor>>) -> impl IntoElement {
+    let look = ctl.look;
+    let held = |editor: &Rc<std::cell::RefCell<Editor>>, on: bool| {
+        let editor = editor.clone();
+        move |_: &gpui::MouseDownEvent, window: &mut Window, _: &mut App| {
+            editor.borrow_mut().peek = on;
+            window.refresh();
+        }
+    };
+    let release = |editor: &Rc<std::cell::RefCell<Editor>>| {
+        let editor = editor.clone();
+        move |_: &gpui::MouseUpEvent, window: &mut Window, _: &mut App| {
+            editor.borrow_mut().peek = false;
+            window.refresh();
+        }
+    };
+    div()
+        .id("peek")
+        .role(gpui::Role::Button)
+        .aria_label("Show password")
+        .flex()
+        .flex_none()
+        .items_center()
+        .justify_center()
+        .size(look.icon_size + px(4.))
+        .rounded(look.radius)
+        .child(glyph(Glyph::Reveal, look.icon_size, look.secondary_text, look.glyph_stroke))
+        .block_mouse_except_scroll()
+        .cursor(look.cursor)
+        .hover(move |s| s.bg(look.fill_hover))
+        .on_mouse_down(gpui::MouseButton::Left, held(editor, true))
+        .on_mouse_up(gpui::MouseButton::Left, release(editor))
+        .on_mouse_up_out(gpui::MouseButton::Left, release(editor))
+}
+
 pub(crate) fn text_field(
     b: &Build,
     id: NodeId,
@@ -1363,6 +1418,7 @@ pub(crate) fn text_field(
     {
         let mut e = editor.borrow_mut();
         e.select_on_focus = p.select_on_focus.clone();
+        e.mask = ctl.look.password_mask;
         e.focus_moved(ctl.focused, cx);
     }
     let look = ctl.look;
@@ -1401,6 +1457,10 @@ pub(crate) fn text_field(
     if p.field == FieldStyle::Search && !p.text.is_empty() && p.editable {
         let clear = TextChanged { text: SharedString::default() };
         field = field.child(edge_button(&ctl, "clear", Glyph::Clear, "Clear".into(), clear, p.enabled));
+    }
+    // PasswordBox's reveal button, while the field has focus and text: held, it shows the text.
+    if p.field == FieldStyle::Secure && look.password_peek && ctl.focused && !p.text.is_empty() && p.enabled {
+        field = field.child(peek_button(&ctl, &editor));
     }
     if let Some(icon) = &p.trailing {
         let event = FieldIconClicked { edge: IconEdge::Trailing };
@@ -1950,5 +2010,16 @@ mod tests {
         let out = recolor(vec![run(4), run(6)], 2..7, gpui::white());
         let parts: Vec<(usize, bool)> = out.iter().map(|r| (r.len, r.color == gpui::white())).collect();
         assert_eq!(parts, [(2, false), (2, true), (3, true), (3, false)]);
+    }
+
+    #[test]
+    fn a_held_peek_shows_a_secure_fields_text() {
+        let mut e = Editor::new(false, Commit::Text);
+        (e.text, e.secure, e.mask) = ("pw\u{e9}".into(), true, '\u{25cf}');
+        assert_eq!(e.display(), "\u{25cf}\u{25cf}\u{25cf}");
+        assert_eq!(e.display_to_text(e.text_to_display(2)), 2);
+        e.peek = true;
+        assert_eq!(e.display(), "pw\u{e9}");
+        assert_eq!(e.text_to_display(2), 2);
     }
 }

@@ -85,12 +85,16 @@ pub(crate) fn focus_visual(look: FormLook, radius: Pixels) -> gpui::Div {
 
 /// The elevation row of WinUI's border for a control of `radius` with a 1 px `look.border`,
 /// drawn over that border; `None` for a look without one.
+/// `edge` as drawn over `border`, so that together they show `edge`: WinUI's edge rows replace
+/// the border, and over it only what the edge adds to the border's own ink (both the same black
+/// or white) gives the same colour.
+pub(crate) fn over_border(edge: gpui::Hsla, border: gpui::Hsla) -> gpui::Hsla {
+    with_alpha(edge, (1. - (1. - edge.a) / (1. - border.a)).max(0.))
+}
+
 pub(crate) fn elevation_edge(look: FormLook, radius: Pixels) -> Option<gpui::Div> {
     let e = look.elevation?;
-    // WinUI's row replaces the border; over it, only what the stroke adds to the border's own
-    // ink (both are the same black or white) gives the same colour.
-    let alpha = 1. - (1. - e.stroke.a) / (1. - look.border.a);
-    let color = with_alpha(e.stroke, alpha.max(0.));
+    let color = over_border(e.stroke, look.border);
     // Absolute insets start inside the border: -1 puts the row on the border's own.
     let row = div().absolute().top(px(-1.)).left(px(-1.)).right(px(-1.)).bottom(px(-1.)).rounded(radius);
     Some(if e.top { row.border_t_1() } else { row.border_b_1() }.border_color(color))

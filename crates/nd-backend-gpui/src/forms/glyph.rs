@@ -28,6 +28,7 @@ impl Glyph {
     pub const Clear: Glyph = Glyph(Icon::X);
     pub const LocateFixed: Glyph = Glyph(Icon::LocateFixed);
     pub const Person: Glyph = Glyph(Icon::User);
+    pub const Reveal: Glyph = Glyph(Icon::Eye);
 
     pub fn of(icon: Icon) -> Self {
         Glyph(icon)
