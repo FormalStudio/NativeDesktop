@@ -134,7 +134,9 @@ impl Palette {
                 surface_sidebar: hex("#f3f3f3"),
                 // CardBackgroundFillColorDefault (#B3FFFFFF) over the layer, as cards sit.
                 surface_raised: hex("#fdfdfd"),
-                surface_overlay: hex("#fcfcfc"),
+                // AcrylicInAppFillColorDefault's FallbackColor: nd paints flyouts opaque, without
+                // the blur its #FCFCFC tint goes over.
+                surface_overlay: hex("#f9f9f9"),
                 text_primary: hex("#000000e4"),
                 text_secondary: hex("#0000009e"),
                 text_tertiary: hex("#00000072"),

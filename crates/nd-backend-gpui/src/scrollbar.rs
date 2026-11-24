@@ -52,10 +52,10 @@ impl ScrollbarLook {
             return None;
         }
         let dark = theme.is_dark();
-        // ControlStrongFillColorDefault for the thumb and carets, AcrylicInAppFillColorDefault
-        // behind the expanded track.
+        // ControlStrongFillColorDefault for the thumb and carets, AcrylicInAppFillColorDefault's
+        // FallbackColor behind the expanded track, which nd draws without the blur.
         let strong = if dark { with_alpha(gpui::white(), 0.545) } else { with_alpha(gpui::black(), 0.447) };
-        let track: Hsla = if dark { gpui::rgba(0x2c2c2cf2).into() } else { gpui::rgba(0xfcfcfcf2).into() };
+        let track: Hsla = if dark { gpui::rgb(0x2c2c2c).into() } else { gpui::rgb(0xf9f9f9).into() };
         Some(Self {
             size: 12.,
             thin: 2.,
