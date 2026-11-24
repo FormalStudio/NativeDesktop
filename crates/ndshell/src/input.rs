@@ -166,6 +166,28 @@ pub fn key(code: u16, modifiers: &[Modifier]) {
     }
 }
 
+/// Types `text` at the HID tap, one key press per character. Each event carries its character,
+/// so any script reaches the key window's field as typed, whatever the keyboard layout. A line
+/// break is Return.
+pub fn type_text(text: &str) {
+    for c in text.chars() {
+        if c == '\n' {
+            key(0x24, &[]);
+            continue;
+        }
+        let mut buf = [0u16; 2];
+        let units = c.encode_utf16(&mut buf);
+        for down in [true, false] {
+            let event = CGEvent::new_keyboard_event(None, 0, down);
+            CGEvent::set_flags(event.as_deref(), CGEventFlags::empty());
+            // SAFETY: `units` outlives the call and holds `units.len()` UTF-16 units.
+            unsafe { CGEvent::keyboard_set_unicode_string(event.as_deref(), units.len() as _, units.as_ptr()) };
+            post(event);
+        }
+        std::thread::sleep(Duration::from_millis(8));
+    }
+}
+
 /// A gesture's phase as the window server encodes it in gesture and scroll events.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GesturePhase {
