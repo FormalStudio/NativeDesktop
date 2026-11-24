@@ -2994,13 +2994,27 @@ fn xkb_state_for_key_event(xkb: &xkbc::State, event_state: xproto::KeyButMask) -
     .into();
     let depressed_modifiers = active_modifier_mask & !(latched_modifiers | locked_modifiers);
 
+    // X puts the group a key was pressed in into bits 13 and 14 of a core event's state for XKB
+    // clients. A key that reaches us late (forwarded from another client's window) can follow the
+    // XkbStateNotify of a layout switch made after it, so its own group wins over the tracked one.
+    let group = u32::from((u16::from(event_state) >> 13) & 3);
+    let (depressed_layout, latched_layout, locked_layout) =
+        if group == xkb.serialize_layout(xkbc::STATE_LAYOUT_EFFECTIVE) {
+            (
+                xkb.serialize_layout(xkbc::STATE_LAYOUT_DEPRESSED),
+                xkb.serialize_layout(xkbc::STATE_LAYOUT_LATCHED),
+                xkb.serialize_layout(xkbc::STATE_LAYOUT_LOCKED),
+            )
+        } else {
+            (0, 0, group)
+        };
     key_event_state.update_mask(
         depressed_modifiers,
         latched_modifiers,
         locked_modifiers,
-        xkb.serialize_layout(xkbc::STATE_LAYOUT_DEPRESSED),
-        xkb.serialize_layout(xkbc::STATE_LAYOUT_LATCHED),
-        xkb.serialize_layout(xkbc::STATE_LAYOUT_LOCKED),
+        depressed_layout,
+        latched_layout,
+        locked_layout,
     );
 
     key_event_state
@@ -3048,6 +3062,24 @@ mod tests {
             xkbc::COMPILE_NO_FLAGS,
         )
         .expect("test keymap should compile")
+    }
+
+    /// A key event's state for a key pressed in layout `group`, as X reports it to XKB clients.
+    fn in_group(group: u16) -> xproto::KeyButMask {
+        xproto::KeyButMask::from(group << 13)
+    }
+
+    #[test]
+    fn a_late_key_types_in_the_layout_it_was_pressed_in() {
+        let keymap = test_keymap("us,de,us");
+        // The switch to the third layout arrived before the key pressed in German.
+        let mut server_state = xkbc::State::new(&keymap);
+        server_state.update_mask(0, 0, 0, 0, 0, 2);
+        let key = keymap.key_by_name("AD06").expect("the Y key should exist in the keymap");
+
+        let key_event_state = xkb_state_for_key_event(&server_state, in_group(1));
+
+        assert_eq!(key_event_state.key_get_utf8(key), "z");
     }
 
     // Returns a state where the second layout is active via a temporary
@@ -3134,7 +3166,7 @@ mod tests {
             .expect("test key should exist in the keymap");
 
         let expected_text = server_state.key_get_utf8(keycode);
-        let key_event_state = xkb_state_for_key_event(&server_state, xproto::KeyButMask::default());
+        let key_event_state = xkb_state_for_key_event(&server_state, in_group(1));
 
         // Assert the temporary layout switch is preserved.
         assert_eq!(
@@ -3256,7 +3288,7 @@ mod tests {
         // (e.g. via a keyboard shortcut like Super+Space).
         server_state.update_mask(0, 0, 0, 0, 0, 1);
 
-        let key_event_state = xkb_state_for_key_event(&server_state, xproto::KeyButMask::default());
+        let key_event_state = xkb_state_for_key_event(&server_state, in_group(1));
 
         // Assert the Russian layout is still active after constructing the
         // key event state (not accidentally reset to US).
@@ -3339,7 +3371,7 @@ mod tests {
         // Simulate the user having switched to the Czech layout.
         server_state.update_mask(0, 0, 0, 0, 0, 1);
 
-        let key_event_state = xkb_state_for_key_event(&server_state, xproto::KeyButMask::default());
+        let key_event_state = xkb_state_for_key_event(&server_state, in_group(1));
 
         // Assert pressing space while on the Czech layout still types a space.
         assert_eq!(key_event_state.key_get_utf8(space), " ");
