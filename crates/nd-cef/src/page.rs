@@ -463,13 +463,27 @@ impl CefPage {
 
     /// `request_close` in Chrome style, where a close Chromium starts cannot be held for the app
     /// (no `DoClose`): the page's `beforeunload` handlers run on a synthetic event, and when one
-    /// asks to stay, the same prompt as a real close's decides.
+    /// asks to stay, the same prompt as a real close's decides. A page that does not answer the
+    /// probe within [`BEFOREUNLOAD_WAIT`] (hung, or with no document while its first load waits
+    /// on the server) goes, as Chromium closes a page whose `beforeunload` hangs.
     fn request_close_chrome(&self) {
         const PROBE: &str = "(() => { const e = document.createEvent('BeforeUnloadEvent'); \
             e.initEvent('beforeunload', false, true); window.dispatchEvent(e); \
             return e.defaultPrevented || !!e.returnValue; })()";
         let id = self.id;
+        let answered = Rc::new(Cell::new(false));
+        let waited = answered.clone();
+        crate::runtime::later(BEFOREUNLOAD_WAIT, move || {
+            if !waited.replace(true)
+                && let Some(page) = get(id)
+            {
+                page.page.emit(CloseApproved { approved: true });
+            }
+        });
         self.devtools.evaluate(PROBE, None, move |result| {
+            if answered.replace(true) {
+                return;
+            }
             let Some(page) = get(id) else { return };
             let asks = result.ok().and_then(|v| v.as_bool()).unwrap_or(false);
             if !asks || !dialogs::available(&page.view) {
@@ -1099,6 +1113,9 @@ impl CefPage {
         });
     }
 }
+
+/// How long a `beforeunload` probe may go unanswered before the page closes anyway.
+const BEFOREUNLOAD_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
 
 const NOT_CHROME: &str = "extension actions run in Chrome-style pages (`[webview.cef] style = \"chrome\"`)";
 
