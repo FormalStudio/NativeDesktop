@@ -83,22 +83,17 @@ pub(crate) fn focus_visual(look: FormLook, radius: Pixels) -> gpui::Div {
         .child(div().size_full().rounded(radius + px(2.)).border_2().border_color(inner))
 }
 
-/// The bottom edge of WinUI's elevation border for a control of `radius` with a 1 px border,
+/// The elevation row of WinUI's border for a control of `radius` with a 1 px `look.border`,
 /// drawn over that border; `None` for a look without one.
 pub(crate) fn elevation_edge(look: FormLook, radius: Pixels) -> Option<gpui::Div> {
-    let edge = look.stroke_bottom?;
-    // Absolute insets start inside the border: -1 puts the edge on its bottom row.
-    Some(
-        div()
-            .absolute()
-            .top(px(-1.))
-            .left(px(-1.))
-            .right(px(-1.))
-            .bottom(px(-1.))
-            .rounded(radius)
-            .border_b_1()
-            .border_color(edge),
-    )
+    let e = look.elevation?;
+    // WinUI's row replaces the border; over it, only what the stroke adds to the border's own
+    // ink (both are the same black or white) gives the same colour.
+    let alpha = 1. - (1. - e.stroke.a) / (1. - look.border.a);
+    let color = with_alpha(e.stroke, alpha.max(0.));
+    // Absolute insets start inside the border: -1 puts the row on the border's own.
+    let row = div().absolute().top(px(-1.)).left(px(-1.)).right(px(-1.)).bottom(px(-1.)).rounded(radius);
+    Some(if e.top { row.border_t_1() } else { row.border_b_1() }.border_color(color))
 }
 
 /// Toggles on click, and on Space or Return through GPUI's keyboard click.

@@ -22,6 +22,23 @@ The rules and values are in [docs/dev/hig/windows.md](../dev/hig/windows.md).
 
 ## Controls
 
+- [x] Button: the elevation shade was laid over the 1 px border (bottom 192 where WinUI has
+  204 on its 243 sample), sat at the bottom in dark too (WinUI's dark brush is a highlight on
+  top), and pressed and disabled kept it with primary text. GPUI draws a div's border over its
+  children, which put the accent's white ring over its shade. Now the shade replaces its border
+  row, pressed and disabled use ControlStrokeColorDefault alone (the accent no border) with
+  TextFillColorSecondary and the Disabled fills. `gate_m2::fluent_pressed_button_drops_its_elevation`;
+  VM capture with real (QMP) pointer input, light 100%:
+
+  | Standard: fill / top / bottom / text | rest | hover | pressed |
+  | --- | --- | --- | --- |
+  | WinUI 3 Gallery (over 243) | 251 / 229 / 204 / 27 | 246 / 229 / 204 / 26 | 245 / 229 / 229 / 93 |
+  | nd after (over 253) | 254 / 239 / 214 / 27 | 251 / 236 / 211 / 27 | 252 / 237 / 237 / 96 |
+
+  Both are the same resources over different cards. Accent at rest: top `(20,115,197)`,
+  bottom `(0,62,115)` in both; hover bottom 60% of the hover fill; pressed borderless at 80%
+  with TextOnAccentFillColorSecondary. Disabled is from the resources only: the gallery has no
+  disabled button.
 - [x] Text fields had a 2 px uniform border. Now 1 px ControlStroke with a ControlStrongStroke
   bottom edge, a 2 px accent underline when focused, InputActive fill. VM capture: fill, top
   `#e5e5e5` and bottom `#868686` edges match the Gallery's TextBox.

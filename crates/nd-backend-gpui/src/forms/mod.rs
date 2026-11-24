@@ -33,7 +33,7 @@ use nd_gpui::gpui::{self, AnyElement, FocusHandle, Refineable, StyleRefinement, 
 use nd_ui::backend::{NodeKind, Props, WidgetKind};
 use nd_ui::events::Emit;
 
-pub use look::FormLook;
+pub use look::{Elevation, FormLook};
 pub(crate) use toggle::focus_outline;
 
 use crate::backend::{Node, PlatformFocus, Wake};

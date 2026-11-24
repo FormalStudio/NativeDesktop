@@ -235,6 +235,34 @@ mod gate_m2 {
         assert_eq!(bumps.get(), 1, "the nd binding fired through GPUI's keystroke path");
     }
 
+    /// WinUI's button shades its bottom row at rest (ControlElevationBorderBrush) and drops the
+    /// shade while pressed, both edges then ControlStrokeColorDefault.
+    pub fn fluent_pressed_button_drops_its_elevation() {
+        let Opened { mut cx, host, window, .. } = open_counter();
+        host.backend().set_theme(nd_theme::ThemeRegistry::new(nd_theme::Preset::Fluent));
+        settle(&mut cx, &host);
+        let b = by_test_id(&host, window, "add").bounds.expect("add");
+        let edges = |host: &GpuiHost| {
+            nd_gpui::gpui_platform::current_headless_renderer().ok().flatten()?;
+            let capture = host.job(|app| app.capture(window)).expect("capture");
+            let image = image::load_from_memory(&capture.png).expect("png").to_luma8();
+            let scale = capture.width as f32 / 320.;
+            let x = ((b.origin.x + 4.) * scale) as u32;
+            let (top, bottom) = ((b.origin.y * scale) as u32, ((b.origin.y + b.size.height) * scale) as u32 - 1);
+            Some((image.get_pixel(x, top).0[0], image.get_pixel(x, bottom).0[0]))
+        };
+        if let Some((top, bottom)) = edges(&host) {
+            assert!(bottom + 10 < top, "at rest the bottom row is shaded: top {top}, bottom {bottom}");
+        }
+        let at = nd_ui::Point { x: b.origin.x + 4., y: b.origin.y + b.size.height / 2. };
+        let down = SyntheticInput::Pointer { phase: PointerPhase::Down, at, button: MouseButton::Left, click_count: 1 };
+        cx.update(|cx| host.update(cx, |app| app.synthesize(window, &down))).expect("posted");
+        settle(&mut cx, &host);
+        if let Some((top, bottom)) = edges(&host) {
+            assert!(top.abs_diff(bottom) <= 3, "pressed, both edges match: top {top}, bottom {bottom}");
+        }
+    }
+
     pub fn fluent_access_keys_press_buttons() {
         let Opened { mut cx, host, window, .. } = open_counter();
         let mut alt = Keystroke::parse("a").expect("keystroke");
@@ -921,6 +949,7 @@ fn main() {
         ),
         ("gate_m2::keys_reach_nd_dispatch_before_gpui", gate_m2::keys_reach_nd_dispatch_before_gpui),
         ("gate_m2::fluent_access_keys_press_buttons", gate_m2::fluent_access_keys_press_buttons),
+        ("gate_m2::fluent_pressed_button_drops_its_elevation", gate_m2::fluent_pressed_button_drops_its_elevation),
         ("gate_m2::windows_open_and_close_with_the_app", gate_m2::windows_open_and_close_with_the_app),
         ("gate_m2::titlebar_insets_come_from_the_os_hooks", gate_m2::titlebar_insets_come_from_the_os_hooks),
         (

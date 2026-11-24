@@ -7,6 +7,13 @@ use nd_gpui::gpui::{self, FontWeight, Hsla, Pixels, px};
 use nd_theme::color::with_alpha;
 use nd_theme::{TextStyles, Theme};
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Elevation {
+    pub stroke: Hsla,
+    /// On the top row rather than the bottom.
+    pub top: bool,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct FormLook {
     /// The look these values are for.
@@ -143,9 +150,9 @@ pub struct FormLook {
     /// ring inside it, drawn around the control without taking layout space. libadwaita
     /// has one ring in the layout instead.
     pub focus_inner: Option<Hsla>,
-    /// The bottom edge of a control's elevation border (WinUI's ControlElevationBorderBrush:
-    /// ControlStrokeColorSecondary under ControlStrokeColorDefault).
-    pub stroke_bottom: Option<Hsla>,
+    /// WinUI's ControlElevationBorderBrush: ControlStrokeColorSecondary on one row of a
+    /// control's 1 px border, the rest ControlStrokeColorDefault.
+    pub elevation: Option<Elevation>,
     /// A field's bottom edge at rest (TextControlElevationBorderBrush); focused it is a 2 px
     /// accent underline over `field_focus_fill`.
     pub field_underline: Option<Hsla>,
@@ -294,7 +301,7 @@ impl FormLook {
             switch_outline: None,
             knob_off: nd_theme::color::mix(view, white, 0.8),
             focus_inner: None,
-            stroke_bottom: None,
+            elevation: None,
             field_underline: None,
             field_focus_fill: tint(0.1),
             check_fill: [gpui::transparent_black(); 3],
@@ -435,8 +442,13 @@ impl FormLook {
             // FocusStrokeColorOuter and Inner.
             focus_ring: if dark { gpui::white() } else { with_alpha(black, 0.894) },
             focus_inner: Some(if dark { with_alpha(black, 0.7) } else { with_alpha(gpui::white(), 0.7) }),
-            // ControlStrokeColorSecondary.
-            stroke_bottom: Some(if dark { with_alpha(ink, 0.094) } else { with_alpha(black, 0.16) }),
+            // ControlStrokeColorSecondary: a shade along the bottom in light, a highlight along
+            // the top in dark (the dark brush is not flipped).
+            elevation: Some(if dark {
+                Elevation { stroke: with_alpha(ink, 0.094), top: true }
+            } else {
+                Elevation { stroke: with_alpha(black, 0.16), top: false }
+            }),
             field_underline: Some(strong),
             // ControlFillColorInputActive.
             field_focus_fill: if dark { gpui::rgba(0x1e1e1eb3).into() } else { gpui::white() },

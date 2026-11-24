@@ -1178,6 +1178,30 @@ impl<'a> Build<'a> {
             Some(f) if explicit.is_none() && !accent && props.enabled => f.fill,
             _ => fill,
         };
+        // Pressed and disabled, WinUI drops the elevation row (the accent button its whole
+        // border) and takes the text a step down; disabled, the fills are the Disabled ones.
+        let settled = props.enabled && !self.backend.fades.pointer(id).pressed;
+        let dark = theme.is_dark();
+        let (fill, ink) = match &fluent {
+            Some(_) if explicit.is_some() || settled => (fill, ink),
+            // AccentFillColorDisabled under TextOnAccentFillColorDisabled.
+            Some(_) if !props.enabled && accent => {
+                if dark {
+                    (with_alpha(gpui::white(), 0.157), with_alpha(gpui::white(), 0.53))
+                } else {
+                    (with_alpha(gpui::black(), 0.216), gpui::white())
+                }
+            }
+            // ControlFillColorDisabled under TextFillColorDisabled.
+            Some(_) if !props.enabled => {
+                let fill = if dark { with_alpha(gpui::white(), 0.043) } else { gpui::rgba(0xf9f9f94d).into() };
+                (fill, theme.disabled(theme.text.primary))
+            }
+            // TextOnAccentFillColorSecondary.
+            Some(_) if accent => (fill, with_alpha(theme.text.on_accent, if dark { 0.5 } else { 0.7 })),
+            Some(_) => (fill, theme.text.secondary),
+            None => (fill, ink),
+        };
         // Borderless: no bezel until the pointer is over it.
         let flat = matches!(props.bezel, Bezel::Borderless | Bezel::Plain);
         let bezel = !flat || accent || adwaita.is_some();
@@ -1243,23 +1267,42 @@ impl<'a> Build<'a> {
         let edge_radius = if circle { px(999.) } else { theme.radius.md };
         if bezel {
             button = match &fluent {
-                Some(f) if accent => {
-                    let dark = theme.is_dark();
-                    // ControlStrokeColorOnAccentDefault over ControlStrokeColorOnAccentSecondary.
-                    let edge = with_alpha(gpui::black(), if dark { 0.137 } else { 0.4 });
-                    button.relative().border_1().border_color(with_alpha(gpui::white(), 0.078)).bg(fill).children(
+                Some(f) if accent && settled => {
+                    // ControlStrokeColorOnAccentDefault, with ControlStrokeColorOnAccentSecondary
+                    // on the bottom row in its place. GPUI draws a div's own border over its
+                    // children, so the ring is a child, open at the bottom for the row.
+                    let shade = with_alpha(gpui::black(), if dark { 0.137 } else { 0.4 });
+                    let row = crate::forms::Elevation { stroke: shade, top: false };
+                    let ring = div()
+                        .absolute()
+                        .top(px(-1.))
+                        .left(px(-1.))
+                        .right(px(-1.))
+                        .bottom(px(-1.))
+                        .rounded(edge_radius)
+                        .border_t_1()
+                        .border_l_1()
+                        .border_r_1()
+                        .border_color(with_alpha(gpui::white(), 0.078));
+                    button.relative().border_1().border_color(gpui::transparent_black()).bg(fill).child(ring).children(
                         crate::forms::toggle::elevation_edge(
-                            crate::forms::FormLook { stroke_bottom: Some(edge), ..*f },
+                            // Nothing under the row: the button's own border is clear.
+                            crate::forms::FormLook {
+                                elevation: Some(row),
+                                border: gpui::transparent_black(),
+                                ..*f
+                            },
                             edge_radius,
                         ),
                     )
                 }
+                Some(_) if accent => button.border_1().border_color(gpui::transparent_black()).bg(fill),
                 Some(f) => button
                     .relative()
                     .border_1()
                     .border_color(f.border)
                     .bg(fill)
-                    .children(crate::forms::toggle::elevation_edge(*f, edge_radius)),
+                    .children(settled.then(|| crate::forms::toggle::elevation_edge(*f, edge_radius)).flatten()),
                 // libadwaita's buttons have no border.
                 None if adwaita.is_some() => button.bg(fill),
                 None => button.border_1().border_color(look.border).bg(fill),
