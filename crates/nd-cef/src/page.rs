@@ -95,6 +95,8 @@ struct State {
     popups_allowed: Vec<Option<String>>,
     /// Origins a permission was asked for, for `reset_permissions` without an origin.
     asked: Vec<String>,
+    /// The page's own colour scheme is dark here, so it sits on Chromium's dark canvas.
+    dark_canvas: bool,
 }
 
 struct DownloadEntry {
@@ -216,6 +218,16 @@ impl CefPage {
         self.devtools.evaluate(nd_webview::script::COUNTING_SCRIPT, None, |_| {});
     }
 
+    fn apply_canvas(&self) {
+        let mut browser = self.host().and_then(|h| cef::ImplBrowserHost::browser(&h));
+        let color = canvas(self.id);
+        if let Some(view) = cef::browser_view_get_for_browser(browser.as_mut())
+            && cef::ImplView::background_color(&view) != color
+        {
+            cef::ImplView::set_background_color(&view, color);
+        }
+    }
+
     pub(crate) fn host(&self) -> Option<BrowserHost> {
         self.browser.borrow().as_ref()?.host()
     }
@@ -291,6 +303,14 @@ impl CefPage {
         let url = self.main_frame().map(|f| crate::text(&f.url())).unwrap_or_default();
         self.st.borrow_mut().committed_url = url;
         self.report_security(None);
+        if self.style == CefStyle::Chrome {
+            let id = self.id;
+            self.devtools.evaluate(DARK_SCHEME_PROBE, Some(nd_webview::script::INTERNAL_WORLD), move |r| {
+                let Some(p) = get(id) else { return };
+                p.st.borrow_mut().dark_canvas = r.ok().and_then(|v| v.as_bool()).unwrap_or(false);
+                p.apply_canvas();
+            });
+        }
         // Off-screen (Alloy style) Chromium does not always report favicon URLs; the page's
         // own `<link rel=icon>` is read like on WebKit.
         let id = self.id;
@@ -1116,6 +1136,22 @@ impl CefPage {
 
 /// What a page with no background of its own sits on, as in Chrome: opaque white.
 pub(crate) const PAGE_BACKGROUND: u32 = 0xffff_ffff;
+/// Chromium's canvas for a page whose colour scheme is dark.
+const DARK_CANVAS: u32 = 0xff12_1212;
+/// Whether the page's declared colour scheme (the root's `color-scheme`, else its
+/// `<meta name="color-scheme">`) comes out dark under the current appearance.
+const DARK_SCHEME_PROBE: &str = "(() => { \
+    const css = getComputedStyle(document.documentElement).colorScheme; \
+    const meta = document.querySelector('meta[name=color-scheme]')?.content ?? ''; \
+    const s = css && css !== 'normal' ? css : meta; \
+    const dark = /\\bdark\\b/.test(s), light = /\\blight\\b/.test(s); \
+    return dark && (!light || matchMedia('(prefers-color-scheme: dark)').matches); })()";
+
+/// The base background a Chrome-style page sits on. Chrome style takes it from the BrowserView,
+/// which overrides the page's own canvas, so it follows the page's colour scheme here.
+pub(crate) fn canvas(id: u64) -> u32 {
+    if get(id).is_some_and(|p| p.st.borrow().dark_canvas) { DARK_CANVAS } else { PAGE_BACKGROUND }
+}
 
 /// How long a `beforeunload` probe may go unanswered before the page closes anyway.
 const BEFOREUNLOAD_WAIT: std::time::Duration = std::time::Duration::from_secs(1);

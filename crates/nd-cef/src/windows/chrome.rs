@@ -721,11 +721,10 @@ wrap_browser_view_delegate! {
     }
 
     impl ViewDelegate {
-        /// Pins the page base background to white over the Views theme; see the macOS
-        /// `NdBrowserView` for why and its limit.
+        /// Puts the page's canvas back over the Views theme; see the macOS `NdBrowserView`.
         fn on_theme_changed(&self, view: Option<&mut View>) {
             if let Some(view) = view {
-                view.set_background_color(crate::page::PAGE_BACKGROUND);
+                view.set_background_color(crate::page::canvas(self.id));
             }
         }
     }
