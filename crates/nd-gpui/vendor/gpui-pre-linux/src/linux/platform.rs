@@ -1173,6 +1173,22 @@ impl Platform for LinuxPlatform {
         self.connection.borrow().read_from_clipboard()
     }
 
+    fn read_from_clipboard_async(
+        &self,
+    ) -> Task<Result<Option<ClipboardItem>, gpui::ClipboardReadError>> {
+        let read = self
+            .connection
+            .borrow()
+            .read_selection_async(false, &self.background_executor());
+        self.foreground_executor().spawn(async move { Ok(read.await) })
+    }
+
+    fn read_from_primary_async(&self) -> Task<Option<ClipboardItem>> {
+        self.connection
+            .borrow()
+            .read_selection_async(true, &self.background_executor())
+    }
+
     fn add_recent_document(&self, _path: &Path) {}
 }
 

@@ -600,6 +600,11 @@ pub trait Platform: 'static {
 
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     fn read_from_primary(&self) -> Option<ClipboardItem>;
+    /// Reads the primary selection, resolving once its owner has answered.
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    fn read_from_primary_async(&self) -> Task<Option<ClipboardItem>> {
+        Task::ready(self.read_from_primary())
+    }
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     fn write_to_primary(&self, item: ClipboardItem);
 

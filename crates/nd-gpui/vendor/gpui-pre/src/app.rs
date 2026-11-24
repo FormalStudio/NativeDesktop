@@ -1891,6 +1891,13 @@ impl App {
         self.platform.read_from_primary()
     }
 
+    /// Reads the primary selection without blocking on its owner, which can be on this thread.
+    /// Only available on Linux.
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    pub fn read_from_primary_async(&self) -> Task<Option<ClipboardItem>> {
+        self.platform.read_from_primary_async()
+    }
+
     /// Writes data to the primary selection buffer.
     /// Only available on Linux.
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]

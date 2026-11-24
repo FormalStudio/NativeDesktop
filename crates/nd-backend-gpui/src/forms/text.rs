@@ -638,33 +638,39 @@ impl Editor {
                     }
                 }
             }
-            "v" if shortcut => {
-                let item = cx.read_from_clipboard();
-                let images: Vec<PastedImage> = match &item {
-                    Some(item) if self.accepts_media => item
-                        .entries
-                        .iter()
-                        .filter_map(|entry| match entry {
-                            gpui::ClipboardEntry::Image(image) => Some(PastedImage {
-                                bytes: image.bytes.clone().into(),
-                                mime: image.format.mime_type().into(),
-                            }),
-                            _ => None,
-                        })
-                        .collect(),
-                    _ => Vec::new(),
-                };
-                if !images.is_empty() {
-                    if let Some(sink) = &self.sink {
-                        sink.send(ImagesPasted { images }, cx);
-                    }
-                } else if let Some(text) = item.and_then(|item| item.text()) {
-                    self.replace(self.selected.clone(), &text, cx);
-                }
-            }
             _ => return false,
         }
         true
+    }
+
+    /// Whether `ks` pastes, which `on_key` handles: the clipboard is read asynchronously.
+    fn pastes(&self, ks: &Keystroke) -> bool {
+        let shortcut = if cfg!(target_os = "macos") { ks.modifiers.platform } else { ks.modifiers.control };
+        self.marked.is_none() && shortcut && ks.key == "v"
+    }
+
+    fn paste(&mut self, item: Option<ClipboardItem>, cx: &mut App) {
+        let images: Vec<PastedImage> = match &item {
+            Some(item) if self.accepts_media => item
+                .entries
+                .iter()
+                .filter_map(|entry| match entry {
+                    gpui::ClipboardEntry::Image(image) => Some(PastedImage {
+                        bytes: image.bytes.clone().into(),
+                        mime: image.format.mime_type().into(),
+                    }),
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        if !images.is_empty() {
+            if let Some(sink) = &self.sink {
+                sink.send(ImagesPasted { images }, cx);
+            }
+        } else if let Some(text) = item.and_then(|item| item.text()) {
+            self.replace(self.selected.clone(), &text, cx);
+        }
     }
 }
 
@@ -1219,15 +1225,24 @@ pub(crate) fn chrome(ctl: &Ctl, editor: &Rc<std::cell::RefCell<Editor>>, f: &Fie
     let middle = {
         let (editor, sink) = (editor.clone(), ctl.sink.clone());
         move |event: &MouseDownEvent, window: &mut Window, cx: &mut App| {
-            let Some(text) = cx.read_from_primary().and_then(|item| item.text()) else { return };
-            sink.take_focus(window, cx);
-            let mut e = editor.borrow_mut();
-            let at = e.offset_at(event.position);
-            e.move_to(at);
-            let range = e.selected.clone();
-            e.replace(range, &text, cx);
-            drop(e);
-            window.refresh();
+            let (editor, sink, position) = (editor.clone(), sink.clone(), event.position);
+            let read = cx.read_from_primary_async();
+            window
+                .spawn(cx, async move |cx| {
+                    let Some(text) = read.await.and_then(|item| item.text()) else { return };
+                    cx.update(|window, cx| {
+                        sink.take_focus(window, cx);
+                        let mut e = editor.borrow_mut();
+                        let at = e.offset_at(position);
+                        e.move_to(at);
+                        let range = e.selected.clone();
+                        e.replace(range, &text, cx);
+                        drop(e);
+                        window.refresh();
+                    })
+                    .ok();
+                })
+                .detach();
         }
     };
     let scrolled = {
@@ -1260,6 +1275,23 @@ pub(crate) fn on_key(
 ) -> impl Fn(&KeyDownEvent, &mut Window, &mut App) + 'static {
     let editor = editor.clone();
     move |event: &KeyDownEvent, window: &mut Window, cx: &mut App| {
+        // On Linux the clipboard's owner can be a browser engine pumped from this thread, which a
+        // blocking read would starve.
+        if editor.borrow().pastes(&event.keystroke) {
+            let (editor, read) = (editor.clone(), cx.read_from_clipboard_async());
+            window
+                .spawn(cx, async move |cx| {
+                    let item = read.await.ok().flatten();
+                    cx.update(|window, cx| {
+                        editor.borrow_mut().paste(item, cx);
+                        window.refresh();
+                    })
+                    .ok();
+                })
+                .detach();
+            cx.stop_propagation();
+            return;
+        }
         if editor.borrow_mut().key(&event.keystroke, cx) {
             cx.stop_propagation();
             window.refresh();
