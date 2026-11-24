@@ -225,7 +225,9 @@ impl Build<'_> {
         let ctl = Ctl {
             id,
             look: {
-                let look = FormLook::of(&self.theme());
+                let theme = self.theme();
+                let look = FormLook::of(&theme);
+                let look = if enabled { look } else { look.disabled(&theme) };
                 FormLook { ring_settles: look.ring_settles && !cx.reduce_motion(), ..look }
             },
             focused: focus.is_focused(window),

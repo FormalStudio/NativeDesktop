@@ -169,12 +169,6 @@ pub(crate) fn link(b: &Build, id: NodeId, p: &LinkProps, window: &mut Window, cx
     if look.link_button {
         text = text.px(look.padding_x).pt(px(5.)).pb(px(6.)).rounded(look.radius);
     }
-    let dark = b.theme().is_dark();
-    if !p.enabled && look.link_button {
-        // AccentTextFillColorDisabled.
-        let ink = if dark { gpui::white().opacity(0x5d as f32 / 255.) } else { gpui::black().opacity(0x5c as f32 / 255.) };
-        return with_style(text.text_color(ink), &p.style).into_any_element();
-    }
     if !p.enabled {
         return with_style(text.opacity(look.disabled_opacity), &p.style).into_any_element();
     }
@@ -184,7 +178,7 @@ pub(crate) fn link(b: &Build, id: NodeId, p: &LinkProps, window: &mut Window, cx
         // HyperlinkButton: SubtleFillColorSecondary and AccentTextFillColorSecondary under the
         // pointer (the accent's Dark3 in light, the rest colour Light3 in dark), Tertiary
         // and AccentTextFillColorTertiary (the accent fill's shade) while pressed.
-        let hover = if dark { look.accent_text } else { b.theme().accent_container.fg };
+        let hover = if b.theme().is_dark() { look.accent_text } else { b.theme().accent_container.fg };
         let pressed = look.accent;
         text = text
             .hover(move |s| s.bg(look.subtle_hover).text_color(hover))

@@ -16,7 +16,7 @@ use nd_gpui::gpui::prelude::FluentBuilder as _;
 use super::glyph::{Glyph, glyph};
 use super::text::{menu_item, popover};
 use super::toggle::{check_label_gap, elevation_edge, focus_visual, pressable, ring};
-use super::{Ctl, Sink, with_style};
+use super::{Ctl, FormLook, Sink, with_style};
 use crate::render::Build;
 
 /// The pop-up's menu while open.
@@ -403,6 +403,8 @@ fn radio(b: &Build, id: NodeId, p: &SelectProps, window: &mut Window, cx: &mut A
         .line_height(look.line_height)
         .text_color(look.text);
     group = if p.horizontal { group.flex_row().flex_wrap() } else { group.flex_col() };
+    // RadioButtonCheckGlyphFillDisabled is TextOnAccentFillColorPrimary, not its disabled shade.
+    let ink = if p.enabled { look.on_accent } else { FormLook::of(&b.theme()).on_accent };
     for (index, option) in p.options.iter().enumerate() {
         let selected = index == p.selected;
         let hover_group = format!("nd-radio-{index}");
@@ -412,7 +414,8 @@ fn radio(b: &Build, id: NodeId, p: &SelectProps, window: &mut Window, cx: &mut A
         } else {
             (look.check_fill[0], look.check_fill[1], look.check_fill[2])
         };
-        let mut mark = div().id("mark").size(rest).rounded_full().bg(look.on_accent);
+        // An unselected button's mark is there at no size, for the press to grow.
+        let mut mark = div().id("mark").size(if selected { rest } else { px(0.) }).rounded_full().bg(ink);
         let mut dot = div()
             .id("dot")
             .size(look.check_size)
@@ -425,9 +428,9 @@ fn radio(b: &Build, id: NodeId, p: &SelectProps, window: &mut Window, cx: &mut A
             .bg(fill);
         if p.enabled && look.thumb_dot.is_some() {
             // WinUI's mark grows under the pointer and shrinks while pressed; an unselected
-            // button shows only its fill under the pointer, and the accent with the pressed
-            // mark while pressed.
-            let (on_accent, accent) = (look.on_accent, look.accent);
+            // button shows only its fill under the pointer, and the pressed mark on the
+            // pressed fill inside a fainter ring while pressed.
+            let ring = look.check_stroke_active.unwrap_or(look.check_stroke);
             dot = dot.group_hover(hover_group.clone(), move |s| s.bg(fill_hover));
             if selected {
                 mark = mark
@@ -435,10 +438,12 @@ fn radio(b: &Build, id: NodeId, p: &SelectProps, window: &mut Window, cx: &mut A
                     .group_active(hover_group.clone(), move |s| s.size(pressed));
                 dot = dot.group_active(hover_group.clone(), move |s| s.bg(fill_active));
             } else {
+                // GPUI gives a div the hitbox its press state needs only with a hover style or a
+                // listener, so the mark carries an empty hover style.
                 mark = mark
-                    .bg(gpui::transparent_black())
-                    .group_active(hover_group.clone(), move |s| s.size(pressed).bg(on_accent));
-                dot = dot.group_active(hover_group.clone(), move |s| s.bg(accent).border_color(accent));
+                    .group_hover(hover_group.clone(), |s| s)
+                    .group_active(hover_group.clone(), move |s| s.size(pressed));
+                dot = dot.group_active(hover_group.clone(), move |s| s.bg(fill_active).border_color(ring));
             }
         }
         let dot = dot.children((selected || look.thumb_dot.is_some()).then_some(mark));

@@ -161,6 +161,8 @@ pub struct FormLook {
     /// (ControlAltFillColorSecondary, Tertiary, Quarternary), outlined in `check_stroke`.
     pub check_fill: [Hsla; 3],
     pub check_stroke: Hsla,
+    /// The unchecked box's outline while pressed, where it differs from `check_stroke`.
+    pub check_stroke_active: Option<Hsla>,
     pub check_stroke_width: Pixels,
     /// Side of the check mark in a checked box (WinUI's CheckBoxGlyphSize).
     pub check_glyph: Pixels,
@@ -307,6 +309,7 @@ impl FormLook {
             check_fill: [gpui::transparent_black(); 3],
             // libadwaita's check button: an inset ring of 15% of the text colour.
             check_stroke: tint(0.15),
+            check_stroke_active: None,
             check_stroke_width: px(2.),
             check_glyph: px(14.),
             chevron_size: px(16.),
@@ -386,6 +389,51 @@ impl FormLook {
     /// layer (ControlFillColorDefault, Secondary, Tertiary) inside an elevation border, a 40x20
     /// toggle switch with a 12 px knob, 20 px check boxes outlined in the strong stroke, an 18 px
     /// slider thumb (20 px with its border) around a 12 px accent dot, a 1 px progress rail under a 3 px bar.
+    /// A disabled control's look. WinUI names a colour for each disabled part (the `*Disabled`
+    /// resources), so the Fluent look swaps those in and drops the fade; every other look keeps
+    /// its colours under `disabled_opacity`.
+    pub fn disabled(self, theme: &Theme) -> Self {
+        if theme.preset != nd_theme::Preset::Fluent {
+            return self;
+        }
+        let dark = theme.is_dark();
+        // AccentFillColorDisabled, the same colour as ControlStrongStrokeColorDisabled.
+        let accent: Hsla = gpui::rgba(if dark { 0xffffff28 } else { 0x00000037 }).into();
+        // TextOnAccentFillColorDisabled.
+        let on_accent: Hsla = gpui::rgba(if dark { 0xffffff87 } else { 0xffffffff }).into();
+        // TextFillColorDisabled, which AccentTextFillColorDisabled matches.
+        let text: Hsla = gpui::rgba(if dark { 0xffffff5d } else { 0x0000005c }).into();
+        // ControlFillColorDisabled.
+        let fill: Hsla = gpui::rgba(if dark { 0xffffff0b } else { 0xf9f9f94d }).into();
+        Self {
+            text,
+            secondary_text: text,
+            accent_text: text,
+            chevron_color: text,
+            accent,
+            accent_hover: accent,
+            accent_active: accent,
+            on_accent,
+            knob: on_accent,
+            knob_hover: on_accent,
+            knob_off: text,
+            // ControlAltFillColorDisabled.
+            check_fill: [gpui::transparent_black(); 3],
+            check_stroke: accent,
+            switch_outline: Some(accent),
+            // ControlStrongFillColorDisabled: the slider's rail.
+            track: gpui::rgba(if dark { 0xffffff3f } else { 0x00000051 }).into(),
+            fill,
+            fill_hover: fill,
+            fill_active: fill,
+            // ControlStrokeColorDefault alone, all round: no underline over the border.
+            field_underline: self.field_underline.map(|_| gpui::transparent_black()),
+            elevation: self.elevation.map(|e| Elevation { stroke: self.border, ..e }),
+            disabled_opacity: 1.,
+            ..self
+        }
+    }
+
     pub fn fluent(theme: &Theme) -> Self {
         // ControlFillColorDefault: white over a light layer, the text's white thinly over a dark one.
         let dark = theme.is_dark();
@@ -454,6 +502,8 @@ impl FormLook {
             field_focus_fill: if dark { gpui::rgba(0x1e1e1eb3).into() } else { gpui::white() },
             check_fill,
             check_stroke: strong,
+            // ControlStrongStrokeColorDisabled.
+            check_stroke_active: Some(if dark { with_alpha(ink, 0.157) } else { with_alpha(black, 0.216) }),
             check_stroke_width: px(1.),
             check_glyph: px(12.),
             chevron_size: px(12.),
@@ -613,5 +663,20 @@ mod tests {
             let theme = Theme::derive(Preset::Fluent, scheme, palette, Metrics::preset(Preset::Fluent), 1.);
             assert_eq!(super::FormLook::of(&theme).accent_text, nd_theme::color::parse_hex(shade).unwrap(), "{scheme:?}");
         }
+    }
+
+    #[test]
+    fn only_fluent_swaps_in_disabled_colours() {
+        let theme = |preset| {
+            let palette = Palette::baked_for(preset, Scheme::Light);
+            Theme::derive(preset, Scheme::Light, palette, Metrics::preset(preset), 1.)
+        };
+        let fluent = theme(Preset::Fluent);
+        let off = super::FormLook::of(&fluent).disabled(&fluent);
+        // AccentFillColorDisabled, drawn as is rather than faded.
+        assert_eq!(off.accent, nd_theme::color::parse_hex("#00000037").unwrap());
+        assert_eq!(off.disabled_opacity, 1.);
+        let adwaita = theme(Preset::Adwaita);
+        assert_eq!(super::FormLook::of(&adwaita).disabled(&adwaita).accent, super::FormLook::of(&adwaita).accent);
     }
 }

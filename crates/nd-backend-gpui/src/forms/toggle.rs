@@ -157,7 +157,9 @@ pub(crate) fn checkbox(
     } else if p.enabled {
         indicator = indicator
             .group_hover(CHECK_GROUP, move |s| s.bg(hover).border_color(if on { hover } else { look.check_stroke }))
-            .group_active(CHECK_GROUP, move |s| s.bg(active).border_color(if on { active } else { look.check_stroke }));
+            .group_active(CHECK_GROUP, move |s| {
+                s.bg(active).border_color(if on { active } else { look.check_stroke_active.unwrap_or(look.check_stroke) })
+            });
     }
     let toggled = if p.mixed {
         gpui::Toggled::Mixed
@@ -177,6 +179,7 @@ pub(crate) fn checkbox(
         .items_center()
         .min_h(look.toggle_row)
         .gap(check_label_gap(&look))
+        .text_color(look.text)
         .text_size(look.text_size)
         .line_height(look.line_height)
         .child(ring(look, ctl.ring(), look.check_radius, indicator))
