@@ -720,6 +720,14 @@ pub fn source_tree_view(
                             .text_size(theme.type_scale.footnote)
                             .child(label.clone().unwrap_or_else(|| action.accessible_label())),
                     };
+                    // WinUI's ToolTipService: an icon button's tooltip shows on hover.
+                    if fluent && let Some(text) = action.tooltip.clone() {
+                        let tip = crate::render::FluentTip::of(&theme, text);
+                        button = button.tooltip(move |_, cx| {
+                            use gpui::AppContext as _;
+                            cx.new(|_| tip.clone()).into()
+                        });
+                    }
                     if show_actions && let Some(on_input) = on_input.clone() {
                         let (key, action) = (key.clone(), action.id.clone());
                         button = button.on_click(move |_, window, cx| {
