@@ -639,9 +639,13 @@ fn evict(budget: usize, state: &mut State, now: Instant) {
 
 /// FNV-1a, 64 bit: stable across runs and platforms, unlike `DefaultHasher`.
 pub fn fnv1a(text: &str) -> u64 {
+    fnv1a_bytes(text.as_bytes())
+}
+
+pub fn fnv1a_bytes(bytes: &[u8]) -> u64 {
     let mut hash = 0xcbf2_9ce4_8422_2325u64;
-    for byte in text.bytes() {
-        hash ^= u64::from(byte);
+    for byte in bytes {
+        hash ^= u64::from(*byte);
         hash = hash.wrapping_mul(0x0100_0000_01b3);
     }
     hash

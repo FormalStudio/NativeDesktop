@@ -796,6 +796,20 @@ fn composer_stages_pasted_images_and_sends_them_with_the_text() {
 }
 
 #[test]
+fn pasted_previews_are_keyed_by_content_not_by_draft_id() {
+    let paste = |bytes: Vec<u8>| {
+        let mut d = Draft::default();
+        d.apply(&ComposerEvent::Images(vec![PastedImage { bytes: Arc::from(bytes), mime: "image/png".into() }]));
+        d.attachments.remove(0)
+    };
+    let (a, b, again) = (paste(png(8, 8)), paste(png(16, 8)), paste(png(8, 8)));
+    assert_eq!(a.id, b.id, "a new draft starts its ids over");
+    let key = |a: &Attachment| a.preview.as_ref().map(ImageSource::key);
+    assert_ne!(key(&a), key(&b), "a different picture is a different cache entry");
+    assert_eq!(key(&a), key(&again));
+}
+
+#[test]
 fn dropped_files_preview_images_by_extension() {
     let mut d = Draft::default();
     d.apply(&ComposerEvent::Files(vec!["/tmp/photo.JPG".into(), "/tmp/notes.pdf".into()]));

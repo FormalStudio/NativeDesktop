@@ -18,7 +18,7 @@ use nd_ui::StyleRefinement;
 use nd_ui::prelude::*;
 
 use super::image::image;
-use super::pipeline::ImageSource;
+use super::pipeline::{ImageSource, fnv1a_bytes};
 use crate::controls::{ButtonExt, icon_button};
 use crate::forms::{
     FilesDropped, ImagesPasted, LabelTone, PastedImage, TextChanged, TextStyle, TextSubmitted, label, text_area,
@@ -73,7 +73,11 @@ impl Attachment {
         let ext = pasted.mime.strip_prefix("image/").unwrap_or("png");
         Self {
             name: format!("Pasted image.{ext}").into(),
-            preview: Some(ImageSource::bytes(id.clone(), pasted.bytes.clone())),
+            // Keyed by content: ids restart with every new draft, and the decode cache outlives it.
+            preview: Some(ImageSource::bytes(
+                format!("pasted:{:016x}:{}", fnv1a_bytes(&pasted.bytes), pasted.bytes.len()),
+                pasted.bytes.clone(),
+            )),
             path: None,
             bytes: Some(pasted.bytes.clone()),
             id,
