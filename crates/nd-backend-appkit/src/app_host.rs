@@ -417,6 +417,9 @@ impl AppHost {
             if let Ok(mut app) = host.app.try_borrow_mut() {
                 app.drain_events();
             }
+            // What the events did may have closed a window (a page agreeing to its window's
+            // close), which no frame follows.
+            host.sync_windows();
             host.kick();
         });
         host.sync_windows();
