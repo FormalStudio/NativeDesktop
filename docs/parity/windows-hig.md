@@ -39,6 +39,23 @@ The rules and values are in [docs/dev/hig/windows.md](../dev/hig/windows.md).
   bottom `(0,62,115)` in both; hover bottom 60% of the hover fill; pressed borderless at 80%
   with TextOnAccentFillColorSecondary. Disabled is from the resources only: the gallery has no
   disabled button.
+- [x] Subtle button: hover and pressed took the standard button's fills. Now
+  SubtleFillColorSecondary and Tertiary. From the resources only.
+- [x] Hyperlink button: text was the accent fill's shade (Dark1, Light2) at rest and 80% of it
+  pressed, with no hover colour. Now `accent.text`, a palette key the Windows source sets to the
+  system accent's Dark2 in light and Light3 in dark (AccentTextFillColorPrimary), hover
+  Secondary and pressed Tertiary; other presets leave the key unset and keep the derived link.
+  `forms::look::tests::fluent_links_take_the_accents_dark2_in_light_and_light3_in_dark`; VM
+  capture with QMP input, WinUI left and nd right, rows rest, hover, pressed:
+  [light 100%](windows-shots/hyperlink-light-100.png), [dark 100%](windows-shots/hyperlink-dark-100.png).
+
+  | Text, light / dark | rest | hover | pressed |
+  | --- | --- | --- | --- |
+  | WinUI 3 Gallery | `#003e92` / `#99ebff` | `#001a68` / `#99ebff` | `#0067c0` / `#4cc2ff` |
+  | nd after | `#003e92` / `#99ebff` | `#001a68` / `#99ebff` | `#0067c0` / `#4cc2ff` |
+
+  Disabled measured on the Gallery only (`#9b9b9b` over 243, `#717171` over 32: 36% ink, the
+  resources' `#5C000000` and `#5DFFFFFF`); nd's gallery has no disabled link.
 - [x] Text fields had a 2 px uniform border. Now 1 px ControlStroke with a ControlStrongStroke
   bottom edge, a 2 px accent underline when focused, InputActive fill. VM capture: fill, top
   `#e5e5e5` and bottom `#868686` edges match the Gallery's TextBox.
