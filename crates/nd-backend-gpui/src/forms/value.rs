@@ -100,6 +100,17 @@ pub(crate) fn slider(b: &Build, id: NodeId, p: &SliderProps, window: &mut Window
     let filled = bar(div().absolute().rounded_full().bg(look.accent));
     let filled =
         if p.vertical { filled.bottom_0().h(relative(fraction)) } else { filled.left_0().w(relative(fraction)) };
+    // WinUI's value fill steps to AccentFillColorSecondary and Tertiary with the thumb.
+    let filled = if p.enabled && look.thumb_dot.is_some() {
+        let (hover, pressed) = (look.accent_hover, look.accent_active);
+        filled
+            .id("fill")
+            .group_hover(SLIDER_GROUP, move |s| s.bg(hover))
+            .group_active(SLIDER_GROUP, move |s| s.bg(pressed))
+            .into_any_element()
+    } else {
+        filled.into_any_element()
+    };
     rail = rail.child(track).child(filled);
     if p.ticks > 0 {
         for i in 0..p.ticks {
@@ -436,11 +447,14 @@ pub(crate) fn thumb(
     let knob = look.slider_knob;
     let face = match look.thumb_dot {
         // WinUI's thumb: a solid disc in an elevation border around an accent dot that grows
-        // under the pointer and shrinks while pressed.
+        // under the pointer and shrinks while pressed, in the accent's hover and pressed shades.
         Some([rest, hover, pressed]) => {
             let mut dot = div().id("dot").size(rest).rounded_full().bg(look.accent);
             if enabled {
-                dot = dot.group_hover(group, move |s| s.size(hover)).group_active(group, move |s| s.size(pressed));
+                let (lit, dim) = (look.accent_hover, look.accent_active);
+                dot = dot
+                    .group_hover(group, move |s| s.size(hover).bg(lit))
+                    .group_active(group, move |s| s.size(pressed).bg(dim));
             }
             div()
                 .size(knob)

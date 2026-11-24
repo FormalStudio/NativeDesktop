@@ -203,10 +203,12 @@ pub struct FormLook {
     /// Accent fills hovered and pressed (AccentFillColorSecondary and Tertiary).
     pub accent_hover: Hsla,
     pub accent_active: Hsla,
-    /// Diameter of the accent dot in a slider thumb (and in a checked radio button) at rest,
-    /// hovered and pressed: WinUI's thumb grows its inner dot under the pointer. `None` draws a
-    /// plain knob.
+    /// Diameter of the accent dot in a slider thumb at rest, hovered and pressed: WinUI's thumb
+    /// grows its inner dot under the pointer. `None` draws a plain knob.
     pub thumb_dot: Option<[Pixels; 3]>,
+    /// Diameter of a checked radio button's mark at rest, hovered and pressed. `None` keeps it
+    /// one size.
+    pub radio_mark: Option<[Pixels; 3]>,
     /// The slider thumb around the dot (ControlSolidFillColorDefault).
     pub thumb_fill: Hsla,
     /// The switch knob grows by this under the pointer, and stretches by `knob_press` along the
@@ -336,6 +338,7 @@ impl FormLook {
             accent_hover: nd_theme::color::mix(theme.accent, theme.text.on_accent, 0.1),
             accent_active: nd_theme::color::mix(theme.accent, gpui::black(), 0.2),
             thumb_dot: None,
+            radio_mark: None,
             thumb_fill: theme.text.on_accent,
             knob_hover_grow: px(0.),
             knob_press: px(0.),
@@ -538,7 +541,9 @@ impl FormLook {
             popover_shadow: (gpui::hsla(0., 0., 0., if dark { 0.26 } else { 0.14 }), px(8.), px(16.)),
             accent_hover: with_alpha(accent, accent.a * 0.9),
             accent_active: with_alpha(accent, accent.a * 0.8),
-            thumb_dot: Some([px(12.), px(14.), px(10.)]),
+            // SliderInnerThumb is 12 px, scaled 0.86, 1.167 and 0.71 by its visual states.
+            thumb_dot: Some([px(10.32), px(14.), px(8.52)]),
+            radio_mark: Some([px(12.), px(14.), px(10.)]),
             thumb_fill: if dark { gpui::rgb(0x454545).into() } else { gpui::white() },
             knob_hover_grow: px(2.),
             knob_press: px(3.),

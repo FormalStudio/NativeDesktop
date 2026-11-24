@@ -414,7 +414,7 @@ fn radio(b: &Build, id: NodeId, p: &SelectProps, window: &mut Window, cx: &mut A
     for (index, option) in p.options.iter().enumerate() {
         let selected = index == p.selected;
         let hover_group = format!("nd-radio-{index}");
-        let [rest, hover, pressed] = look.thumb_dot.unwrap_or([px(6.); 3]);
+        let [rest, hover, pressed] = look.radio_mark.unwrap_or([px(6.); 3]);
         let (fill, fill_hover, fill_active) = if selected {
             (look.accent, look.accent_hover, look.accent_active)
         } else {
@@ -432,7 +432,7 @@ fn radio(b: &Build, id: NodeId, p: &SelectProps, window: &mut Window, cx: &mut A
             .border(look.check_stroke_width)
             .border_color(if selected { look.accent } else { look.check_stroke })
             .bg(fill);
-        if p.enabled && look.thumb_dot.is_some() {
+        if p.enabled && look.radio_mark.is_some() {
             // WinUI's mark grows under the pointer and shrinks while pressed; an unselected
             // button shows only its fill under the pointer, and the pressed mark on the
             // pressed fill inside a fainter ring while pressed.
@@ -452,7 +452,7 @@ fn radio(b: &Build, id: NodeId, p: &SelectProps, window: &mut Window, cx: &mut A
                 dot = dot.group_active(hover_group.clone(), move |s| s.bg(fill_active).border_color(ring));
             }
         }
-        let dot = dot.children((selected || look.thumb_dot.is_some()).then_some(mark));
+        let dot = dot.children((selected || look.radio_mark.is_some()).then_some(mark));
         let mut item = div()
             .id(ElementId::Integer(index as u64))
             .group(hover_group)
