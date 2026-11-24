@@ -218,6 +218,19 @@ impl CefPage {
         self.devtools.evaluate(nd_webview::script::COUNTING_SCRIPT, None, |_| {});
     }
 
+    /// Reads whether the page's colour scheme comes out dark and sets its canvas to match.
+    fn probe_canvas(&self) {
+        if self.style != CefStyle::Chrome {
+            return;
+        }
+        let id = self.id;
+        self.devtools.evaluate(DARK_SCHEME_PROBE, Some(nd_webview::script::INTERNAL_WORLD), move |r| {
+            let Some(p) = get(id) else { return };
+            p.st.borrow_mut().dark_canvas = r.ok().and_then(|v| v.as_bool()).unwrap_or(false);
+            p.apply_canvas();
+        });
+    }
+
     fn apply_canvas(&self) {
         let mut browser = self.host().and_then(|h| cef::ImplBrowserHost::browser(&h));
         let color = canvas(self.id);
@@ -303,14 +316,7 @@ impl CefPage {
         let url = self.main_frame().map(|f| crate::text(&f.url())).unwrap_or_default();
         self.st.borrow_mut().committed_url = url;
         self.report_security(None);
-        if self.style == CefStyle::Chrome {
-            let id = self.id;
-            self.devtools.evaluate(DARK_SCHEME_PROBE, Some(nd_webview::script::INTERNAL_WORLD), move |r| {
-                let Some(p) = get(id) else { return };
-                p.st.borrow_mut().dark_canvas = r.ok().and_then(|v| v.as_bool()).unwrap_or(false);
-                p.apply_canvas();
-            });
-        }
+        self.probe_canvas();
         // Off-screen (Alloy style) Chromium does not always report favicon URLs; the page's
         // own `<link rel=icon>` is read like on WebKit.
         let id = self.id;
@@ -1146,6 +1152,13 @@ const DARK_SCHEME_PROBE: &str = "(() => { \
     const s = css && css !== 'normal' ? css : meta; \
     const dark = /\\bdark\\b/.test(s), light = /\\blight\\b/.test(s); \
     return dark && (!light || matchMedia('(prefers-color-scheme: dark)').matches); })()";
+
+/// The appearance changed: a `light dark` page's canvas follows it.
+pub(crate) fn theme_changed(id: u64) {
+    if let Some(p) = get(id) {
+        p.probe_canvas();
+    }
+}
 
 /// The base background a Chrome-style page sits on. Chrome style takes it from the BrowserView,
 /// which overrides the page's own canvas, so it follows the page's colour scheme here.

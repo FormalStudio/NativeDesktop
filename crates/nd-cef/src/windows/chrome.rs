@@ -726,6 +726,7 @@ wrap_browser_view_delegate! {
             if let Some(view) = view {
                 view.set_background_color(crate::page::canvas(self.id));
             }
+            crate::page::theme_changed(self.id);
         }
     }
 
