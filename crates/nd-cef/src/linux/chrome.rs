@@ -230,6 +230,20 @@ impl Chrome {
 
     pub(crate) fn browser_created(&self) {}
 
+    /// Chrome style takes the page base background from the Views theme, dark grey under a dark
+    /// system theme, where Chrome shows a page with no colours of its own on white. Each theme
+    /// change sets it again, and a windowed browser has no delegate to hear of one (macOS's
+    /// `on_theme_changed`), so every placement puts white back once the theme has moved it.
+    /// shortcut: as on macOS, white also wins over a page's own `color-scheme: dark` canvas.
+    fn white_base(&self) {
+        let mut browser = crate::page::get(self.page).and_then(|p| p.host()).and_then(|h| cef::ImplBrowserHost::browser(&h));
+        if let Some(view) = cef::browser_view_get_for_browser(browser.as_mut())
+            && cef::ImplView::background_color(&view) != crate::page::PAGE_BACKGROUND
+        {
+            cef::ImplView::set_background_color(&view, crate::page::PAGE_BACKGROUND);
+        }
+    }
+
     pub(crate) fn browser_closed(&self) {}
 
     /// How Chromium creates the page's browser: windowed, in the container, Chrome style.
@@ -315,6 +329,7 @@ impl Chrome {
             }
         }
         drop(st);
+        self.white_base();
         self.route_keys();
         self.x.flush();
         resized
