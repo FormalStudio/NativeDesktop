@@ -655,10 +655,9 @@ impl Editor {
                 .entries
                 .iter()
                 .filter_map(|entry| match entry {
-                    gpui::ClipboardEntry::Image(image) => Some(PastedImage {
-                        bytes: image.bytes.clone().into(),
-                        mime: image.format.mime_type().into(),
-                    }),
+                    gpui::ClipboardEntry::Image(image) => {
+                        Some(PastedImage { bytes: image.bytes.clone().into(), mime: image.format.mime_type().into() })
+                    }
                     _ => None,
                 })
                 .collect(),

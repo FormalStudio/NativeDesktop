@@ -674,7 +674,11 @@ impl<'a> Build<'a> {
                     .downcast_ref::<DivProps>()
                     .is_some_and(|d| d.style.position == Some(gpui::Position::Absolute))
                     && node.children[..i].iter().any(|c| self.hosts_native(*c));
-                out.push(if stacked { crate::occlusion::Occluding::passive(element).into_any_element() } else { element });
+                out.push(if stacked {
+                    crate::occlusion::Occluding::passive(element).into_any_element()
+                } else {
+                    element
+                });
                 let fills = at.is_some_and(|at| self.backend.bounds.borrow().get(child).is_some_and(|b| same(*b, at)));
                 if fills
                     && let Some(cover) = self.covers.borrow().get(child).copied()
@@ -1287,11 +1291,7 @@ impl<'a> Build<'a> {
                     button.relative().border_1().border_color(gpui::transparent_black()).bg(fill).child(ring).children(
                         crate::forms::toggle::elevation_edge(
                             // Nothing under the row: the button's own border is clear.
-                            crate::forms::FormLook {
-                                elevation: Some(row),
-                                border: gpui::transparent_black(),
-                                ..*f
-                            },
+                            crate::forms::FormLook { elevation: Some(row), border: gpui::transparent_black(), ..*f },
                             edge_radius,
                         ),
                     )
