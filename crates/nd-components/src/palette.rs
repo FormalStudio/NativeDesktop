@@ -199,8 +199,9 @@ pub struct CommandPaletteKind;
 pub struct CommandPalette(NativeElement<CommandPaletteProps>);
 
 impl WidgetSemantics for CommandPaletteProps {
-    /// A dialog named by its placeholder, holding the search box as a part of its own. The
-    /// box's value shows a completion the first row offers after a `|` (`tri|p to Lisbon`).
+    /// A dialog named by its placeholder, holding the search box and then the rows as parts of
+    /// its own. The box's value shows a completion the first row offers after a `|`
+    /// (`tri|p to Lisbon`).
     fn semantics(&self) -> Semantics {
         let name = self.placeholder.as_ref().map_or_else(|| "Command Palette".to_owned(), |s| s.to_string());
         let completion = self
@@ -222,6 +223,15 @@ impl WidgetSemantics for CommandPaletteProps {
             placeholder: self.placeholder.as_ref().map(|p| p.to_string()),
             focused: true,
         });
+        // The rows after it, top first, each read as its title, subtitle and hint.
+        s.parts.extend(self.items.iter().map(|item| SemanticPart {
+            key: "row",
+            role: Role::ListItem,
+            name: item.accessible_label(),
+            value: None,
+            placeholder: None,
+            focused: false,
+        }));
         s
     }
 
