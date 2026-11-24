@@ -503,7 +503,7 @@ impl CefPage {
             if !waited.replace(true)
                 && let Some(page) = get(id)
             {
-                page.page.emit(CloseApproved { approved: true });
+                page.page.answer(CloseApproved { approved: true });
             }
         });
         self.devtools.evaluate(PROBE, None, move |result| {
@@ -513,13 +513,13 @@ impl CefPage {
             let Some(page) = get(id) else { return };
             let asks = result.ok().and_then(|v| v.as_bool()).unwrap_or(false);
             if !asks || !dialogs::available(&page.view) {
-                page.page.emit(CloseApproved { approved: true });
+                page.page.answer(CloseApproved { approved: true });
                 return;
             }
             let message = "Changes you made may not be saved.";
             dialogs::message(&page.view, "Leave this page?", message, &["Leave", "Cancel"], None, move |answer| {
                 if let Some(page) = get(id) {
-                    page.page.emit(CloseApproved { approved: answer.is_some() });
+                    page.page.answer(CloseApproved { approved: answer.is_some() });
                 }
             });
         });
@@ -531,7 +531,7 @@ impl CefPage {
             return false;
         }
         if std::mem::take(&mut self.st.borrow_mut().requesting_close) {
-            self.page.emit(CloseApproved { approved: true });
+            self.page.answer(CloseApproved { approved: true });
             return true;
         }
         self.page.emit(WindowClosed);
@@ -697,7 +697,7 @@ impl CefPage {
                 && let Some(p) = get(id)
                 && std::mem::take(&mut p.st.borrow_mut().requesting_close)
             {
-                p.page.emit(CloseApproved { approved: false });
+                p.page.answer(CloseApproved { approved: false });
             }
         });
         true
@@ -1056,7 +1056,7 @@ impl CefPage {
                 // Runs `beforeunload`; an approved close comes back through `do_close`, which
                 // keeps the browser for the app to unmount.
                 if host.try_close_browser() != 0 && std::mem::take(&mut self.st.borrow_mut().requesting_close) {
-                    self.page.emit(CloseApproved { approved: true });
+                    self.page.answer(CloseApproved { approved: true });
                 }
             }
             Command::ResetPermissions { origin } => {
