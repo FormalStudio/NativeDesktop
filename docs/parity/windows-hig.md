@@ -122,6 +122,30 @@ The rules and values are in [docs/dev/hig/windows.md](../dev/hig/windows.md).
   run recoloured (`FormLook::selection_text`, `recolor` with a unit test). Built; not yet
   captured.
 
+## Per-control pass
+
+Each control measured against the WinUI 3 Gallery page for it with QMP pointer input, light 100%
+unless noted; pair shots put WinUI left and nd right, one row per state. nd's menu and scroll
+track read `#fcfcfc` where the Gallery's acrylic falls back to `#f9f9f9` under WARP. nd's
+buttons compose their border over their own fill, so an edge over a card reads a level off.
+
+| Control | Result | Shot |
+| --- | --- | --- |
+| Check box | Strong stroke, ControlAltFill states, accent check; disabled grey fill | [light](windows-shots/checkbox-light-100.png) |
+| Radio button | Ring and 12/14/10 mark (own `radio_mark`, split from the slider's); disabled mark TextOnAccent | [light](windows-shots/radio-light-100.png) |
+| Text field, password | Edges, underline and focus match; password masks with `●` and shows a reveal button once typed | [text](windows-shots/textfield-light-100.png), [password](windows-shots/password-light-100.png) |
+| Combo box and flyout | Flyout over the button, selected row on the button's text, 33 px rows | [closed](windows-shots/combobox-light-100.png), [open](windows-shots/combobox-flyout-light-100.png) |
+| Slider | Value fill and dot take accent hover and pressed (`#0e6bbb`/`#1c6eb6` vs `#0d6aba`/`#1b6db5`); dot 10.3/14/8.5 | [light](windows-shots/slider-light-100.png), [dark](windows-shots/slider-dark-100.png) |
+| Progress bar and ring | 3 px bar on a 1 px rail; ring 4 px, no track; dark rail within one level | [light](windows-shots/progress-light-100.png) |
+| List and tree rows | Pill inset 4, 36 px rows, 3x16 indicator, hover and pressed fills, 8x4 chevron, children on the parent's text column | [light](windows-shots/list-light-100.png) |
+| Menu, context menu | Rows 28 px (Segoe UI's 19 px line), text 9/9 | [light](windows-shots/menu-light-100.png) |
+| Tooltip | 30 px box, padding and text match; shadow 2/3; centred 20 px above the pointer, below without room | [light](windows-shots/tooltip-light-100.png) |
+| Dialog | Smoke, 320 width, 24 padding, 32 px buttons 8 apart; border `#8b` vs `#8f`, separator exact | [light](windows-shots/dialog-light-100.png) |
+| Tabs | TabView strip: 240 px tabs, 242 selected with ears, close on each, separators, add button; view switcher is SelectorBar | [light](windows-shots/tabs-light-100.png) |
+| Scroll bar | Indicator x and colour exact; expanded thumb now 4 px from the outer edge as WinUI keeps it | [light](windows-shots/scrollbar-light-100.png) |
+| Title bar buttons | 46 px, close `#c42b1c`, pressed `#c83f31`: Explorer's system captions (the Gallery's WinAppSDK captions draw Windows 10's 48 px `#e81123`); minimise and maximise now press lighter than hover (SubtleFillTertiary) | [light](windows-shots/titlebar-light-100.png) (Explorer left) |
+| Disabled | Field, choice, buttons, check box, switches, radios, menu button from the Disabled resources | [nd](windows-shots/disabled-light-100.png) |
+
 ## Navigation and chrome
 
 - [x] NavigationView rows were 33 px apart with a leading disclosure triangle. Now 36 px rows
