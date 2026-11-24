@@ -644,15 +644,37 @@ impl<'a> Build<'a> {
         tracked
     }
 
+    /// Whether `id`'s subtree holds a native surface ([`crate::custom::CustomWidget::native_surface`]).
+    fn hosts_native(&self, id: NodeId) -> bool {
+        let node = &self.nodes[&id];
+        let native = match node.kind {
+            NodeKind::Widget(w) => {
+                w.type_id == std::any::TypeId::of::<NativeSurface>()
+                    || crate::custom::lookup(w.type_id).is_some_and(|c| c.native_surface())
+            }
+            _ => false,
+        };
+        native || node.children.iter().any(|c| self.hosts_native(*c))
+    }
+
     fn element(&self, id: NodeId, node: &Node, window: &mut gpui::Window, cx: &mut App) -> AnyElement {
         // A child that filled this node last frame, a backdrop under an overlay say, is what
         // the later children draw over.
         let children = |w: &mut gpui::Window, cx: &mut App| -> Vec<AnyElement> {
             let at = self.backend.bounds.borrow().get(&id).copied();
             let mut out = Vec::with_capacity(node.children.len());
-            for child in &node.children {
+            for (i, child) in node.children.iter().enumerate() {
                 self.covers.borrow_mut().remove(child);
-                out.push(self.node(*child, w, cx));
+                let element = self.node(*child, w, cx);
+                // Stacked over a native surface, which the display server puts above everything
+                // GPUI draws: the surface cuts itself around it. Passive, so the page keeps the
+                // keyboard while a load bar or a find bar sits on it.
+                let stacked = self.nodes[child]
+                    .props
+                    .downcast_ref::<DivProps>()
+                    .is_some_and(|d| d.style.position == Some(gpui::Position::Absolute))
+                    && node.children[..i].iter().any(|c| self.hosts_native(*c));
+                out.push(if stacked { crate::occlusion::Occluding::passive(element).into_any_element() } else { element });
                 let fills = at.is_some_and(|at| self.backend.bounds.borrow().get(child).is_some_and(|b| same(*b, at)));
                 if fills
                     && let Some(cover) = self.covers.borrow().get(child).copied()

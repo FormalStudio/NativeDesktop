@@ -21,6 +21,12 @@ pub trait CustomWidget: 'static {
 
     /// The node is gone; drop what was kept for it.
     fn released(&self, _node: NodeId) {}
+
+    /// The widget can show a window the display server stacks above everything GPUI draws (a
+    /// Chrome-style page's X11 child window), which cuts itself around what is stacked over it.
+    fn native_surface(&self) -> bool {
+        false
+    }
 }
 
 thread_local! {

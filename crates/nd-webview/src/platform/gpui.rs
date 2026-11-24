@@ -128,6 +128,10 @@ impl Mounted {
 }
 
 impl CustomWidget for Presenter {
+    fn native_surface(&self) -> bool {
+        true
+    }
+
     fn element(&self, cx: &CustomCx<'_>, window: &mut gpui::Window) -> AnyElement {
         BACKEND.with(|b| *b.borrow_mut() = Some(cx.backend().clone()));
         let props = cx.props().downcast_ref::<WebViewProps>().expect("webview node needs WebViewProps").clone();
