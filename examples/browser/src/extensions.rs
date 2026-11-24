@@ -54,12 +54,13 @@ fn extension_dir() -> PathBuf {
 }
 
 /// The host's manifest, in the profile's `NativeMessagingHosts`, pointing at `nd-test-host` next
-/// to this executable.
+/// to this executable. Chromium on Windows reads hosts only from the registry, so there the
+/// manifest is registered under the current user's Chrome key as well.
 fn install_host() {
     let Some(root) = std::env::var_os("ND_CEF_CACHE").map(PathBuf::from) else {
         fail("ND_CEF_CACHE must name the profile directory");
     };
-    let host = std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.join("nd-test-host")));
+    let host = std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.join(format!("nd-test-host{}", std::env::consts::EXE_SUFFIX))));
     let Some(host) = host.filter(|h| h.exists()) else { fail("nd-test-host is not built next to browser") };
     let dir = root.join("NativeMessagingHosts");
     let manifest = serde_json::json!({
@@ -73,6 +74,20 @@ fn install_host() {
         .and_then(|()| std::fs::write(dir.join(format!("{HOST}.json")), manifest.to_string()))
     {
         fail(format!("writing the host manifest: {e}"));
+    }
+    #[cfg(windows)]
+    {
+        let key = format!(r"HKCU\Software\Google\Chrome\NativeMessagingHosts\{HOST}");
+        let path = dir.join(format!("{HOST}.json"));
+        let status = std::process::Command::new("reg")
+            .args(["add", &key, "/ve", "/t", "REG_SZ", "/d"])
+            .arg(&path)
+            .arg("/f")
+            .stdout(std::process::Stdio::null())
+            .status();
+        if !status.as_ref().is_ok_and(|s| s.success()) {
+            fail(format!("registering the host manifest under {key}: {status:?}"));
+        }
     }
 }
 
