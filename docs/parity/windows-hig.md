@@ -4,6 +4,22 @@ Each gap found by comparing nd's `gallery` example with the WinUI 3 Gallery (3.0
 Windows VM at 100% scale, light theme, unless noted. Ticked items say how the fix was verified.
 The rules and values are in [docs/dev/hig/windows.md](../dev/hig/windows.md).
 
+## Surfaces
+
+- [x] Cards were `#ffffff` light and `#2d2d2d` dark with the divider colour as their edge, and
+  the dark content layer `#191919`. Now CardBackgroundFillColorDefault and CardStrokeColorDefault
+  over LayerFillColorDefault, and ContentDialog's own LayerFillColorAlt. VM capture of nd's and
+  the WinUI 3 Gallery's NavigationView pages, values from `Common_themeresources_any.xaml`:
+
+  | Grey level, light / dark | page (layer) | card | card edge |
+  | --- | --- | --- | --- |
+  | WinUI 3 Gallery | 249 / 39 | 253 / 50 | 234 / 35 |
+  | nd before | 249 / 25 | 255 / 45 | 240 / 62 |
+  | nd after | 249 / 39 | 253 / 50 | 234 / 35 |
+
+  Text (primary, secondary, tertiary), divider, control strokes, accent and its 90% and 80%
+  hover and pressed fills already matched the resources.
+
 ## Controls
 
 - [x] Text fields had a 2 px uniform border. Now 1 px ControlStroke with a ControlStrongStroke

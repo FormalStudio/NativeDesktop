@@ -380,15 +380,14 @@ impl FormLook {
     /// toggle switch with a 12 px knob, 20 px check boxes outlined in the strong stroke, an 18 px
     /// slider thumb (20 px with its border) around a 12 px accent dot, a 1 px progress rail under a 3 px bar.
     pub fn fluent(theme: &Theme) -> Self {
-        // From tokens, so the appearance audit can trace them: the card's white over a light
-        // layer, the text's white thinly over a dark one.
+        // ControlFillColorDefault: white over a light layer, the text's white thinly over a dark one.
         let dark = theme.is_dark();
-        let (ink, card, base) = (theme.text.primary, theme.surface.raised, theme.surface.base);
+        let (ink, base) = (theme.text.primary, theme.surface.base);
         let black = gpui::black();
         let (fill, fill_hover, fill_active) = if dark {
             (with_alpha(ink, 0.06), with_alpha(ink, 0.08), with_alpha(ink, 0.03))
         } else {
-            (with_alpha(card, 0.7), with_alpha(base, 0.5), with_alpha(base, 0.3))
+            (with_alpha(gpui::white(), 0.7), with_alpha(base, 0.5), with_alpha(base, 0.3))
         };
         // ControlStrongStrokeColorDefault: #72000000 light, #8BFFFFFF dark.
         let strong = if dark { with_alpha(ink, 0.545) } else { with_alpha(black, 0.447) };

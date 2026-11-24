@@ -29,6 +29,11 @@ use nd_components::icon::Icon;
 use nd_components::{FieldStyle, TextChanged, TextFieldKind, TextFieldProps};
 use nd_gpui::gpui::SharedString;
 
+/// CardStrokeColorDefault: #0F000000 light, #19000000 dark.
+fn card_stroke(theme: &nd_theme::Theme) -> gpui::Hsla {
+    nd_theme::color::with_alpha(gpui::black(), if theme.is_dark() { 0.1 } else { 0.059 })
+}
+
 fn is<W: 'static>(kind: WidgetKind) -> bool {
     kind.type_id == TypeId::of::<W>()
 }
@@ -174,12 +179,10 @@ impl Build<'_> {
                 PaneRole::Content if clear_sidebar && self.beside_sidebar(node) => {
                     // NavigationView's content grid: CardStrokeColorDefault on its top and
                     // leading edges (NavigationViewContentGridBorderThickness 1,1,0,0).
-                    let black = gpui::black();
-                    let stroke = nd_theme::color::with_alpha(black, if theme.is_dark() { 0.1 } else { 0.059 });
                     let layer = pane
                         .bg(theme.surface.layer)
                         .rounded_tl(theme.radius.lg)
-                        .when(fluent, |p| p.border_t_1().border_l_1().border_color(stroke));
+                        .when(fluent, |p| p.border_t_1().border_l_1().border_color(card_stroke(&theme)));
                     (layer, Some(theme.surface.layer), None)
                 }
                 PaneRole::Content | PaneRole::Overlay => (pane, None, None),
@@ -458,13 +461,19 @@ impl Build<'_> {
                 self.text_run(id, &t, Run::BODY.weight(FontWeight::SEMIBOLD), Some(secondary), None);
                 div().mb(s.md).font_weight(FontWeight::SEMIBOLD).text_color(secondary).child(t)
             });
+            // WinUI draws a card's stroke outside its fill, over the layer under it.
+            let edge = if theme.preset == nd_theme::Preset::Fluent {
+                nd_theme::color::over(card_stroke(&theme), theme.surface.layer)
+            } else {
+                look.border
+            };
             let rows = self.painted(id, Some(look.control), None, "form section", || {
                 div()
                     .flex()
                     .flex_col()
                     .rounded(theme.radius.lg)
                     .border_1()
-                    .border_color(look.border)
+                    .border_color(edge)
                     .bg(look.control)
                     .children(children(window, cx))
             });

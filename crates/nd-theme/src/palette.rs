@@ -117,7 +117,8 @@ impl Palette {
             (crate::Preset::Fluent, Scheme::Light) => Palette {
                 surface: hex("#f9f9f9"),
                 surface_sidebar: hex("#f3f3f3"),
-                surface_raised: hex("#ffffff"),
+                // CardBackgroundFillColorDefault (#B3FFFFFF) over the layer, as cards sit.
+                surface_raised: hex("#fdfdfd"),
                 surface_overlay: hex("#fcfcfc"),
                 text_primary: hex("#000000e4"),
                 text_secondary: hex("#0000009e"),
@@ -135,7 +136,8 @@ impl Palette {
             (crate::Preset::Fluent, Scheme::Dark) => Palette {
                 surface: hex("#272727"),
                 surface_sidebar: hex("#202020"),
-                surface_raised: hex("#2d2d2d"),
+                // CardBackgroundFillColorDefault (#0DFFFFFF) over the layer.
+                surface_raised: hex("#323232"),
                 surface_overlay: hex("#2c2c2c"),
                 text_primary: hex("#ffffff"),
                 text_secondary: hex("#ffffffc5"),

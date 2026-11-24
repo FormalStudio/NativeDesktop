@@ -19,8 +19,8 @@ pub struct SurfaceTokens {
     /// Popovers, menus and sheets drawn by nd.
     pub overlay: Hsla,
     /// The opaque content layer a window with a backdrop material (Mica) lays beside a
-    /// see-through sidebar and title row, as Windows' own apps do (measured: `#191919` dark on
-    /// Task Manager, `#f9f9f9` light on Notepad).
+    /// see-through sidebar and title row, as Windows' own apps do: LayerFillColorDefault over
+    /// the Mica base (measured on the WinUI 3 Gallery: `#272727` dark, `#f9f9f9` light).
     pub layer: Hsla,
     /// Toasts and tooltips: libadwaita's dark grey (`#505053`) under white text in both
     /// schemes; the overlay surface on the other looks.
@@ -168,7 +168,7 @@ impl Theme {
                 raised: p.surface_raised,
                 raised_hover,
                 overlay: p.surface_overlay,
-                layer: nd_gpui::gpui::rgb(if scheme.is_dark() { 0x191919 } else { 0xf9f9f9 }).into(),
+                layer: nd_gpui::gpui::rgb(if scheme.is_dark() { 0x272727 } else { 0xf9f9f9 }).into(),
                 osd: if preset == Preset::Adwaita { nd_gpui::gpui::rgb(0x505053).into() } else { p.surface_overlay },
             },
             border: BorderTokens { subtle: separator, strong },

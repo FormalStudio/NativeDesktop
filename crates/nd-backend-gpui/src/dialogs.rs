@@ -537,7 +537,7 @@ pub fn about_view(
     layer(theme, viewport, focus, on_input, Some(card.into_any_element()), marks)
 }
 
-/// A ContentDialog's parts: the content area on LayerFillColorAlt (the card colour) over the
+/// A ContentDialog's parts: the content area on LayerFillColorAlt over the
 /// command area on SolidBackgroundFillColorBase (the Mica base), a CardStroke line between
 /// them, 24 px padding in both, 8 px corners.
 struct ContentDialog {
@@ -548,7 +548,13 @@ struct ContentDialog {
 
 impl ContentDialog {
     fn of(theme: &Theme) -> Self {
-        Self { top: theme.surface.raised, bottom: theme.surface.sidebar, scrim: scrim(theme) }
+        // LayerFillColorAlt: white in light, #0DFFFFFF over the base in dark.
+        let top = if theme.is_dark() {
+            nd_theme::color::over(nd_theme::color::with_alpha(gpui::white(), 0.051), theme.surface.sidebar)
+        } else {
+            gpui::white()
+        };
+        Self { top, bottom: theme.surface.sidebar, scrim: scrim(theme) }
     }
 
     fn card(
