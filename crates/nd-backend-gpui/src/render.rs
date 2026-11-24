@@ -1352,6 +1352,8 @@ impl<'a> Build<'a> {
         // 83 ms), or switch at once when the OS has animations off.
         let (hover, active) = match (&fluent, adwaita) {
             (Some(f), _) if explicit.is_none() && accent => (f.accent_hover, f.accent_active),
+            // SubtleButton: SubtleFillColorSecondary and Tertiary.
+            (Some(f), _) if explicit.is_none() && !bezel => (f.subtle_hover, f.subtle_active),
             (Some(f), _) if explicit.is_none() => (f.fill_hover, f.fill_active),
             // A checked libadwaita toggle: 30% at rest, 35% hovered, 40% pressed.
             (_, Some(_)) if checked => {
