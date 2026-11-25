@@ -23,9 +23,9 @@ use objc2::{AnyThread, DefinedClass, MainThreadOnly, Message, define_class, msg_
 use objc2_app_kit::{
     NSAccessibility, NSAccessibilityGroupRole, NSAnimatablePropertyContainer, NSAnimationContext, NSApplication,
     NSAutoresizingMaskOptions, NSBackgroundStyle, NSBox, NSBoxType, NSColor, NSControl, NSControlTextEditingDelegate,
-    NSEvent, NSEventModifierFlags, NSEventType, NSFocusRingType, NSFont, NSFontWeightRegular, NSGlassEffectView,
-    NSImage, NSImageScaling, NSImageSymbolConfiguration, NSImageView, NSLineBreakMode, NSResponder, NSScrollView,
-    NSTableCellView, NSTableColumn, NSTableColumnResizingOptions, NSTableRowView, NSTableView,
+    NSEvent, NSEventMask, NSEventModifierFlags, NSEventType, NSFocusRingType, NSFont, NSFontWeightRegular,
+    NSGlassEffectView, NSImage, NSImageScaling, NSImageSymbolConfiguration, NSImageView, NSLineBreakMode, NSResponder,
+    NSScrollView, NSTableCellView, NSTableColumn, NSTableColumnResizingOptions, NSTableRowView, NSTableView,
     NSTableViewColumnAutoresizingStyle, NSTableViewDataSource, NSTableViewDelegate, NSTableViewStyle, NSTextField,
     NSTextFieldDelegate, NSTextView, NSUserInterfaceItemIdentification, NSView, NSVisualEffectBlendingMode,
     NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView, NSWindow,
@@ -453,6 +453,10 @@ pub(crate) struct Palette {
     return_focus: RefCell<Option<objc2::rc::Weak<NSResponder>>>,
     /// Set while nd writes the field, so the write is not taken for a user edit.
     writing: Cell<bool>,
+    /// Keys typed between the open and the present, which would otherwise reach the page
+    /// behind: replayed into the field once it shows.
+    typed_ahead: RefCell<Vec<Retained<NSEvent>>>,
+    ahead_monitor: RefCell<Option<Retained<AnyObject>>>,
     weak: Weak<Palette>,
 }
 
@@ -479,6 +483,8 @@ impl PaletteNative {
                 pending: Cell::new(false),
                 return_focus: RefCell::new(None),
                 writing: Cell::new(false),
+                typed_ahead: RefCell::new(Vec::new()),
+                ahead_monitor: RefCell::new(None),
                 weak: weak.clone(),
             }
         });
@@ -625,6 +631,7 @@ impl Drop for PaletteNative {
     // would strand it.
     fn drop(&mut self) {
         self.0.pending.set(false);
+        self.0.release_typing();
         self.0.dismiss(true, false);
     }
 }
@@ -644,6 +651,7 @@ impl Palette {
         if self.pending.replace(true) {
             return;
         }
+        self.hold_typing();
         let weak = self.weak.clone();
         // Never inside the transaction that opened it (3.13): the field takes first responder
         // and the window lays out.
@@ -654,9 +662,49 @@ impl Palette {
         });
     }
 
+    /// From the open on, plain keys wait for the field instead of going to the window behind.
+    fn hold_typing(&self) {
+        if self.ahead_monitor.borrow().is_some() {
+            return;
+        }
+        let weak = self.weak.clone();
+        let block = block2::RcBlock::new(move |event: std::ptr::NonNull<NSEvent>| -> *mut NSEvent {
+            let event = unsafe { event.as_ref() };
+            let shortcut =
+                event.modifierFlags().intersects(NSEventModifierFlags::Command | NSEventModifierFlags::Control);
+            if let Some(p) = weak.upgrade().filter(|p| p.pending.get() && !shortcut) {
+                p.typed_ahead.borrow_mut().push(event.retain());
+                return std::ptr::null_mut();
+            }
+            Retained::as_ptr(&event.retain()).cast_mut()
+        });
+        *self.ahead_monitor.borrow_mut() =
+            unsafe { NSEvent::addLocalMonitorForEventsMatchingMask_handler(NSEventMask::KeyDown, &block) };
+    }
+
+    /// Stops holding keys and hands back the ones held, in order.
+    fn release_typing(&self) -> Vec<Retained<NSEvent>> {
+        if let Some(monitor) = self.ahead_monitor.borrow_mut().take() {
+            unsafe { NSEvent::removeMonitor(&monitor) };
+        }
+        std::mem::take(&mut *self.typed_ahead.borrow_mut())
+    }
+
+    /// Held keys go where they were headed when the palette does not show after all.
+    fn pass_typing_on(&self) {
+        let held = self.release_typing();
+        let key = NSApplication::sharedApplication(self.mtm).keyWindow();
+        for event in held {
+            if let Some(window) = event.window(self.mtm).or_else(|| key.clone()) {
+                window.sendEvent(&event);
+            }
+        }
+    }
+
     fn present(&self) {
         if !self.pending.get() || !self.open.get() {
             self.pending.set(false);
+            self.pass_typing_on();
             return;
         }
         let app = NSApplication::sharedApplication(self.mtm);
@@ -686,6 +734,7 @@ impl Palette {
         *self.return_focus.borrow_mut() = window.firstResponder().map(|r| objc2::rc::Weak::from_retained(&r));
         let presented = self.model.borrow_mut().present();
         if !presented {
+            self.pass_typing_on();
             return;
         }
         let ui = self.build(&host);
@@ -700,6 +749,9 @@ impl Palette {
         self.sync_field(false);
         // Becoming first responder selects the field's whole text: a seeded present wants that.
         panel.makeFirstResponder(Some(&field));
+        for event in self.release_typing() {
+            panel.sendEvent(&event);
+        }
     }
 
     fn user_cancel(&self) {
