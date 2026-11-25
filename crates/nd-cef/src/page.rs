@@ -48,7 +48,7 @@ pub(crate) fn browser_count() -> usize {
 pub(crate) fn close_all() {
     let pages: Vec<Rc<CefPage>> = PAGES.with(|p| p.borrow().values().filter_map(Weak::upgrade).collect());
     for page in pages {
-        page.close();
+        page.close_in_place();
     }
 }
 
@@ -258,6 +258,18 @@ impl CefPage {
         {
             cef::ImplView::set_background_color(&view, color);
         }
+    }
+
+    /// Closes the browser and leaves its window where it is, for shutdown: a window unmapped
+    /// first can leave a frame Chromium sent it unpresented, and the GPU process waits on it.
+    fn close_in_place(&self) {
+        if std::mem::replace(&mut self.st.borrow_mut().closed, true) {
+            return;
+        }
+        if let Some(host) = self.host() {
+            host.close_browser(1);
+        }
+        PAGES.with(|p| p.borrow_mut().remove(&self.id));
     }
 
     pub(crate) fn host(&self) -> Option<BrowserHost> {
