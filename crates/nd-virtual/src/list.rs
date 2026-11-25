@@ -368,16 +368,42 @@ pub struct SortChanged {
 // Events the app handles.
 
 /// A drag the list accepts was dropped on it: on the row `key`, or on no row (empty space, or a
-/// row [`List::drop_on`] turns down).
+/// row [`List::drop_on`] turns down), and into the slot `index`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RowDropped<K> {
     pub key: Option<K>,
+    /// The slot between rows the drop landed in, as an insertion index among the rows in list
+    /// order: `0` before the first row, `len` after the last. A drop onto a row that takes it
+    /// ([`List::drop_on`]) has the slot before that row.
+    pub index: usize,
     pub item: nd_ui::DragItem,
     /// Held at the release: Control (Option on macOS) asks for a copy, Shift (Command on macOS)
     /// for a move.
     pub modifiers: nd_gesture::KeyModifiers,
     /// From the list's top-left.
     pub local: nd_core::Point,
+}
+
+/// Where a drop at `y` lands among the rows on screen, given top to bottom as `(index, top,
+/// height)` with `index` the row's place in the list: the upper half of a row is the slot before
+/// it, the lower half the slot after it, above the first row the slot before that one and below
+/// the last the slot after it. With no row on screen it is `len`. Returns the slot's insertion
+/// index and the y of the line that marks it.
+pub fn drop_slot(rows: &[(usize, f32, f32)], y: f32, len: usize) -> (usize, Option<f32>) {
+    let (Some(&(first, top, _)), Some(&(last, last_top, last_height))) = (rows.first(), rows.last()) else {
+        return (len, None);
+    };
+    if y < top {
+        return (first, Some(top));
+    }
+    match rows.iter().find(|(_, top, height)| y >= *top && y < top + height) {
+        Some(&(i, top, height)) if y < top + height / 2. => (i, Some(top)),
+        Some(&(i, top, height)) => (i + 1, Some(top + height)),
+        None => match rows.iter().find(|(_, top, _)| *top > y) {
+            Some(&(i, top, _)) => (i, Some(top)),
+            None => (last + 1, Some(last_top + last_height)),
+        },
+    }
 }
 
 /// The user selected `key` (the row the click or key landed on); `keys` is the whole selection
@@ -1281,9 +1307,10 @@ impl<K: RowKey> List<K> {
         self
     }
 
-    /// The list takes drops of these kinds: on the row under the pointer, highlighted while the
-    /// drag is over it, or on empty space. [`DragItem::FILES`](nd_ui::DragItem::FILES) takes
-    /// files dragged in from outside the app.
+    /// The list takes drops of these kinds. While a drag is over it a line marks the slot
+    /// between rows it would drop into ([`drop_slot`]); over a row [`drop_on`](Self::drop_on)
+    /// lets take it, that row is outlined instead. [`DragItem::FILES`](nd_ui::DragItem::FILES)
+    /// takes files dragged in from outside the app. Grids outline the cell under the pointer.
     pub fn accepts_drops(mut self, kinds: impl IntoIterator<Item = impl Into<SharedString>>) -> Self {
         self.accepts = kinds.into_iter().map(Into::into).collect();
         self
@@ -1408,7 +1435,8 @@ impl<K: RowKey> IntoElement for List<K> {
                 let row = RowId(on.parse().ok()?);
                 s.key_of(row)
             });
-            f(&RowDropped { key, item: e.item.clone(), modifiers: e.modifiers, local: e.local }, window, cx);
+            let index = e.slot.as_ref().map_or_else(|| s.len(), |slot| slot.index);
+            f(&RowDropped { key, index, item: e.item.clone(), modifiers: e.modifiers, local: e.local }, window, cx);
         });
         let on_sort = self.on_sort;
         el.on(move |e: &SortChanged, window, cx| {
@@ -1417,5 +1445,23 @@ impl<K: RowKey> IntoElement for List<K> {
             }
         })
         .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::drop_slot;
+
+    #[test]
+    fn drop_slots_fall_between_rows() {
+        let rows = [(3, 0., 20.), (4, 20., 30.), (5, 50., 20.)];
+        assert_eq!(drop_slot(&rows, 5., 9), (3, Some(0.)), "upper half of the first row");
+        assert_eq!(drop_slot(&rows, 15., 9), (4, Some(20.)), "lower half: after it");
+        assert_eq!(drop_slot(&rows, 34., 9), (4, Some(20.)));
+        assert_eq!(drop_slot(&rows, 36., 9), (5, Some(50.)));
+        assert_eq!(drop_slot(&rows, 69., 9), (6, Some(70.)), "lower half of the last row");
+        assert_eq!(drop_slot(&rows, 200., 9), (6, Some(70.)), "past the last row");
+        assert_eq!(drop_slot(&rows, -4., 9), (3, Some(0.)), "above the first row");
+        assert_eq!(drop_slot(&[], 10., 0), (0, None), "an empty list");
     }
 }

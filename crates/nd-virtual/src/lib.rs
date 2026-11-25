@@ -16,5 +16,5 @@ pub use crate::list::{
     ActivateEvent, CellTag, Column, ColumnResized, ExpandEvent, List, ListHandle, ListKind, ListProps, ListState,
     ListWidget, ROW_ACTION_WIDTH, RowAction, RowActionInvoked, RowActionSpec, RowActions, RowActionsSpec, RowActivated,
     RowDisclosed, RowDropped, RowEdge, RowKey, RowTag, RowView, RowsSelected, SelectEvent, Selection, SelectionChanged,
-    SortChanged, SortDirection, TreeNode, ViewportChanged, column, grid, list, row_action, table, tree,
+    SortChanged, SortDirection, TreeNode, ViewportChanged, column, drop_slot, grid, list, row_action, table, tree,
 };

@@ -41,7 +41,7 @@ use objc2_app_kit::{
 use objc2_core_foundation::CGFloat;
 use objc2_foundation::{
     MainThreadMarker, NSDictionary, NSEdgeInsets, NSIndexPath, NSIndexSet, NSInteger, NSMutableIndexSet,
-    NSNotification, NSNotificationCenter, NSNumber, NSObject, NSObjectProtocol, NSPoint, NSRect, NSString,
+    NSNotification, NSNotificationCenter, NSNumber, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString,
     NSUserDefaults,
 };
 
@@ -676,6 +676,9 @@ pub(crate) struct TableNative {
     size: Size,
     /// The width rows were last laid out at; a new one asks nd to lay them out again.
     row_width: f32,
+    /// Marks where a drag over the list would drop: a line between rows, or a ring round the
+    /// row that takes it ([`Self::drop_slot`]).
+    slot_line: Retained<NSView>,
 }
 
 impl TableNative {
@@ -723,6 +726,10 @@ impl TableNative {
                 Some(&clip),
             );
         }
+        let slot_line = NSView::new(mtm);
+        slot_line.setWantsLayer(true);
+        slot_line.setHidden(true);
+        table.addSubview(&slot_line);
         let this = Self {
             scroll,
             table,
@@ -735,6 +742,7 @@ impl TableNative {
             cell_nodes: HashMap::new(),
             size: Size::default(),
             row_width: 0.,
+            slot_line,
         };
         // Adding the columns resizes the table and moves the clip view; that is setup, not a
         // user scroll, and reported as one it stopped a bottom-aligned list's tail follow.
@@ -753,6 +761,75 @@ impl TableNative {
     /// The table view, for tests and automation.
     pub fn table(&self) -> &NSTableView {
         &self.table
+    }
+
+    /// The row the table shows at `row`.
+    fn row_id(&self, row: NSInteger) -> Option<RowId> {
+        match self.table.downcast_ref::<NSOutlineView>() {
+            Some(outline) => Shared::row_of_item(outline.itemAtRow(row).as_deref()),
+            None => self.shared.snap.borrow().ids.get(usize::try_from(row).ok()?).copied(),
+        }
+    }
+
+    /// Where a drag at `at` (window points, top-left origin) would land, marked as
+    /// `nd_virtual::List::accepts_drops` says; `None` hides the mark.
+    pub fn drop_slot(&self, at: Option<nd_core::Point>) -> Option<nd_ui::DropSlot> {
+        let Some(at) = at else {
+            self.slot_line.setHidden(true);
+            return None;
+        };
+        let window = self.table.window()?;
+        let height = window.contentView().map_or(0., |v| v.frame().size.height);
+        let p = self.table.convertPoint_fromView(NSPoint::new(f64::from(at.x), height - f64::from(at.y)), None);
+        let row = self.table.rowAtPoint(p);
+        let under = (row >= 0).then(|| self.row_id(row)).flatten();
+        let core = self.props.handle.0.borrow();
+        let on = |row: RowId| Some(SharedString::from(row.0.to_string()));
+        let accent = NSColor::controlAccentColor().CGColor();
+        let width = self.table.bounds().size.width;
+        if let Some(row_id) = under.filter(|r| self.props.drop_on.as_ref().is_some_and(|on| on.contains(r))) {
+            if let Some(layer) = self.slot_line.layer() {
+                layer.setBackgroundColor(None);
+                layer.setBorderWidth(2.);
+                layer.setBorderColor(Some(&accent));
+                layer.setCornerRadius(4.); // nd-lint: allow, NSTableView's drop-on ring
+            }
+            let rect = self.table.rectOfRow(row);
+            self.slot_line.setFrame(NSRect::new(rect.origin, NSSize::new(width, rect.size.height)));
+            self.table.addSubview(&self.slot_line);
+            self.slot_line.setHidden(false);
+            let index = core.index_of(row_id).unwrap_or(core.len());
+            return Some(nd_ui::DropSlot { parent: None, index, on: on(row_id) });
+        }
+        let shown = self.table.rowsInRect(self.table.visibleRect());
+        let rows: Vec<(usize, f32, f32)> = (shown.location..shown.location + shown.length)
+            .filter_map(|r| {
+                let r = NSInteger::try_from(r).ok()?;
+                let rect = self.table.rectOfRow(r);
+                Some((core.index_of(self.row_id(r)?)?, rect.origin.y as f32, rect.size.height as f32))
+            })
+            .collect();
+        let (index, line) = nd_virtual::drop_slot(&rows, p.y as f32, core.len());
+        let key = under.filter(|_| self.props.drop_on.is_none());
+        match line {
+            Some(y) => {
+                let thickness = 2.; // nd-lint: allow, matches NSTableView's own drop indicator
+                if let Some(layer) = self.slot_line.layer() {
+                    layer.setBackgroundColor(Some(&accent));
+                    layer.setBorderWidth(0.);
+                    layer.setCornerRadius(thickness / 2.);
+                }
+                self.slot_line.setFrame(NSRect::new(
+                    NSPoint::new(0., f64::from(y) - thickness / 2.),
+                    NSSize::new(width, thickness),
+                ));
+                // Above the row views the table adds as it scrolls.
+                self.table.addSubview(&self.slot_line);
+                self.slot_line.setHidden(false);
+            }
+            None => self.slot_line.setHidden(true),
+        }
+        Some(nd_ui::DropSlot { parent: None, index, on: key.and_then(on) })
     }
 
     fn set_columns(&self) {
@@ -1622,6 +1699,15 @@ impl ListNative {
         match self {
             ListNative::Table(t) => t.view(),
             ListNative::Grid(g) => &g.scroll,
+        }
+    }
+
+    /// Where a drag at `at` would drop, marked in the list (`None` hides the mark). Grids take
+    /// drops whole.
+    pub fn drop_slot(&self, at: Option<nd_core::Point>) -> Option<nd_ui::DropSlot> {
+        match self {
+            ListNative::Table(t) => t.drop_slot(at),
+            ListNative::Grid(_) => None,
         }
     }
 

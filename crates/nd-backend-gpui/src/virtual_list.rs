@@ -76,6 +76,9 @@ pub struct Presenter {
     drag: Option<RowsDrag>,
     /// The row a drag over the list would drop on, outlined.
     pub(crate) drop_row: Option<RowId>,
+    /// The y in window coordinates of the line between rows a drag over the list would drop
+    /// into.
+    pub(crate) drop_line: Option<f32>,
 }
 
 struct RowsDrag {
@@ -856,6 +859,13 @@ impl gpui::Element for VirtualList {
             }
             for (i, _) in &prepainted.placed {
                 self.rows[*i].element.paint(window, cx);
+            }
+            let line = self.presenters.borrow().get(&self.node).and_then(|p| p.drop_line);
+            if let Some(y) = line {
+                let inset = if self.props.inset { px(self.sidebar.inset) } else { px(0.) };
+                let at = point(view.origin.x + inset, px(y) - px(1.));
+                let line = Bounds::new(at, size(view.size.width - inset * 2., px(2.)));
+                window.paint_quad(fill(line, self.accent).corner_radii(px(1.)));
             }
             let target = self.presenters.borrow().get(&self.node).and_then(|p| p.drop_row);
             if let Some((_, b)) =

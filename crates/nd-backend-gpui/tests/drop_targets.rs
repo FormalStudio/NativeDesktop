@@ -1,23 +1,25 @@
 //! Tier 2: drag and drop onto the parts of a window in GPUI's headless app. Rows dragged out of
 //! a table carry the selection, and their files once they leave the window; files dragged in
 //! from outside land on a table row, a source list item or a tab, each named in what the app
-//! receives, and skip `on_file_drop`.
+//! receives, and skip `on_file_drop`. A drag over a list marks the slot between rows it would drop
+//! into: `tests/goldens/<os>/list-drop-slot-light.png` (`ND_UPDATE_GOLDENS=1` rewrites it).
 
 use std::cell::RefCell;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use nd_backend_gpui::GpuiHost;
+use nd_backend_gpui::{GpuiBackend, GpuiHost};
 use nd_components::{TabStyle, source_item, source_list, tab_strip};
 use nd_gpui::gpui::{
     ExternalPaths, FileDropEvent, HeadlessAppContext, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent,
     MouseUpEvent, PlatformInput, point,
 };
+use nd_theme::{OsTheme, Preset, Scheme, ThemeRegistry};
 use nd_ui::prelude::*;
 use nd_ui::{DragItem, DragOver, Dropped, WindowId};
-use nd_virtual::{ListState, RowDropped, Selection, column, table};
+use nd_virtual::{ListState, RowDropped, Selection, column, list, table};
 
 type Log = Rc<RefCell<Vec<String>>>;
 
@@ -361,12 +363,126 @@ fn rows_carry_files_out_of_the_window() {
     assert!(!dragging(&r));
 }
 
+/// Three rows in a sidebar's list that takes files.
+struct Slots {
+    list: ListState<u32>,
+    log: Log,
+}
+
+impl Render for Slots {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        let log = self.log.clone();
+        div().size_full().child(
+            list("slots", &self.list, |row: u32, _, _| div().h(px(32.)).px(px(12.)).child(format!("Tab {row}")))
+                .inset()
+                .accepts_drops([DragItem::FILES])
+                .on_drop(move |e: &RowDropped<u32>, _, _| {
+                    log.borrow_mut().push(format!("{:?} at {}", e.key, e.index));
+                }),
+        )
+    }
+}
+
+/// Per channel, out of 255, and the share of pixels allowed past it: antialiasing drifts.
+const CHANNEL_TOLERANCE: i16 = 24;
+const PIXEL_TOLERANCE: f64 = 0.004;
+
+fn golden(image: &image::RgbaImage, name: &str) -> Result<(), String> {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("tests/goldens/{}/{name}.png", std::env::consts::OS));
+    if std::env::var_os("ND_UPDATE_GOLDENS").is_some_and(|v| v == "1") {
+        std::fs::create_dir_all(path.parent().expect("dir")).map_err(|e| e.to_string())?;
+        image.save(&path).map_err(|e| e.to_string())?;
+        println!("recorded {}", path.display());
+        return Ok(());
+    }
+    let actual_path = path.with_extension("actual.png");
+    if !path.exists() {
+        let _ = image.save(&actual_path);
+        return Err(format!("{} is missing (record it with ND_UPDATE_GOLDENS=1)", path.display()));
+    }
+    let expected = image::open(&path).map_err(|e| e.to_string())?.to_rgba8();
+    if expected.dimensions() != image.dimensions() {
+        let _ = image.save(&actual_path);
+        return Err(format!("{}: size {:?}, golden {:?}", path.display(), image.dimensions(), expected.dimensions()));
+    }
+    let off = expected
+        .pixels()
+        .zip(image.pixels())
+        .filter(|(a, b)| a.0.iter().zip(b.0.iter()).any(|(x, y)| (*x as i16 - *y as i16).abs() > CHANNEL_TOLERANCE))
+        .count();
+    let share = off as f64 / (image.width() * image.height()).max(1) as f64;
+    if share > PIXEL_TOLERANCE {
+        let _ = image.save(&actual_path);
+        return Err(format!(
+            "{}: {:.2}% of pixels differ (see {})",
+            path.display(),
+            share * 100.,
+            actual_path.display()
+        ));
+    }
+    let _ = std::fs::remove_file(&actual_path);
+    println!("ok   {} ({:.3}% off)", path.display(), share * 100.);
+    Ok(())
+}
+
+/// The lower half of a row is the slot after it: the line sits between it and the next, and the
+/// drop reports that slot with the row it was over.
+fn drag_over_a_list_marks_the_slot() {
+    let mut cx = headless();
+    let log: Log = Rc::default();
+    let l = log.clone();
+    let mut opened = None;
+    let host = cx.update(|cx| {
+        GpuiHost::builder().quit_when_empty(false).start(cx, |app| {
+            let backend = app.backend_as::<GpuiBackend>().expect("GPUI backend").clone();
+            let mut registry = ThemeRegistry::new(Preset::Adwaita);
+            let os =
+                OsTheme { scheme: Some(Scheme::Light), fonts: nd_theme::fonts::resolve(), ..registry.os().clone() };
+            registry.set_os(os);
+            backend.set_theme(registry);
+            let handle = app.open_window(WindowOptions::main("slots").size(size(px(240.), px(140.))), |_, cx| {
+                cx.new(|cx| {
+                    let mut list = ListState::new(cx);
+                    list.set_items(0..3, cx);
+                    Slots { list, log: l }
+                })
+            });
+            opened = Some((handle.id(), handle.root().clone()));
+        })
+    });
+    frames(&mut cx, &host, 6);
+    let (window, view) = opened.expect("window");
+    let list = host.read(|app| view.read(app).list.clone());
+    let mut r = Rig { cx, host, window, list, log, fallback: Rc::default(), over: Rc::default() };
+    let slots = r.bounds("slots", None);
+    let (x, y) = (slots.origin.x + 40., slots.origin.y + 24.);
+    let paths = ExternalPaths(vec![PathBuf::from("/tmp/a.txt")].into());
+    r.dispatch(vec![
+        PlatformInput::FileDrop(FileDropEvent::Entered { position: point(px(x), px(y)), paths }),
+        PlatformInput::FileDrop(FileDropEvent::Pending { position: point(px(x), px(y)) }),
+    ]);
+    if nd_gpui::gpui_platform::current_headless_renderer().ok().flatten().is_some() {
+        let handle = r.host.window_handle(r.window).expect("gpui window");
+        let image = r.cx.capture_screenshot(handle).expect("capture");
+        if let Err(e) = golden(&image, "list-drop-slot-light") {
+            panic!("{e}");
+        }
+    }
+    r.dispatch(vec![PlatformInput::FileDrop(FileDropEvent::Submit { position: point(px(x), px(y)) })]);
+    assert_eq!(r.take(), ["Some(0) at 1"]);
+    r.files(&["/tmp/a.txt"], (x, slots.origin.y + 40.));
+    assert_eq!(r.take(), ["Some(1) at 1"], "the upper half of a row is the slot before it");
+    r.files(&["/tmp/a.txt"], (x, slots.origin.y + 120.));
+    assert_eq!(r.take(), ["None at 3"], "past the last row");
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let tests: Vec<(&str, fn())> = vec![
         ("gpui_drops::files_land_on_rows_items_and_tabs", files_land_on_rows_items_and_tabs),
         ("gpui_drops::rows_drag_out_with_the_selection", rows_drag_out_with_the_selection),
         ("gpui_drops::rows_carry_files_out_of_the_window", rows_carry_files_out_of_the_window),
+        ("gpui_drops::drag_over_a_list_marks_the_slot", drag_over_a_list_marks_the_slot),
     ];
     let has = |flag: &str| args.iter().any(|a| a == flag);
     if has("--list") {

@@ -981,7 +981,9 @@ impl Backend for GpuiBackend {
 
 impl GpuiBackend {
     /// Where a drag over an `nd-virtual` list would drop: on the painted row under `at` that
-    /// takes drops, with the row outlined, else on no row. `None` when `node` is no list.
+    /// [`drop_on`](nd_virtual::List::drop_on) lets take it, outlined, else into the slot between
+    /// rows, marked with a line. A grid drops on the cell under `at`. `None` when `node` is no
+    /// list.
     fn list_drop_slot(&mut self, node: NodeId, at: Option<nd_core::Point>) -> Option<Option<nd_ui::DropSlot>> {
         let mut state = self.state.borrow_mut();
         let props = state.nodes.get(&node)?.props.downcast_ref::<nd_virtual::ListProps>()?.clone();
@@ -990,24 +992,38 @@ impl GpuiBackend {
         drop(state);
         let mut lists = self.lists.borrow_mut();
         let p = lists.entry(node).or_default();
-        let Some(at) = at else {
-            p.drop_row = None;
-            return Some(None);
-        };
+        p.drop_row = None;
+        p.drop_line = None;
+        let Some(at) = at else { return Some(None) };
         let grid = props.kind == nd_virtual::ListKind::Grid;
-        let row = p
+        let under = p
             .painted
             .iter()
             .find(|(_, _, r)| {
                 let (x, y) = (at.x - r.origin.x, at.y - r.origin.y);
                 y >= 0. && y < r.size.height && (!grid || (x >= 0. && x < r.size.width))
             })
-            .map(|(row, _, _)| *row)
-            .filter(|row| props.drop_on.as_ref().is_none_or(|on| on.contains(row)));
-        p.drop_row = row;
+            .map(|(row, _, _)| *row);
         let core = props.handle.0.borrow();
-        let index = row.and_then(|r| core.index_of(r)).unwrap_or(core.len());
-        Some(Some(nd_ui::DropSlot { parent: None, index, on: row.map(|r| r.0.to_string().into()) }))
+        let on = |row: nd_virtual::RowId| Some(row.0.to_string().into());
+        let onto = under.filter(|row| props.drop_on.as_ref().is_some_and(|on| on.contains(row)));
+        if grid || onto.is_some() {
+            let row =
+                if grid { under.filter(|row| props.drop_on.as_ref().is_none_or(|on| on.contains(row))) } else { onto };
+            p.drop_row = row;
+            let index = row.and_then(|r| core.index_of(r)).unwrap_or(core.len());
+            return Some(Some(nd_ui::DropSlot { parent: None, index, on: row.and_then(on) }));
+        }
+        let mut rows: Vec<(usize, f32, f32)> = p
+            .painted
+            .iter()
+            .filter_map(|(row, _, r)| Some((core.index_of(*row)?, r.origin.y, r.size.height)))
+            .collect();
+        rows.sort_by_key(|r| r.0);
+        let (index, line) = nd_virtual::drop_slot(&rows, at.y, core.len());
+        p.drop_line = line;
+        let key = under.filter(|_| props.drop_on.is_none());
+        Some(Some(nd_ui::DropSlot { parent: None, index, on: key.and_then(on) }))
     }
 
     /// Where a drag over a drawn tab strip would drop: on the tab under `at`, outlined. `None`
