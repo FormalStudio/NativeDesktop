@@ -521,6 +521,9 @@ hl.config({{
         background_color = "{background}",
         enable_anr_dialog = false,
         disable_watchdog_warning = true,
+        -- As the owner's session sets it: an app's xdg-activation request (a window it brings
+        -- forward itself) takes focus rather than only marking the window urgent.
+        focus_on_activate = true,
     }},
     -- Not drawn into captures; the virtual pointer still moves it.
     cursor = {{ invisible = true }},
