@@ -558,10 +558,12 @@ mod gate_m6 {
         type Slot = Rc<RefCell<Option<(WindowId, Entity<Zoom>)>>>;
         let opened: Slot = Rc::default();
         let o = opened.clone();
+        let detail = Presentation::new();
+        let d = detail.clone();
         let host = cx.update(|cx| {
             GpuiHost::builder().quit_when_empty(false).start(cx, move |app| {
                 let handle = app.open_window(WindowOptions::main("zoom").size(size(px(400.), px(400.))), |_, cx| {
-                    cx.new(|_| Zoom { detail: Presentation::new() })
+                    cx.new(|_| Zoom { detail: d.clone() })
                 });
                 *o.borrow_mut() = Some((handle.id(), handle.root().clone()));
             })
@@ -624,7 +626,9 @@ mod gate_m6 {
         assert!(opening.iter().any(|s| s[0] > 20 && s[1] == 0), "the card's content rides out first: {opening:?}");
 
         toggle(&mut cx, false);
-        let closing = frames(&mut cx, &|_| true);
+        // The detail stays at full ink while its content fades, which can outlast three frames
+        // when captures are slow: wait for the presentation to close before calling it settled.
+        let closing = frames(&mut cx, &|_| !detail.is_shown());
         for (i, [face, detail, _]) in closing.iter().enumerate() {
             assert!(face + detail > 20, "frame {i} of the close shows nothing in the container: {closing:?}");
         }
