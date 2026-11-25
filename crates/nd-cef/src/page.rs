@@ -9,8 +9,8 @@ use cef::*;
 use nd_webview::events::*;
 use nd_webview::menu::filter;
 use nd_webview::{
-    CefStyle, Command, ContextMenuMode, Cookie, Download, DownloadControl, EngineView, FindOptions, MenuItem, Once,
-    Page, PermissionDecision, PermissionResponder, SameSite, UserScript, WebViewProps,
+    CefStyle, CloseResponder, Command, ContextMenuMode, Cookie, Download, DownloadControl, EngineView, FindOptions,
+    MenuItem, Once, Page, PermissionDecision, PermissionResponder, SameSite, UserScript, WebViewProps,
 };
 use serde_json::json;
 
@@ -98,7 +98,7 @@ struct State {
     agent: bool,
     favicon: String,
     /// `request_close` is waiting for `beforeunload`.
-    requesting_close: bool,
+    requesting_close: Option<CloseResponder>,
     /// Origins the app allowed popups from; `None` in the set means every origin.
     popups_allowed: Vec<Option<String>>,
     /// Origins a permission was asked for, for `reset_permissions` without an origin.
@@ -562,34 +562,33 @@ impl CefPage {
     /// asks to stay, the same prompt as a real close's decides. A page that does not answer the
     /// probe within [`BEFOREUNLOAD_WAIT`] (hung, or with no document while its first load waits
     /// on the server) goes, as Chromium closes a page whose `beforeunload` hangs.
-    fn request_close_chrome(&self) {
+    fn request_close_chrome(&self, responder: CloseResponder) {
         const PROBE: &str = "(() => { const e = document.createEvent('BeforeUnloadEvent'); \
             e.initEvent('beforeunload', false, true); window.dispatchEvent(e); \
             return e.defaultPrevented || !!e.returnValue; })()";
         let id = self.id;
-        let answered = Rc::new(Cell::new(false));
-        let waited = answered.clone();
+        // Whichever of the probe and the wait comes first takes the responder.
+        let pending = Rc::new(RefCell::new(Some(responder)));
+        let waited = pending.clone();
         crate::runtime::later(BEFOREUNLOAD_WAIT, move || {
-            if !waited.replace(true)
-                && let Some(page) = get(id)
+            if let Some(responder) = waited.take()
+                && get(id).is_some()
             {
-                page.page.answer(CloseApproved { approved: true });
+                responder.approve(true);
             }
         });
         self.devtools.evaluate(PROBE, None, move |result| {
-            if answered.replace(true) {
-                return;
-            }
+            let Some(responder) = pending.take() else { return };
             let Some(page) = get(id) else { return };
             let asks = result.ok().and_then(|v| v.as_bool()).unwrap_or(false);
             if !asks || !dialogs::available(&page.view) {
-                page.page.answer(CloseApproved { approved: true });
+                responder.approve(true);
                 return;
             }
             let message = "Changes you made may not be saved.";
             dialogs::message(&page.view, "Leave this page?", message, &["Leave", "Cancel"], None, move |answer| {
-                if let Some(page) = get(id) {
-                    page.page.answer(CloseApproved { approved: answer.is_some() });
+                if get(id).is_some() {
+                    responder.approve(answer.is_some());
                 }
             });
         });
@@ -600,8 +599,9 @@ impl CefPage {
         if self.st.borrow().closing {
             return false;
         }
-        if std::mem::take(&mut self.st.borrow_mut().requesting_close) {
-            self.page.answer(CloseApproved { approved: true });
+        let requested = self.st.borrow_mut().requesting_close.take();
+        if let Some(responder) = requested {
+            responder.approve(true);
             return true;
         }
         self.page.emit(WindowClosed);
@@ -765,9 +765,9 @@ impl CefPage {
             callback.cont(i32::from(answer.is_some()), None);
             if answer.is_none()
                 && let Some(p) = get(id)
-                && std::mem::take(&mut p.st.borrow_mut().requesting_close)
+                && let Some(responder) = p.st.borrow_mut().requesting_close.take()
             {
-                p.page.answer(CloseApproved { approved: false });
+                responder.approve(false);
             }
         });
         true
@@ -1136,14 +1136,17 @@ impl CefPage {
                 let code = format!("window.__ndSetMuted&&window.__ndSetMuted({muted})");
                 self.devtools.evaluate(&code, Some(nd_webview::script::INTERNAL_WORLD), |_| {});
             }
-            Command::RequestClose if self.style == CefStyle::Chrome => self.request_close_chrome(),
-            Command::RequestClose => {
+            Command::RequestClose(responder) if self.style == CefStyle::Chrome => self.request_close_chrome(responder),
+            Command::RequestClose(responder) => {
                 let Some(host) = host else { return };
-                self.st.borrow_mut().requesting_close = true;
+                self.st.borrow_mut().requesting_close = Some(responder);
                 // Runs `beforeunload`; an approved close comes back through `do_close`, which
                 // keeps the browser for the app to unmount.
-                if host.try_close_browser() != 0 && std::mem::take(&mut self.st.borrow_mut().requesting_close) {
-                    self.page.answer(CloseApproved { approved: true });
+                if host.try_close_browser() != 0 {
+                    let requested = self.st.borrow_mut().requesting_close.take();
+                    if let Some(responder) = requested {
+                        responder.approve(true);
+                    }
                 }
             }
             Command::ResetPermissions { origin } => {

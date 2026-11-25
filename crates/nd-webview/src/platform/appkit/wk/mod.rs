@@ -682,7 +682,7 @@ impl EngineView for WkPage {
                     window.makeFirstResponder(Some(web));
                 }
             }
-            Command::RequestClose => self.page.answer(CloseApproved { approved: true }),
+            Command::RequestClose(responder) => responder.approve(true),
             Command::ResetPermissions { .. } => {
                 tracing::debug!("web view: WebKit stores no permission decisions to reset");
             }

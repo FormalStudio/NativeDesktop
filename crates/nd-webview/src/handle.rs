@@ -277,7 +277,7 @@ impl WebView {
     /// came up has no `beforeunload` to hold it, and its window must not wait on it.
     fn fail(&self, command: Command, error: &str) {
         match command {
-            Command::RequestClose => self.page().answer(crate::CloseApproved { approved: true }),
+            Command::RequestClose(responder) => responder.approve(true),
             command => fail(command, error),
         }
     }
@@ -510,7 +510,7 @@ impl WebView {
     /// Runs the page's `beforeunload` handlers; the element hears [`crate::CloseApproved`].
     /// WebKit has no way to run them without leaving the page, so there it approves at once.
     pub fn request_close(&self) {
-        self.send(Command::RequestClose);
+        self.send(Command::RequestClose(crate::CloseResponder::new(self.page())));
     }
 
     /// Forgets stored permission decisions (Chromium), for `origin` or every origin.

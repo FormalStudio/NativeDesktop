@@ -63,12 +63,6 @@ impl EventQueue {
         }
     }
 
-    /// Queues `event` even inside a programmatic scope: an answer to something the app asked
-    /// for, which no setter echoes.
-    pub fn push_answer(&self, node: NodeId, event: Box<dyn Any>) {
-        self.0.borrow_mut().events.push_back(Queued::Event(NativeEvent { node, event }));
-    }
-
     /// Queues `call` to run with `window` when the queue drains, like a native event.
     pub fn push_call(&self, window: WindowId, call: Delivery) {
         let mut queue = self.0.borrow_mut();
@@ -103,10 +97,15 @@ impl Emit {
         self.queue.push(self.node, event);
     }
 
-    /// Emits the answer to a request the app made. It arrives even when it comes up during a
-    /// programmatic update, which would drop a plain [`emit`](Self::emit).
-    pub fn answer<E: 'static>(&self, event: E) {
-        self.queue.push_answer(self.node, Box::new(event));
+    /// Emits the answer to the request `responder` stands for. It arrives even when it comes up
+    /// during a programmatic update, which would drop a plain [`emit`](Self::emit).
+    pub fn answer<E: 'static>(&self, responder: Responder<E>, event: E) {
+        let Responder(_) = responder;
+        self.queue
+            .0
+            .borrow_mut()
+            .events
+            .push_back(Queued::Event(NativeEvent { node: self.node, event: Box::new(event) }));
     }
 
     pub fn node(&self) -> NodeId {
@@ -115,6 +114,24 @@ impl Emit {
 
     pub fn programmatic<R>(&self, f: impl FnOnce() -> R) -> R {
         self.queue.programmatic(f)
+    }
+}
+
+/// The right to answer one request the app made, past a programmatic scope: made when the
+/// request goes out and spent by [`Emit::answer`]. Without one, an event is a plain emit, so a
+/// setter's echo can never pass as an answer.
+#[must_use]
+pub struct Responder<E>(std::marker::PhantomData<E>);
+
+impl<E> Responder<E> {
+    pub fn new() -> Self {
+        Self(std::marker::PhantomData)
+    }
+}
+
+impl<E> Default for Responder<E> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -176,5 +193,21 @@ pub fn emit_gesture(emit: &Emit, event: nd_gesture::GestureEvent) {
         G::ScrollZoom(e) => emit.emit(e),
         G::MiddleClick(e) => emit.emit(e),
         G::Navigate(e) => emit.emit(e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_an_answer_outlives_a_programmatic_scope() {
+        let queue = EventQueue::default();
+        let emit = queue.emitter(NodeId(1));
+        emit.programmatic(|| emit.emit(1u8));
+        assert!(queue.is_empty(), "a setter's echo is dropped");
+        emit.programmatic(|| emit.answer(Responder::new(), 2u8));
+        let Some(Queued::Event(event)) = queue.pop() else { panic!("the answer was dropped") };
+        assert_eq!(event.event.downcast_ref::<u8>(), Some(&2));
     }
 }

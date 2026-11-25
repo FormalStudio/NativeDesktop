@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::{Rc, Weak};
 
-use nd_ui::events::Emit;
+use nd_ui::events::{Emit, Responder};
 
 use crate::element::WebViewProps;
 use crate::events::*;
@@ -216,8 +216,8 @@ pub enum Command {
     ExitFullscreen,
     StartDownload(String),
     Focus,
-    /// Runs the page's `beforeunload`; [`CloseApproved`] answers whether it may close.
-    RequestClose,
+    /// Runs the page's `beforeunload`; the responder answers whether it may close.
+    RequestClose(CloseResponder),
     /// Forgets the permission decisions the engine stored, for one origin or all.
     ResetPermissions {
         origin: Option<String>,
@@ -284,7 +284,7 @@ impl std::fmt::Debug for Command {
             Command::StartDownload(_) => "StartDownload",
             Command::Focus => "Focus",
             Command::ForwardKey => "ForwardKey",
-            Command::RequestClose => "RequestClose",
+            Command::RequestClose(_) => "RequestClose",
             Command::ResetPermissions { .. } => "ResetPermissions",
             Command::AllowPopups { .. } => "AllowPopups",
             Command::ExtensionAction { .. } => "ExtensionAction",
@@ -308,6 +308,23 @@ pub struct PageState {
     pub progress: f64,
     pub focused: bool,
     pub zoom: f64,
+}
+
+/// Answers one [`WebView::request_close`](crate::WebView::request_close) with
+/// [`CloseApproved`]. The element hears it even while a backend updates it.
+pub struct CloseResponder {
+    page: Page,
+    responder: Responder<CloseApproved>,
+}
+
+impl CloseResponder {
+    pub(crate) fn new(page: Page) -> Self {
+        Self { page, responder: Responder::new() }
+    }
+
+    pub fn approve(self, approved: bool) {
+        self.page.answer(self.responder, CloseApproved { approved });
+    }
 }
 
 /// Where a mounted page's events go.
@@ -361,10 +378,10 @@ impl Page {
 
     /// Like [`emit`](Self::emit) for the answer to a request the app made: it survives a
     /// backend updating the element at the time.
-    pub fn answer<E: 'static>(&self, event: E) {
+    fn answer<E: 'static>(&self, responder: Responder<E>, event: E) {
         let target = self.shared.target.borrow();
         if let Some(t) = target.as_ref() {
-            t.emit.answer(event);
+            t.emit.answer(responder, event);
             (t.wake)();
         }
     }
