@@ -48,22 +48,52 @@ pub struct Mark {
     pub text: Option<(f32, f32)>,
 }
 
-/// Where the builders leave their [`Mark`]s.
+/// Where a drawn dialog's buttons landed in the window, by button index, once laid out.
+pub(crate) type ButtonBounds = Rc<RefCell<Vec<(usize, nd_core::Rect)>>>;
+
+/// Where the builders leave their [`Mark`]s, and where a dialog's buttons landed.
 #[derive(Default)]
-pub struct Marks(RefCell<Vec<Mark>>);
+pub struct Marks {
+    marks: RefCell<Vec<Mark>>,
+    buttons: ButtonBounds,
+}
 
 impl Marks {
     pub(crate) fn fill(&self, label: &str, color: Hsla, under: &[Hsla]) {
-        self.0.borrow_mut().push(Mark { label: label.into(), color, under: under.to_vec(), text: None });
+        self.marks.borrow_mut().push(Mark { label: label.into(), color, under: under.to_vec(), text: None });
     }
 
     pub(crate) fn text(&self, label: &str, color: Hsla, under: &[Hsla], size: Pixels, weight: FontWeight) {
         let text = Some((size.as_f32(), weight.0));
-        self.0.borrow_mut().push(Mark { label: label.into(), color, under: under.to_vec(), text });
+        self.marks.borrow_mut().push(Mark { label: label.into(), color, under: under.to_vec(), text });
     }
 
     pub fn take(&self) -> Vec<Mark> {
-        self.0.take()
+        self.marks.take()
+    }
+
+    /// Records where a row's children land at prepaint; `order` is each child's button index.
+    pub(crate) fn button_row(&self, row: gpui::Div, order: Vec<usize>) -> gpui::Div {
+        let buttons = self.buttons.clone();
+        row.on_children_prepainted(move |bounds, _, _| {
+            *buttons.borrow_mut() = order
+                .iter()
+                .zip(bounds)
+                .map(|(i, b)| {
+                    let rect = nd_core::Rect::new(
+                        b.origin.x.as_f32(),
+                        b.origin.y.as_f32(),
+                        b.size.width.as_f32(),
+                        b.size.height.as_f32(),
+                    );
+                    (*i, rect)
+                })
+                .collect();
+        })
+    }
+
+    pub(crate) fn button_bounds(&self) -> ButtonBounds {
+        self.buttons.clone()
     }
 }
 

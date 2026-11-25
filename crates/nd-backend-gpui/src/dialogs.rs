@@ -19,7 +19,8 @@ use std::rc::Rc;
 use nd_components::forms::TextStyle;
 use nd_components::services::AlertCallback;
 use nd_components::{AboutPanel, Alert, AlertPresentation, AlertResponse, ButtonRole};
-use nd_core::{NodeId, WindowId};
+use nd_core::semantic::{Role, SemanticNode};
+use nd_core::{NodeId, Rect, WindowId};
 use nd_gpui::gpui::prelude::FluentBuilder;
 use nd_gpui::gpui::{
     self, AnyElement, BoxShadow, ElementId, FocusHandle, FontWeight, Hsla, InteractiveElement, IntoElement, Keystroke,
@@ -27,11 +28,12 @@ use nd_gpui::gpui::{
 };
 use nd_theme::Theme;
 use nd_theme::color::with_alpha;
+use nd_ui::semantics::part_id;
 
 use crate::backend::GpuiBackend;
 use crate::forms::FormLook;
 use crate::forms::glyph::{Glyph, glyph};
-use crate::nav::{Marks, OnInput};
+use crate::nav::{ButtonBounds, Marks, OnInput};
 use crate::render::Build;
 
 /// Above every overlay and panel, under only the context menu.
@@ -299,9 +301,12 @@ pub fn alert_view(
         items.push(button.into_any_element());
     }
     // AdwAlertDialog and NSAlert both put the first (affirmative) response trailing in a row.
+    let mut order: Vec<usize> = (0..items.len()).collect();
     if !stacked {
         items.reverse();
+        order.reverse();
     }
+    let row = marks.button_row(row, order);
     let card = card(theme, ALERT_WIDTH, viewport, alert.title.clone()).child(message).child(row.children(items));
     layer(theme, viewport, focus, on_input, Some(card.into_any_element()), marks)
 }
@@ -381,9 +386,12 @@ fn adw_alert(
         }
         items.push(button.into_any_element());
     }
+    let mut order: Vec<usize> = (0..items.len()).collect();
     if !stacked {
         items.reverse();
+        order.reverse();
     }
+    let row = marks.button_row(row, order);
     let card = div()
         .id("nd-dialog")
         .role(gpui::Role::AlertDialog)
@@ -694,6 +702,7 @@ fn content_dialog_alert(
         }
         row = row.child(button);
     }
+    let row = marks.button_row(row, (0..labels.len()).collect());
     let card = dialog.card(theme, viewport, alert.title.clone(), content, row);
     layer(theme, viewport, focus, on_input, Some(card.into_any_element()), marks)
 }
@@ -808,6 +817,8 @@ pub(crate) struct DialogState {
     /// The handle each covered window's layer tracks, and what had focus before it.
     focus: HashMap<WindowId, FocusHandle>,
     previous: HashMap<WindowId, Option<FocusHandle>>,
+    /// Where the alert drawn on each window last put its buttons.
+    buttons: HashMap<WindowId, ButtonBounds>,
 }
 
 impl DialogState {
@@ -820,6 +831,13 @@ impl DialogState {
         match &mut self.modal {
             Some(modal) => Some(modal),
             None => self.sheets.get_mut(&window)?.last_mut(),
+        }
+    }
+
+    fn top(&self, window: WindowId) -> Option<&Shown> {
+        match &self.modal {
+            Some(modal) => Some(modal).filter(|m| m.owner == window),
+            None => self.sheets.get(&window)?.last(),
         }
     }
 
@@ -935,15 +953,47 @@ impl GpuiBackend {
     /// The title of the alert, or the name in the about panel, showing on `window`.
     pub fn showing_dialog(&self, window: WindowId) -> Option<SharedString> {
         let d = self.dialogs.borrow();
-        let shown = match &d.modal {
-            Some(modal) if modal.owner == window => modal,
-            Some(_) => return None,
-            None => d.sheets.get(&window)?.last()?,
-        };
-        Some(match &shown.content {
+        Some(match &d.top(window)?.content {
             Content::Alert { alert, .. } => alert.title.clone(),
             Content::About(about) => about.name.clone().unwrap_or_else(|| "About".into()),
         })
+    }
+
+    /// The dialog drawn on `window` as a semantic node under its root, with the alert's buttons
+    /// where they were last laid out. Part ids of the root name them: the root has no parts.
+    pub(crate) fn dialog_node(&self, window: WindowId, root: NodeId) -> Option<SemanticNode> {
+        let title = self.showing_dialog(window)?;
+        let d = self.dialogs.borrow();
+        let labels = match d.top(window).map(|s| &s.content) {
+            Some(Content::Alert { alert, .. }) => buttons(alert),
+            _ => Vec::new(),
+        };
+        let laid = d.buttons.get(&window).map(|b| b.borrow().clone()).unwrap_or_default();
+        let node = |id, role, kind: &str, name: String, bounds: Option<Rect>, children| SemanticNode {
+            id,
+            role,
+            kind: kind.into(),
+            name,
+            value: None,
+            test_id: None,
+            placeholder: None,
+            enabled: true,
+            focused: false,
+            checked: None,
+            selected: None,
+            expanded: None,
+            bounds,
+            visible: bounds.is_some(),
+            children,
+        };
+        let children = laid
+            .iter()
+            .filter_map(|(i, rect)| {
+                let (label, _) = labels.get(*i)?;
+                Some(node(part_id(root, i + 1), Role::Button, "Button", label.to_string(), Some(*rect), Vec::new()))
+            })
+            .collect();
+        Some(node(part_id(root, 0), Role::Dialog, "Alert", title.to_string(), self.bounds(root), children))
     }
 
     /// Gives a covered window's layer GPUI focus, remembering what had it, and hands focus back
@@ -1042,11 +1092,7 @@ impl Build<'_> {
         let theme = self.theme();
         let viewport = window.viewport_size();
         let marks = Marks::default();
-        let shown = match &d.modal {
-            Some(modal) => Some(modal).filter(|m| m.owner == window_id),
-            None => d.sheets.get(&window_id).and_then(|s| s.last()),
-        };
-        let element = match shown.map(|s| &s.content) {
+        let element = match d.top(window_id).map(|s| &s.content) {
             Some(Content::Alert { alert, focused, keyboard, .. }) => {
                 let ring = keyboard.then_some(*focused);
                 alert_view(alert, ring, &theme, viewport, focus, Some(on_input), &marks)
@@ -1055,6 +1101,7 @@ impl Build<'_> {
             None => modal_scrim_view(&theme, viewport, focus, Some(on_input), &marks),
         };
         drop(d);
+        self.backend.dialogs.borrow_mut().buttons.insert(window_id, marks.button_bounds());
         self.record_marks(root, marks.take());
         Some(element)
     }

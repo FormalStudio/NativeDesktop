@@ -264,6 +264,12 @@ pub trait Backend: Any {
         crate::semantics::Probe::default()
     }
 
+    /// The dialog the backend draws over `window`'s content (an alert, the about panel) as a node
+    /// under the window's root `root`; `None` when nothing covers it or the OS draws its dialogs.
+    fn dialog(&self, _window: WindowId, _root: NodeId) -> Option<nd_core::semantic::SemanticNode> {
+        None
+    }
+
     /// The window as the OS has it; `None` where the backend has no OS window.
     fn window_state(&self, _window: WindowId) -> Option<crate::semantics::WindowState> {
         None

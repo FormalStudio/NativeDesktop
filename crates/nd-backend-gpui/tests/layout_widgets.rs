@@ -19,7 +19,7 @@ use nd_theme::{GlassVariant, OsTheme, Preset, Scheme, Theme, ThemeRegistry};
 use nd_ui::backend::{Backend, WindowCommand};
 use nd_ui::prelude::*;
 use nd_ui::semantics::{MouseButton, PaintKind, PointerPhase, SyntheticInput};
-use nd_ui::{Keystroke, Point, SemanticNode, TitlebarInsets, WindowId};
+use nd_ui::{Keystroke, Point, Role, SemanticNode, TitlebarInsets, WindowId};
 
 fn headless() -> HeadlessAppContext {
     let text = nd_gpui::gpui_platform::current_platform(true).text_system();
@@ -729,6 +729,26 @@ mod gate_m6 {
         assert_eq!(o.showing(), None);
     }
 
+    pub fn gpui_alert_in_the_semantic_tree() {
+        let mut o = open(Kind::Plain);
+        o.alert(Alert::confirm("Delete the note?", "Delete"));
+        let dialog = o.host.read(|app| {
+            let tree = app.semantic_window(o.window).expect("window");
+            find(&tree.root, &|n| n.role == Role::Dialog).cloned().expect("the alert is in the tree")
+        });
+        assert_eq!(dialog.name, "Delete the note?");
+        let names: Vec<&str> = dialog.children.iter().map(|b| b.name.as_str()).collect();
+        assert_eq!(names, ["Cancel", "Delete"], "its buttons, in the row's order");
+        let cancel = dialog.children[0].bounds.expect("laid out");
+        o.click(Point { x: cancel.origin.x + cancel.size.width / 2., y: cancel.origin.y + cancel.size.height / 2. });
+        assert_eq!(o.log.borrow().answers, [1], "a click at the button's bounds presses it");
+        let gone = o.host.read(|app| {
+            let tree = app.semantic_window(o.window).expect("window");
+            find(&tree.root, &|n| n.role == Role::Dialog).is_none()
+        });
+        assert!(gone, "the node went with the alert");
+    }
+
     pub fn gpui_alert_destructive_paints_danger() {
         let mut o = open(Kind::Plain);
         o.alert(Alert::confirm("Delete the note?", "Delete"));
@@ -1354,6 +1374,7 @@ fn main() {
             gate_m6::gpui_toolbar_shows_a_title_in_an_empty_leading_run,
         ),
         ("gate_m6::gpui_alert_keys_answer_once", gate_m6::gpui_alert_keys_answer_once),
+        ("gate_m6::gpui_alert_in_the_semantic_tree", gate_m6::gpui_alert_in_the_semantic_tree),
         ("gate_m6::gpui_alert_destructive_paints_danger", gate_m6::gpui_alert_destructive_paints_danger),
         ("gate_m6::gpui_alert_queues_and_blocks_input", gate_m6::gpui_alert_queues_and_blocks_input),
         ("gate_m6::gpui_alert_modal_covers_every_window", gate_m6::gpui_alert_modal_covers_every_window),

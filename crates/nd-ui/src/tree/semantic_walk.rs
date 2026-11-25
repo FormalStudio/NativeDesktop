@@ -111,6 +111,7 @@ impl Tree {
         let viewport = Rect::new(0., 0., size.width, size.height);
         let mut root = self.semantic_node(self.root, Point::default(), viewport, state.visible, backend);
         root.name = window.title().to_string();
+        root.children.extend(backend.dialog(self.window, self.root));
         SemanticWindow {
             id: self.window,
             title: window.title().to_string(),

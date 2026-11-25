@@ -792,6 +792,10 @@ impl Backend for GpuiBackend {
         }
     }
 
+    fn dialog(&self, window: WindowId, root: NodeId) -> Option<nd_core::semantic::SemanticNode> {
+        self.dialog_node(window, root)
+    }
+
     fn probe(&self, node: NodeId) -> Probe {
         let mut probe = Probe { bounds: self.bounds(node), ..Probe::default() };
         if let Ok(state) = self.state.try_borrow()
