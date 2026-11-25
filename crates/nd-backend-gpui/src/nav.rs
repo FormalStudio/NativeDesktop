@@ -111,6 +111,13 @@ pub fn palette_input(keystroke: &Keystroke) -> Option<PaletteInput> {
     }
 }
 
+/// Whether `keystroke` pastes into the palette's field.
+fn pastes(keystroke: &Keystroke) -> bool {
+    let m = &keystroke.modifiers;
+    let shortcut = if cfg!(target_os = "macos") { m.platform } else { m.control };
+    shortcut && !m.alt && keystroke.key == "v"
+}
+
 /// The glyph an icon slot draws, or `None` so the slot is not laid out at all.
 pub(crate) fn icon_glyph(icon: Option<nd_components::Icon>) -> Option<Glyph> {
     icon.filter(|i| i.shape().is_some()).map(Glyph::of)
@@ -309,7 +316,20 @@ pub fn palette_overlay(
     }
     if let Some(on_input) = on_input.clone() {
         card = card.on_key_down(move |event, window, cx| {
-            if let Some(input) = palette_input(&event.keystroke) {
+            if pastes(&event.keystroke) {
+                cx.stop_propagation();
+                // Async, as the text field reads it: on Linux the clipboard's owner can be a
+                // browser engine pumped from this thread. The field is one line, so line breaks
+                // fold into spaces.
+                let (on_input, read) = (on_input.clone(), cx.read_from_clipboard_async());
+                window
+                    .spawn(cx, async move |cx| {
+                        let Some(text) = read.await.ok().flatten().and_then(|item| item.text()) else { return };
+                        let line = text.lines().map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" ");
+                        cx.update(|window, cx| on_input(PaletteInput::Insert(line), window, cx)).ok();
+                    })
+                    .detach();
+            } else if let Some(input) = palette_input(&event.keystroke) {
                 cx.stop_propagation();
                 on_input(input, window, cx);
             }
