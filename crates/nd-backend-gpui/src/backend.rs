@@ -792,8 +792,8 @@ impl Backend for GpuiBackend {
         }
     }
 
-    fn dialog(&self, window: WindowId, root: NodeId) -> Option<nd_core::semantic::SemanticNode> {
-        self.dialog_node(window, root)
+    fn overlays(&self, window: WindowId, root: NodeId) -> Vec<nd_core::semantic::SemanticNode> {
+        self.dialog_node(window, root).into_iter().chain(self.menu_node(window)).collect()
     }
 
     fn probe(&self, node: NodeId) -> Probe {

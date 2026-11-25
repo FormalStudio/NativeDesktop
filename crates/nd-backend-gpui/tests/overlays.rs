@@ -177,6 +177,15 @@ fn open() -> Opened {
     Opened { cx, host, window, scene }
 }
 
+/// The open menu's rows, read from the window's semantic tree.
+fn menu_rows(o: &Opened) -> Option<Vec<String>> {
+    o.host.read(|app| {
+        let tree = app.semantic_window(o.window).expect("window");
+        let menu = tree.root.children.iter().find(|n| n.kind == "Menu")?;
+        Some(menu.children.iter().map(|n| n.name.clone()).collect())
+    })
+}
+
 fn find<'a>(node: &'a SemanticNode, test_id: &str) -> Option<&'a SemanticNode> {
     if node.test_id.as_deref() == Some(test_id) {
         return Some(node);
@@ -422,12 +431,18 @@ mod gate_m4_overlays {
         let open_at = nd_ui::Point { x: surface.x - 50., y: surface.y - 60. };
         post(&mut o, click(open_at, GpuiButton::Right));
         assert!(o.host.backend().menu_open(o.window), "a right click on the zone opens its menu");
+        assert_eq!(
+            menu_rows(&o),
+            Some(vec!["Choose".into(), "Again".into(), "More".into()]),
+            "the menu is in the semantic tree, its rows as items"
+        );
         let before = counts(&o.host, o.window);
         // The first item sits just below the press, over the surface.
         let item = nd_ui::Point { x: open_at.x + 30., y: open_at.y + 14. };
         post(&mut o, wiggle_and_scroll(item));
         post(&mut o, click(item, GpuiButton::Left));
         assert!(!o.host.backend().menu_open(o.window), "choosing an item closes the menu");
+        assert_eq!(menu_rows(&o), None, "the node went with the menu");
         assert_eq!(o.host.read(|app| o.scene.read(app).chosen), 1, "the item dispatched its action");
         assert_eq!(counts(&o.host, o.window), before, "input on the menu reached the surface under it");
 

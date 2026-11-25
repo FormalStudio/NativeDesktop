@@ -27,6 +27,7 @@ use nd_components::services::{AlertCallback, ChromeServices, OpenCallback, SaveC
 use nd_components::{
     AboutPanel, Alert, ContextMenu, ImageFit, ImagePipeline, ImageProps, Menu, MenuItem, OpenDialog, SaveDialog,
 };
+use nd_core::semantic::{Role, SemanticNode};
 use nd_core::{NodeId, Point, Rect, WindowId};
 use nd_gpui::gpui::{
     self, Anchor, AnyElement, Bounds, DispatchPhase, ElementId, HitboxBehavior, InteractiveElement, IntoElement,
@@ -35,6 +36,7 @@ use nd_gpui::gpui::{
 };
 use nd_theme::color::with_alpha;
 use nd_ui::backend::NodeKind;
+use nd_ui::semantics::part_id;
 use nd_ui::{DismissCause, Dismissed, DivProps, Modality, OverlayKind, OverlayProps, Placement, SurfaceProps};
 
 use crate::backend::{GpuiBackend, Node};
@@ -974,6 +976,40 @@ impl MenuOverlay {
 }
 
 impl GpuiBackend {
+    /// The window's open drawn menu as a node, its innermost level's rows as items. It has no
+    /// bounds: the menu sizes itself as it draws.
+    pub(crate) fn menu_node(&self, window: WindowId) -> Option<SemanticNode> {
+        let state = self.state.try_borrow().ok()?;
+        let menu = state.menus.get(&window)?;
+        let node = |id, role, kind: &str, name: SharedString, enabled, children| SemanticNode {
+            id,
+            role,
+            kind: kind.into(),
+            name: name.to_string(),
+            value: None,
+            test_id: None,
+            placeholder: None,
+            enabled,
+            focused: false,
+            checked: None,
+            selected: None,
+            expanded: None,
+            bounds: None,
+            visible: true,
+            children,
+        };
+        let items = menu
+            .innermost()
+            .into_iter()
+            .enumerate()
+            .filter(|(_, (_, _, label))| !label.is_empty())
+            .map(|(i, (enabled, _, label))| {
+                node(part_id(menu.node, i + 1), Role::MenuItem, "MenuItem", label, enabled, Vec::new())
+            })
+            .collect();
+        Some(node(part_id(menu.node, 0), Role::Menu, "Menu", SharedString::default(), true, items))
+    }
+
     /// Closes the window's context menu and queues `action` for its focused node.
     pub(crate) fn choose(&self, window: WindowId, action: Box<dyn gpui::Action>) {
         let mut state = self.state.borrow_mut();

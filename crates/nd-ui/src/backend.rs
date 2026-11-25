@@ -264,10 +264,10 @@ pub trait Backend: Any {
         crate::semantics::Probe::default()
     }
 
-    /// The dialog the backend draws over `window`'s content (an alert, the about panel) as a node
-    /// under the window's root `root`; `None` when nothing covers it or the OS draws its dialogs.
-    fn dialog(&self, _window: WindowId, _root: NodeId) -> Option<nd_core::semantic::SemanticNode> {
-        None
+    /// What the backend draws over `window`'s content (an alert, the about panel, a context menu) as
+    /// nodes under the window's root `root`; empty when nothing does or the OS draws them.
+    fn overlays(&self, _window: WindowId, _root: NodeId) -> Vec<nd_core::semantic::SemanticNode> {
+        Vec::new()
     }
 
     /// The window as the OS has it; `None` where the backend has no OS window.
