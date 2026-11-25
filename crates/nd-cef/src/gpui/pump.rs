@@ -23,6 +23,9 @@ const FALLBACK: Duration = Duration::from_millis(33);
 const IDLE: Duration = Duration::from_secs(1);
 /// How long shutdown lets closing browsers finish.
 const SHUTDOWN: Duration = Duration::from_secs(3);
+/// How long the whole shutdown may take before the process ends without it: the app's own quit
+/// handlers (the session) ran before this, and a child that never answers would hold it forever.
+const SHUTDOWN_LIMIT: Duration = Duration::from_secs(5);
 
 pub(crate) enum Msg {
     /// Chromium wants `do_message_loop_work` after this many milliseconds.
@@ -149,8 +152,23 @@ pub(crate) fn run() {
     PUMPING.with(|p| p.set(false));
 }
 
-/// Closes every browser, lets Chromium finish closing them, then shuts it down.
+/// Closes every browser, lets Chromium finish closing them, then shuts it down. A closing
+/// browser can wait on its GPU process forever (Mesa's DRI3 swap waits for a present that never
+/// comes), so a watchdog ends the process once [`SHUTDOWN_LIMIT`] has passed.
 fn shutdown() {
+    #[cfg(not(target_os = "macos"))]
+    std::thread::spawn(|| {
+        std::thread::sleep(SHUTDOWN_LIMIT);
+        eprintln!("nd-cef: Chromium did not shut down within {SHUTDOWN_LIMIT:?}; exiting without it");
+        #[cfg(target_os = "linux")]
+        // SAFETY: ends the process without running exit handlers, which would wait on the stuck
+        // main thread's locks.
+        unsafe {
+            libc::_exit(0)
+        };
+        #[cfg(windows)]
+        std::process::exit(0);
+    });
     crate::page::close_all();
     let deadline = Instant::now() + SHUTDOWN;
     while crate::page::browser_count() > 0 && Instant::now() < deadline {
