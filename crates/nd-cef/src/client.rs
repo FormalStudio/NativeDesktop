@@ -490,6 +490,8 @@ wrap_display_handler! {
             1
         }
 
+        /// An off-screen page's cursor is GPUI's to draw. A Chrome-style page is Chromium's own
+        /// window, which sets the cursor itself unless this says it was handled.
         #[cfg(any(target_os = "linux", target_os = "windows"))]
         fn on_cursor_change(
             &self,
@@ -498,8 +500,10 @@ wrap_display_handler! {
             type_: CursorType,
             _custom_cursor_info: Option<&CursorInfo>,
         ) -> c_int {
-            with(self.id, |p| p.view.set_cursor(type_));
-            1
+            with(self.id, |p| {
+                p.view.set_cursor(type_);
+                p.view.chrome().is_none()
+            }) as c_int
         }
     }
 }
