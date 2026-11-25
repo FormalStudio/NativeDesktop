@@ -330,6 +330,7 @@ impl Chrome {
             st.frame = frame;
         }
         let browser = self.browser_window().map(|w| (w, frame.w, frame.h));
+        let mut seen = None;
         if let Some((window, w, h)) = browser
             && st.browser != browser
         {
@@ -342,6 +343,7 @@ impl Chrome {
                 };
                 let _ = conn.xinput_xi_select_events(window, &[keys]);
                 PAGES.with(|p| p.borrow_mut().insert(window, self.page));
+                seen = Some(window);
             }
             st.browser = browser;
             resized = true;
@@ -372,6 +374,9 @@ impl Chrome {
             st.mapped = true;
         }
         drop(st);
+        if let Some(window) = seen {
+            self.hand_back_focus(window, parent);
+        }
         self.canvas_base();
         self.route_keys();
         self.x.flush();
@@ -384,6 +389,30 @@ impl Chrome {
         if std::mem::take(&mut st.mapped) {
             let _ = self.x.conn.unmap_window(self.container);
             self.x.flush();
+        }
+    }
+
+    /// Chromium takes X's input focus as it shows its window (or X reverts it from there to the
+    /// GPUI window the page is in), behind the window manager's back. When that GPUI window is
+    /// not the one the manager has active, the focus goes back to that one: otherwise the app's
+    /// own activation of the window the manager still has focused would do nothing.
+    fn hand_back_focus(&self, window: Window, parent: Window) {
+        let conn = &self.x.conn;
+        let focus = conn.get_input_focus().ok().and_then(|c| c.reply().ok()).map(|f| f.focus);
+        if self.st.borrow().keyboard || !focus.is_some_and(|f| [window, self.container, parent].contains(&f)) {
+            return;
+        }
+        let Some(atom) = conn.intern_atom(true, b"_NET_ACTIVE_WINDOW").ok().and_then(|c| c.reply().ok()) else {
+            return;
+        };
+        let active = conn
+            .get_property(false, self.x.root, atom.atom, AtomEnum::WINDOW, 0, 1)
+            .ok()
+            .and_then(|c| c.reply().ok())
+            .and_then(|r| r.value32().and_then(|mut v| v.next()))
+            .filter(|w| *w != x11rb::NONE && *w != parent);
+        if let Some(active) = active {
+            let _ = conn.set_input_focus(InputFocus::PARENT, active, x11rb::CURRENT_TIME);
         }
     }
 
