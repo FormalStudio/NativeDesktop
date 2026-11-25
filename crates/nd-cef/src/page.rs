@@ -263,8 +263,14 @@ impl CefPage {
     /// Closes the browser and leaves its window where it is, for shutdown: a window unmapped
     /// first can leave a frame Chromium sent it unpresented, and the GPU process waits on it.
     fn close_in_place(&self) {
-        if std::mem::replace(&mut self.st.borrow_mut().closed, true) {
-            return;
+        {
+            let mut st = self.st.borrow_mut();
+            if std::mem::replace(&mut st.closed, true) {
+                return;
+            }
+            // The close Chromium asks for next goes through `do_close`, which would report it
+            // as the page closing itself and the app would drop the tab before its last save.
+            st.closing = true;
         }
         if let Some(host) = self.host() {
             host.close_browser(1);
