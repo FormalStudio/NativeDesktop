@@ -218,15 +218,14 @@ fn a_new_width_with_the_same_columns_moves_tiles_with_the_grid() {
 }
 
 #[test]
-fn new_columns_glide_places_and_take_the_size_at_once() {
+fn new_columns_place_tiles_and_size_them_at_once() {
     let (mut cx, handle) = open_pinned(&["a", "b"]);
     let b = node(&cx, "b");
     resize(&mut cx, &handle, 130.);
-    assert!((shown(&cx, b).0 - 122.).abs() < 0.5, "glides from its old place: {:?}", shown(&cx, b));
+    assert_eq!(shown(&cx, b), (69., 0.), "placed in its new column at once");
     assert_eq!(cx.backend().frame(b).expect("laid out").size.width, 61., "two 61 pt columns at once");
-    assert!(cx.needs_frame(), "moving");
     settle(&mut cx);
-    assert_eq!(shown(&cx, b), (69., 0.));
+    assert_eq!(shown(&cx, b), (69., 0.), "nothing left to glide");
 }
 
 #[test]
