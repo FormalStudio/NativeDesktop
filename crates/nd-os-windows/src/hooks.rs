@@ -266,7 +266,7 @@ fn caption_button(which: CaptionButton, state: CaptionState, look: Look, maximiz
         (true, false, true) => (red, gpui::white()),
         // Lighter than hover, as Explorer's caption buttons press.
         (false, true, _) => (look.subtle_active, look.text),
-        (false, false, true) => (look.control_hover, look.text),
+        (false, false, true) => (look.subtle_hover, look.text),
         _ => (gpui::transparent_black(), look.text),
     };
     let glyph = match which {
