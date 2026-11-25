@@ -305,6 +305,11 @@ impl CefPage {
         self.fullscreen_changed(false);
     }
 
+    /// `browser` is this page's, or the page has none yet.
+    pub(crate) fn owns(&self, browser: &Browser) -> bool {
+        self.browser.borrow().as_ref().is_none_or(|own| own.identifier() == browser.identifier())
+    }
+
     pub(crate) fn host(&self) -> Option<BrowserHost> {
         self.browser.borrow().as_ref()?.host()
     }

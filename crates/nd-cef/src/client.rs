@@ -18,6 +18,13 @@ fn with<R: Default>(id: u64, f: impl FnOnce(&CefPage) -> R) -> R {
     page::get(id).map(|p| f(&p)).unwrap_or_default()
 }
 
+/// `f` for an event from page `id`'s own browser. Chromium can hand a Chrome-style page's
+/// DevTools the page's client, whichever client they were opened with, so their title, address,
+/// icon and loads come through the page's handlers too.
+fn own<R: Default>(id: u64, browser: Option<&Browser>, f: impl FnOnce(&CefPage) -> R) -> R {
+    page::get(id).filter(|p| browser.is_none_or(|b| p.owns(b))).map(|p| f(&p)).unwrap_or_default()
+}
+
 pub(crate) fn app(schemes: Vec<String>) -> App {
     NdApp::new(schemes)
 }
@@ -499,19 +506,19 @@ wrap_load_handler! {
     }
 
     impl LoadHandler {
-        fn on_loading_state_change(&self, _browser: Option<&mut Browser>, is_loading: c_int, can_go_back: c_int, can_go_forward: c_int) {
-            with(self.id, |p| p.loading_state(is_loading != 0, can_go_back != 0, can_go_forward != 0));
+        fn on_loading_state_change(&self, browser: Option<&mut Browser>, is_loading: c_int, can_go_back: c_int, can_go_forward: c_int) {
+            own(self.id, browser.as_deref(), |p| p.loading_state(is_loading != 0, can_go_back != 0, can_go_forward != 0));
         }
 
-        fn on_load_end(&self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>, _http_status_code: c_int) {
+        fn on_load_end(&self, browser: Option<&mut Browser>, frame: Option<&mut Frame>, _http_status_code: c_int) {
             if frame.is_some_and(|f| f.is_main() != 0) {
-                with(self.id, |p| p.load_end());
+                own(self.id, browser.as_deref(), |p| p.load_end());
             }
         }
 
         fn on_load_error(
             &self,
-            _browser: Option<&mut Browser>,
+            browser: Option<&mut Browser>,
             frame: Option<&mut Frame>,
             error_code: Errorcode,
             error_text: Option<&CefString>,
@@ -523,7 +530,7 @@ wrap_load_handler! {
             let text = error_text.map(|t| t.to_string()).unwrap_or_default();
             let url = failed_url.map(|u| u.to_string()).unwrap_or_default();
             let code = error_code.get_raw();
-            with(self.id, |p| p.load_error(code, text, url));
+            own(self.id, browser.as_deref(), |p| p.load_error(code, text, url));
         }
     }
 }
@@ -534,45 +541,45 @@ wrap_display_handler! {
     }
 
     impl DisplayHandler {
-        fn on_address_change(&self, _browser: Option<&mut Browser>, frame: Option<&mut Frame>, url: Option<&CefString>) {
+        fn on_address_change(&self, browser: Option<&mut Browser>, frame: Option<&mut Frame>, url: Option<&CefString>) {
             if frame.is_some_and(|f| f.is_main() != 0) {
                 let url = url.map(|u| u.to_string()).unwrap_or_default();
-                with(self.id, |p| p.page.report_url(&url));
+                own(self.id, browser.as_deref(), |p| p.page.report_url(&url));
             }
         }
 
-        fn on_title_change(&self, _browser: Option<&mut Browser>, title: Option<&CefString>) {
+        fn on_title_change(&self, browser: Option<&mut Browser>, title: Option<&CefString>) {
             let title = title.map(|t| t.to_string()).unwrap_or_default();
-            with(self.id, |p| p.page.report_title(&title));
+            own(self.id, browser.as_deref(), |p| p.page.report_title(&title));
         }
 
-        fn on_favicon_urlchange(&self, _browser: Option<&mut Browser>, icon_urls: Option<&mut CefStringList>) {
+        fn on_favicon_urlchange(&self, browser: Option<&mut Browser>, icon_urls: Option<&mut CefStringList>) {
             let urls: Vec<String> = icon_urls.map(|l| l.clone().into_iter().collect()).unwrap_or_default();
-            with(self.id, |p| p.favicon(urls));
+            own(self.id, browser.as_deref(), |p| p.favicon(urls));
         }
 
-        fn on_fullscreen_mode_change(&self, _browser: Option<&mut Browser>, fullscreen: c_int) {
-            with(self.id, |p| p.fullscreen_changed(fullscreen != 0));
+        fn on_fullscreen_mode_change(&self, browser: Option<&mut Browser>, fullscreen: c_int) {
+            own(self.id, browser.as_deref(), |p| p.fullscreen_changed(fullscreen != 0));
         }
 
-        fn on_status_message(&self, _browser: Option<&mut Browser>, value: Option<&CefString>) {
+        fn on_status_message(&self, browser: Option<&mut Browser>, value: Option<&CefString>) {
             let url = value.map(|v| v.to_string()).unwrap_or_default();
-            with(self.id, |p| p.link_hover(url));
+            own(self.id, browser.as_deref(), |p| p.link_hover(url));
         }
 
-        fn on_loading_progress_change(&self, _browser: Option<&mut Browser>, progress: f64) {
-            with(self.id, |p| p.page.report_progress(progress));
+        fn on_loading_progress_change(&self, browser: Option<&mut Browser>, progress: f64) {
+            own(self.id, browser.as_deref(), |p| p.page.report_progress(progress));
         }
 
         #[cfg(target_os = "macos")]
         fn on_cursor_change(
             &self,
-            _browser: Option<&mut Browser>,
+            browser: Option<&mut Browser>,
             cursor: *mut u8,
             _type_: CursorType,
             _custom_cursor_info: Option<&CursorInfo>,
         ) -> c_int {
-            with(self.id, |p| p.view.set_cursor(cursor.cast()));
+            own(self.id, browser.as_deref(), |p| p.view.set_cursor(cursor.cast()));
             1
         }
 
@@ -581,12 +588,12 @@ wrap_display_handler! {
         #[cfg(any(target_os = "linux", target_os = "windows"))]
         fn on_cursor_change(
             &self,
-            _browser: Option<&mut Browser>,
+            browser: Option<&mut Browser>,
             _cursor: CursorHandle,
             type_: CursorType,
             _custom_cursor_info: Option<&CursorInfo>,
         ) -> c_int {
-            with(self.id, |p| {
+            own(self.id, browser.as_deref(), |p| {
                 p.view.set_cursor(type_);
                 p.view.chrome().is_none()
             }) as c_int
