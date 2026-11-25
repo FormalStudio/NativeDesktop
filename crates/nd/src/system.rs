@@ -261,6 +261,42 @@ pub(crate) fn file_dropped(window: WindowId, paths: Vec<std::path::PathBuf>, at:
     system().emit(SystemEvent::FileDrop { window, paths, position: Some(at) });
 }
 
+/// The system's small on-device text model, for short jobs such as naming or sorting a few
+/// items: Apple's (Foundation Models) on macOS 26 and later with Apple Intelligence on and its
+/// model downloaded. No other platform has one yet. Nothing sent to it leaves the machine.
+pub mod text_model {
+    use std::future::Future;
+
+    /// Whether [`respond`] can answer now. Check it each time: the model can finish
+    /// downloading, or Apple Intelligence be turned off, while the app runs.
+    pub fn available() -> bool {
+        #[cfg(target_os = "macos")]
+        return nd_backend_appkit::text_model::available();
+        #[cfg(not(target_os = "macos"))]
+        false
+    }
+
+    /// The model's answer to `prompt` in a fresh session told `instructions`, or why there is
+    /// none. Run it with [`super::spawn`]; an answer takes seconds.
+    pub fn respond(instructions: &str, prompt: &str) -> impl Future<Output = Result<String, String>> + Send + 'static {
+        let (tx, rx) = futures_channel::oneshot::channel();
+        #[cfg(target_os = "macos")]
+        nd_backend_appkit::text_model::respond(
+            instructions,
+            prompt,
+            Box::new(move |answer| {
+                let _ = tx.send(answer);
+            }),
+        );
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = (instructions, prompt);
+            let _ = tx.send(Err("this platform has no on-device text model".to_owned()));
+        }
+        async move { rx.await.unwrap_or_else(|_| Err("the model never answered".to_owned())) }
+    }
+}
+
 /// A window's own alerts and file pickers, as futures: a sheet on the window on macOS, the
 /// platform's dialog parented to it elsewhere, drawn sheets on the web. One per window at a
 /// time, as the platforms allow.

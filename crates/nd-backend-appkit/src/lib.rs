@@ -42,6 +42,7 @@ mod status_page;
 mod surface;
 mod swift;
 mod system_colors;
+pub mod text_model;
 mod titlebar;
 mod toast;
 mod toolbar;
