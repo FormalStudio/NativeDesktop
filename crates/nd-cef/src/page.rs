@@ -295,6 +295,7 @@ impl CefPage {
     /// The window holding the page left fullscreen. Chromium can take a Chrome-style page's
     /// window out on Esc without saying the page left (it does with the page's DevTools open),
     /// so the page is taken out too.
+    #[cfg(target_os = "macos")]
     pub(crate) fn window_left_fullscreen(&self) {
         if !self.st.borrow().fullscreen {
             return;
