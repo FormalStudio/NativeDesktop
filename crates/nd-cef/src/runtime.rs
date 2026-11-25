@@ -397,3 +397,42 @@ wrap_request_context_handler! {
         }
     }
 }
+
+/// Writes every profile's cookies to disk, running Chromium's loop until each store says it is
+/// done or `limit` passes. Chromium commits cookies on a 30 s timer and otherwise only when its
+/// profiles are torn down, which a shutdown cut short under load never reaches: a cookie set
+/// moments before quitting was gone at the next launch.
+pub(crate) fn flush_cookies(limit: std::time::Duration) {
+    let pending = Pending::default();
+    let named: Vec<RequestContext> = CONTEXTS.with(|c| c.borrow().values().cloned().collect());
+    for context in request_context_get_global_context().into_iter().chain(named) {
+        let Some(manager) = context.cookie_manager(None) else { continue };
+        pending.0.set(pending.0.get() + 1);
+        let mut done = CookiesFlushed::new(pending.clone());
+        if manager.flush_store(Some(&mut done)) == 0 {
+            pending.0.set(pending.0.get() - 1);
+        }
+    }
+    let deadline = std::time::Instant::now() + limit;
+    while pending.0.get() > 0 && std::time::Instant::now() < deadline {
+        do_message_loop_work();
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+/// Cookie stores still writing, shared with each store's completion callback (UI thread).
+#[derive(Clone, Default)]
+struct Pending(Rc<Cell<usize>>);
+
+wrap_completion_callback! {
+    struct CookiesFlushed {
+        pending: Pending,
+    }
+
+    impl CompletionCallback {
+        fn on_complete(&self) {
+            let left = self.pending.0.get().saturating_sub(1);
+            self.pending.0.set(left);
+        }
+    }
+}

@@ -92,6 +92,7 @@ fn close_browsers() {
 
 fn shutdown() {
     close_browsers();
+    crate::runtime::flush_cookies(Duration::from_secs(2));
     cef::shutdown();
 }
 

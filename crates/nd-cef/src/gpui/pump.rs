@@ -175,5 +175,6 @@ fn shutdown() {
         do_message_loop_work();
         std::thread::sleep(Duration::from_millis(5));
     }
+    crate::runtime::flush_cookies(Duration::from_secs(2));
     cef::shutdown();
 }
