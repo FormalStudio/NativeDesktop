@@ -94,6 +94,20 @@ mod gate_m2 {
     }
 
     #[test]
+    fn a_new_display_scale_renders_the_view_again_once() {
+        let mut cx = TestApp::new();
+        let handle = open(&mut cx);
+        assert_eq!(cx.window(handle.id()).unwrap().scale_factor(), 1.);
+        cx.set_window_scale(handle.id(), 2.);
+        cx.run_until_idle();
+        assert_eq!(cx.window(handle.id()).unwrap().scale_factor(), 2.);
+        assert_eq!(handle.root().read(&cx).renders, 2);
+        cx.set_window_scale(handle.id(), 2.);
+        cx.run_until_idle();
+        assert_eq!(handle.root().read(&cx).renders, 2);
+    }
+
+    #[test]
     fn a_backend_that_lays_out_itself_is_never_asked_to_measure() {
         let mut cx = TestApp::with_backend(TestBackend::new().without_frames());
         let handle =

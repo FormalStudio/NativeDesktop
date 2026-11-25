@@ -178,6 +178,7 @@ pub struct Window {
     clock: FrameTime,
     options: WindowOptions,
     insets: TitlebarInsets,
+    scale: f32,
     origin: Option<nd_core::Point>,
     /// An element id to focus once the frame has rendered; see [`Window::focus`].
     pub(crate) focus_request: Option<SharedString>,
@@ -203,6 +204,7 @@ impl Window {
             clock: FrameTime::default(),
             options: options.clone(),
             insets: TitlebarInsets::default(),
+            scale: 1.,
             origin: options.origin,
             focus_request: None,
             focus_if_lost: false,
@@ -301,6 +303,16 @@ impl Window {
 
     pub(crate) fn set_titlebar_insets(&mut self, insets: TitlebarInsets) {
         self.insets = insets;
+    }
+
+    /// Device pixels per point on the window's display, as the backend last reported it; 1
+    /// until it does. A line `1. / scale_factor()` thick is one device pixel.
+    pub fn scale_factor(&self) -> f32 {
+        self.scale
+    }
+
+    pub(crate) fn set_scale_factor(&mut self, scale: f32) {
+        self.scale = scale;
     }
 
     /// The window's frame clock: its display's refresh on a real host, the test clock in tests.

@@ -1153,6 +1153,7 @@ impl Inner {
                 }
                 laid_out = app.window(id).map(|w| w.viewport_size());
                 app.set_titlebar_insets(id, insets);
+                app.set_window_scale(id, window.scale_factor());
                 if animating {
                     app.refresh_window(id);
                 }

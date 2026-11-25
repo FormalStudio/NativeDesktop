@@ -853,6 +853,20 @@ impl App {
         }
     }
 
+    /// The backend's report of the window's display scale. The window's root view renders again
+    /// when it changes, so a view reading [`Window::scale_factor`] sees it.
+    pub fn set_window_scale(&mut self, id: WindowId, scale: f32) {
+        let Some(slot) = self.windows.get_mut(&id) else { return };
+        let Some(window) = slot.window.as_mut() else { return };
+        if window.scale_factor() == scale {
+            return;
+        }
+        window.set_scale_factor(scale);
+        if let Some(root) = slot.tree.as_ref().map(|t| t.root_view_id()) {
+            self.dirty.insert(root);
+        }
+    }
+
     /// Renders the window's root view again in the next frame, as if it were notified.
     pub fn refresh_window(&mut self, id: WindowId) {
         if let Some(root) = self.windows.get(&id).and_then(|w| w.tree.as_ref()).map(|t| t.root_view_id()) {

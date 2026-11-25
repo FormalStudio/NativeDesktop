@@ -72,6 +72,7 @@ impl Host {
                 let Some(this) = this.upgrade() else { return };
                 let Ok(mut app) = this.app.try_borrow_mut() else { return };
                 app.resize_window(id, size);
+                app.set_window_scale(id, window.backingScaleFactor() as f32);
                 let time = clock.next_frame_time();
                 app.tick_window(id, time);
                 let started = Instant::now();
