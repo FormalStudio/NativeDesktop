@@ -233,6 +233,8 @@ struct FakeChrome {
     pending: RefCell<Vec<AlertCallback>>,
     abouts: RefCell<Vec<AboutPanel>>,
     menus: RefCell<Vec<Vec<String>>>,
+    /// Where each menu was asked to open, from its node's top-left.
+    anchors: RefCell<Vec<(f32, bool)>>,
 }
 
 /// A menu's rows as labels: a submenu as its title and its rows in brackets, a separator as `-`.
@@ -250,7 +252,8 @@ fn labels(items: &[MenuItem]) -> Vec<String> {
 
 impl ChromeServices for FakeChrome {
     fn set_menus(&self, _cx: &mut App, _menus: Vec<Menu>) {}
-    fn show_context_menu(&self, _: &mut App, _: WindowId, _: NodeId, _: f32, _: f32, menu: ContextMenu) {
+    fn show_context_menu(&self, _: &mut App, _: WindowId, _: NodeId, _: f32, y: f32, menu: ContextMenu) {
+        self.anchors.borrow_mut().push((y, menu.above));
         self.menus.borrow_mut().push(labels(&menu.items));
     }
     fn alert(&self, _cx: &mut App, window: WindowId, alert: Alert, done: AlertCallback) {
@@ -332,6 +335,39 @@ fn a_context_menu_leaves_out_submenus_with_nothing_in_them() {
         [vec!["Open", "Move To [Journal]", "-", "Move to Trash"], vec!["Open", "-", "Move to Trash"],],
         "an empty submenu is left out, its separators with it, and a menu left with nothing never opens"
     );
+}
+
+struct MenuButtons;
+
+impl Render for MenuButtons {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        use nd_ui::actions::ToggleSidebar;
+        v_flex().child(menu_button("down", Icon::Search, |m, _, _| m.item("Open", ToggleSidebar))).child(menu_button(
+            "up",
+            Icon::Search,
+            |m, _, _| m.item("Open", ToggleSidebar).above(),
+        ))
+    }
+}
+
+#[test]
+fn a_menu_button_opens_its_menu_under_itself_or_from_its_top_edge_upward() {
+    let mut cx = TestApp::new();
+    let chrome = Rc::new(FakeChrome::default());
+    cx.set_global(Chrome(chrome.clone()));
+    let window = cx.open_window(WINDOW, |_, cx| cx.new(|_| MenuButtons)).id();
+    let mut heights = Vec::new();
+    for id in ["down", "up"] {
+        cx.run_until_idle();
+        let root = cx.semantic_window(window).expect("open").root;
+        let node = root.iter().find(|n| n.test_id.as_deref() == Some(id)).expect(id).clone();
+        heights.push(node.bounds.map_or(0., |b| b.size.height));
+        cx.perform(node.id, &SemanticAction::Click).unwrap();
+        cx.run_until_idle();
+    }
+    let anchors = chrome.anchors.borrow().clone();
+    assert_eq!(anchors[0], (heights[0], false), "a menu under the button starts at its bottom edge");
+    assert_eq!(anchors[1], (0., true), "a menu above the button starts at its top edge");
 }
 
 struct TitleRow {

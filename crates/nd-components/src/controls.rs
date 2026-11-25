@@ -84,8 +84,9 @@ pub fn icon_button(id: impl Into<SharedString>, icon: Icon) -> Button {
     button(id, "").icon(icon).bezel(Bezel::Borderless)
 }
 
-/// An icon button that opens a menu under itself: a header bar's primary menu, a row's
-/// "More" button. `build` runs each time it opens.
+/// An icon button that opens a menu under itself, or over it when `build` returns the menu
+/// `above()`: a header bar's primary menu, a row's "More" button, a window foot's menu. `build`
+/// runs each time it opens.
 pub fn menu_button(
     id: impl Into<SharedString>,
     icon: Icon,
@@ -96,8 +97,9 @@ pub fn menu_button(
     icon_button(id, icon).on_click(move |_: &ClickEvent, window, cx| {
         let menu = build(crate::menu::ContextMenu::default(), window, cx);
         let Some((node, frame)) = cx.node_with_id(window.id(), &key) else { return };
-        let below = frame.map_or(0., |f| f.size.height);
-        crate::services::show_context_menu(cx, window.id(), node, 0., below, menu);
+        // A menu that opens above starts from the button's top edge, one below from its bottom.
+        let y = if menu.above { 0. } else { frame.map_or(0., |f| f.size.height) };
+        crate::services::show_context_menu(cx, window.id(), node, 0., y, menu);
     })
 }
 
