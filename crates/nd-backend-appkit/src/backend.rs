@@ -1865,10 +1865,14 @@ impl Backend for AppKitBackend {
         crate::platform::QUIT_WHEN_WINDOWS_CLOSE.store(quit, std::sync::atomic::Ordering::Relaxed);
     }
 
+    /// On a later turn: termination runs the app's quit handlers, which need the app this call
+    /// still holds.
     fn quit(&mut self) {
-        if let Some(mtm) = objc2_foundation::MainThreadMarker::new() {
-            objc2_app_kit::NSApplication::sharedApplication(mtm).terminate(None);
-        }
+        crate::events::defer(|| {
+            if let Some(mtm) = objc2_foundation::MainThreadMarker::new() {
+                objc2_app_kit::NSApplication::sharedApplication(mtm).terminate(None);
+            }
+        });
     }
 
     fn window_command(&mut self, window: WindowId, command: nd_ui::backend::WindowCommand) {
