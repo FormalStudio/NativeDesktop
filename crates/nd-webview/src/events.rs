@@ -105,6 +105,13 @@ pub struct PopupBlocked {
     pub disposition: Disposition,
 }
 
+/// The app's request filter ([`crate::set_request_filter`]) blocked one of the page's requests, its
+/// own or a frame's, or answered it with a stand-in. Chromium engine only.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RequestBlocked {
+    pub url: String,
+}
+
 /// A browser command Chromium would serve with its own browser UI, which a Chrome-style page
 /// (`[webview.cef] style = "chrome"`) never shows: its shortcuts and menus reach the app instead,
 /// which opens its own tab, history or downloads. Chromium does nothing with it.

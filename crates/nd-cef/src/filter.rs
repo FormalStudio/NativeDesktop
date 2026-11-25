@@ -1,16 +1,18 @@
 //! The app's [`nd_webview::RequestFilter`] on Chromium's IO thread. Every page's request handler
 //! asks it about each request in `resource_request_handler`, and hands back a handler only for a
 //! request the answer changes: cancelled, redirected, answered with the app's body, or a
-//! document whose response the filter wants to see. Nothing here touches the main thread.
+//! document whose response the filter wants to see. Nothing here touches the main thread; a
+//! request the filter stopped is reported to its page in a task posted there.
 
 use std::os::raw::c_int;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use cef::*;
-use nd_webview::filter::{CspInsert, FilterRequest, FilterResponse, ResourceKind, Verdict, filters, request_filter};
+use nd_webview::filter::{FilterRequest, FilterResponse, HeadInsert, ResourceKind, Verdict, filters, request_filter};
 
 /// The resource request handler for `request`, or `None` to let Chromium load it untouched.
 pub(crate) fn handler(
+    page: u64,
     browser: Option<&mut Browser>,
     request: Option<&mut Request>,
     initiator: Option<&CefString>,
@@ -33,8 +35,11 @@ pub(crate) fn handler(
     if verdict == Verdict::Allow && !kind.is_document() {
         return None;
     }
+    if matches!(verdict, Verdict::Block | Verdict::Respond { .. }) {
+        post_task(ThreadId::UI, Some(&mut NdBlocked::new(page, url.clone())));
+    }
     let owned = Owned { url, first_party, initiator, kind, method };
-    Some(NdFiltered::new(Decided(Arc::new(Mutex::new(Decision { request: owned, verdict, csp: None })))))
+    Some(NdFiltered::new(Decided(Arc::new(Mutex::new(Decision { request: owned, verdict, csp: None, head: None })))))
 }
 
 fn kind(t: ResourceType) -> ResourceKind {
@@ -82,6 +87,8 @@ struct Decision {
     verdict: Verdict,
     /// The policy the filter added to this document's response.
     csp: Option<String>,
+    /// The HTML the filter put at the top of this document's head.
+    head: Option<String>,
 }
 
 /// One request's decision, shared by the handler's callbacks on the IO thread.
@@ -91,6 +98,22 @@ struct Decided(Arc<Mutex<Decision>>);
 impl Decided {
     fn lock(&self) -> std::sync::MutexGuard<'_, Decision> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+// Tells the page, on the main thread, that the filter stopped one of its requests.
+wrap_task! {
+    struct NdBlocked {
+        page: u64,
+        url: String,
+    }
+
+    impl Task {
+        fn execute(&self) {
+            if let Some(page) = crate::page::get(self.page) {
+                page.page.emit(nd_webview::RequestBlocked { url: self.url.clone() });
+            }
+        }
     }
 }
 
@@ -158,7 +181,12 @@ wrap_resource_request_handler! {
                 map.into_iter().flat_map(|(name, values)| values.into_iter().map(move |v| (name.clone(), v))).collect();
             let status = u16::try_from(response.status()).unwrap_or(0);
             let seen = FilterResponse { status, mime: &mime, headers: &headers };
-            decided.csp = filter.response(&decided.request.borrow(), &seen).filter(|p| !p.trim().is_empty());
+            let (csp, head) = {
+                let request = decided.request.borrow();
+                let csp = filter.response(&request, &seen).filter(|p| !p.trim().is_empty());
+                (csp, filter.head(&request, &seen).filter(|h| !h.trim().is_empty()))
+            };
+            (decided.csp, decided.head) = (csp, head);
             0
         }
 
@@ -169,8 +197,12 @@ wrap_resource_request_handler! {
             _request: Option<&mut Request>,
             _response: Option<&mut Response>,
         ) -> Option<ResponseFilter> {
-            let policy = self.decided.lock().csp.clone()?;
-            Some(NdCsp::new(Csp(Arc::new(Mutex::new((CspInsert::new(&policy), Vec::new()))))))
+            let decided = self.decided.lock();
+            if decided.csp.is_none() && decided.head.is_none() {
+                return None;
+            }
+            let insert = HeadInsert::new(decided.csp.as_deref(), decided.head.as_deref().unwrap_or_default());
+            Some(NdHead::new(Head(Arc::new(Mutex::new((insert, Vec::new()))))))
         }
     }
 }
@@ -232,11 +264,11 @@ wrap_resource_handler! {
 
 /// The inserter and the output it has not handed to Chromium yet.
 #[derive(Clone)]
-struct Csp(Arc<Mutex<(CspInsert, Vec<u8>)>>);
+struct Head(Arc<Mutex<(HeadInsert, Vec<u8>)>>);
 
 wrap_response_filter! {
-    struct NdCsp {
-        csp: Csp,
+    struct NdHead {
+        head: Head,
     }
 
     impl ResponseFilter {
@@ -251,7 +283,7 @@ wrap_response_filter! {
             data_out: Option<&mut Vec<u8>>,
             data_out_written: Option<&mut usize>,
         ) -> ResponseFilterStatus {
-            let mut guard = self.csp.0.lock().unwrap_or_else(PoisonError::into_inner);
+            let mut guard = self.head.0.lock().unwrap_or_else(PoisonError::into_inner);
             let (insert, pending) = &mut *guard;
             match data_in {
                 Some(chunk) => {

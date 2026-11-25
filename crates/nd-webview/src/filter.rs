@@ -116,6 +116,13 @@ pub trait RequestFilter: Send + Sync + 'static {
     fn response(&self, _request: &FilterRequest<'_>, _response: &FilterResponse<'_>) -> Option<String> {
         None
     }
+
+    /// The same document: returned HTML goes at the top of its `<head>`, after the policy, so a
+    /// `<style>` there applies from the first paint and a `<script>` runs before any of the
+    /// page's own. The page's own policy still applies to both.
+    fn head(&self, _request: &FilterRequest<'_>, _response: &FilterResponse<'_>) -> Option<String> {
+        None
+    }
 }
 
 impl<F: Fn(&FilterRequest<'_>) -> Verdict + Send + Sync + 'static> RequestFilter for F {
@@ -147,23 +154,29 @@ pub fn filters(url: &str, initiator: &str) -> bool {
     matches!(scheme, "http" | "https" | "ws" | "wss") && !initiator.starts_with("chrome-extension:")
 }
 
-/// `html` with a `<meta>` carrying `policy` inserted right after its `<head>` tag. Streaming:
-/// [`CspInsert::feed`] takes the body in chunks and gives the bytes to send so far.
-pub struct CspInsert {
+/// `html` with a `<meta>` carrying a policy and the filter's own HTML inserted right after its
+/// `<head>` tag, or where the parser opens the head itself when the document has no such tag:
+/// before the first tag or text past the doctype and `<html>`. Streaming: [`HeadInsert::feed`] takes the body in chunks and gives the bytes to
+/// send so far.
+pub struct HeadInsert {
     tag: Vec<u8>,
     /// Bytes held back while looking for the end of `<head ...>`.
     held: Vec<u8>,
     done: bool,
 }
 
-impl CspInsert {
-    /// Past this many bytes without a `<head>` the document is passed through unchanged.
+impl HeadInsert {
+    /// Past this many bytes with neither the document is passed through unchanged.
     const LIMIT: usize = 64 * 1024;
 
-    pub fn new(policy: &str) -> Self {
-        let policy = policy.replace('&', "&amp;").replace('"', "&quot;").replace('<', "&lt;");
-        let tag = format!("<meta http-equiv=\"Content-Security-Policy\" content=\"{policy}\">").into_bytes();
-        Self { tag, held: Vec::new(), done: false }
+    pub fn new(policy: Option<&str>, html: &str) -> Self {
+        let mut tag = String::new();
+        if let Some(policy) = policy {
+            let policy = policy.replace('&', "&amp;").replace('"', "&quot;").replace('<', "&lt;");
+            tag = format!("<meta http-equiv=\"Content-Security-Policy\" content=\"{policy}\">");
+        }
+        tag.push_str(html);
+        Self { tag: tag.into_bytes(), held: Vec::new(), done: false }
     }
 
     pub fn feed(&mut self, chunk: &[u8], out: &mut Vec<u8>) {
@@ -172,16 +185,20 @@ impl CspInsert {
             return;
         }
         self.held.extend_from_slice(chunk);
-        if let Some(at) = head_end(&self.held) {
-            out.extend_from_slice(&self.held[..at]);
-            out.extend_from_slice(&self.tag);
-            out.extend_from_slice(&self.held[at..]);
-            self.held.clear();
-            self.done = true;
-        } else if self.held.len() > Self::LIMIT || body_start(&self.held) {
+        if let Some(at) = head_end(&self.held).or_else(|| implied_head(&self.held)) {
+            self.insert_at(at, out);
+        } else if self.held.len() > Self::LIMIT {
             out.append(&mut self.held);
             self.done = true;
         }
+    }
+
+    fn insert_at(&mut self, at: usize, out: &mut Vec<u8>) {
+        out.extend_from_slice(&self.held[..at]);
+        out.extend_from_slice(&self.tag);
+        out.extend_from_slice(&self.held[at..]);
+        self.held.clear();
+        self.done = true;
     }
 
     /// Whether bytes are held back, to be sent by a later [`Self::feed`] or [`Self::finish`].
@@ -189,10 +206,14 @@ impl CspInsert {
         !self.held.is_empty()
     }
 
-    /// The body ended: what is still held back.
+    /// The body ended: what is still held back, after the insert when the document had nothing
+    /// to place it before.
     pub fn finish(&mut self, out: &mut Vec<u8>) {
-        out.append(&mut self.held);
-        self.done = true;
+        if self.done {
+            return;
+        }
+        let at = self.held.len();
+        self.insert_at(at, out);
     }
 }
 
@@ -213,8 +234,43 @@ fn head_end(html: &[u8]) -> Option<usize> {
     None
 }
 
-fn body_start(html: &[u8]) -> bool {
-    find(&html.to_ascii_lowercase(), b"<body").is_some()
+/// Whether `html` starts with the start tag `name` (`<html`), `None` while that is still to
+/// arrive.
+fn opens(html: &[u8], name: &[u8]) -> Option<bool> {
+    let n = html.len().min(name.len());
+    if !html[..n].eq_ignore_ascii_case(&name[..n]) {
+        return Some(false);
+    }
+    let next = html.get(name.len())?;
+    Some(matches!(next, b'>' | b' ' | b'\t' | b'\n' | b'\r' | b'/'))
+}
+
+/// Where the parser would open the head of a document with no `<head>` tag: the first tag or
+/// text past the byte order mark, the doctype, comments and `<html ...>`. `None` while that is
+/// still to arrive, or when a `<head` tag comes first.
+fn implied_head(html: &[u8]) -> Option<usize> {
+    let mut at = if html.starts_with(b"\xEF\xBB\xBF") { 3 } else { 0 };
+    loop {
+        while html.get(at).is_some_and(u8::is_ascii_whitespace) {
+            at += 1;
+        }
+        let rest = html.get(at..)?;
+        if rest.is_empty() {
+            return None;
+        }
+        let skip = if rest.starts_with(b"<!--") {
+            find(rest, b"-->").map(|j| j + 3)
+        } else if rest.starts_with(b"<!") || rest.starts_with(b"<?") {
+            find(rest, b">").map(|j| j + 1)
+        } else if opens(rest, b"<html")? {
+            find(rest, b">").map(|j| j + 1)
+        } else if opens(rest, b"<head")? {
+            return None;
+        } else {
+            return Some(at);
+        };
+        at += skip?;
+    }
 }
 
 fn find(hay: &[u8], needle: &[u8]) -> Option<usize> {
@@ -226,7 +282,11 @@ mod tests {
     use super::*;
 
     fn run(chunks: &[&str], policy: &str) -> String {
-        let mut insert = CspInsert::new(policy);
+        run_with(chunks, Some(policy), "")
+    }
+
+    fn run_with(chunks: &[&str], policy: Option<&str>, html: &str) -> String {
+        let mut insert = HeadInsert::new(policy, html);
         let mut out = Vec::new();
         for c in chunks {
             insert.feed(c.as_bytes(), &mut out);
@@ -243,9 +303,33 @@ mod tests {
             format!("<!doctype html><html><head lang=x>{meta}<title>t</title></head>")
         );
         assert_eq!(run(&["<HEAD><x>"], "script-src 'none'"), format!("<HEAD>{meta}<x>"));
-        // `<header>` is not `<head>`, and a document without a head passes through.
-        assert_eq!(run(&["<header>a</header><body>b"], "x"), "<header>a</header><body>b");
+        // `<header>` is not `<head>`: the head the parser opens before it takes the policy.
+        let x = "<meta http-equiv=\"Content-Security-Policy\" content=\"x\">";
+        assert_eq!(run(&["<header>a</header><body>b"], "x"), format!("{x}<header>a</header><body>b"));
         assert!(run(&["<head>"], "a\"b").contains("content=\"a&quot;b\""));
+    }
+
+    #[test]
+    fn the_filters_html_follows_the_policy_at_the_top_of_head() {
+        let html = "<style>.ad{display:none}</style>";
+        assert_eq!(run_with(&["<html><head><title>t"], None, html), format!("<html><head>{html}<title>t"));
+        let both = run_with(&["<head>"], Some("x"), html);
+        assert_eq!(both, format!("<head><meta http-equiv=\"Content-Security-Policy\" content=\"x\">{html}"));
+    }
+
+    #[test]
+    fn a_document_without_a_head_tag_gets_the_insert_where_its_head_opens() {
+        let h = "<style>.ad{display:none}</style>";
+        let with = |chunks: &[&str]| run_with(chunks, None, h);
+        assert_eq!(with(&["<!doctype html><title>Ads</title>"]), format!("<!doctype html>{h}<title>Ads</title>"));
+        assert_eq!(
+            with(&["<!DOCTYPE html>\n<!-- a > b -->", "<ht", "ml lang=en>", "\n<script>x</script>"]),
+            format!("<!DOCTYPE html>\n<!-- a > b --><html lang=en>\n{h}<script>x</script>")
+        );
+        assert_eq!(with(&["\u{feff}plain text"]), format!("\u{feff}{h}plain text"));
+        assert_eq!(with(&["<!doctype html><he", "ad><title>t"]), format!("<!doctype html><head>{h}<title>t"));
+        assert_eq!(with(&["<!doctype html>"]), format!("<!doctype html>{h}"));
+        assert_eq!(with(&["<htmlx>"]), format!("{h}<htmlx>"));
     }
 
     #[test]

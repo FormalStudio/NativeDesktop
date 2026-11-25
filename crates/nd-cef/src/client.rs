@@ -823,7 +823,7 @@ wrap_request_handler! {
             request_initiator: Option<&CefString>,
             _disable_default_handling: Option<&mut c_int>,
         ) -> Option<ResourceRequestHandler> {
-            crate::filter::handler(browser, request, request_initiator)
+            crate::filter::handler(self.id, browser, request, request_initiator)
         }
 
         fn on_open_urlfrom_tab(

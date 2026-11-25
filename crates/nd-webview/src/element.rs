@@ -103,6 +103,7 @@ impl WebViewElement {
         on_render_process_gone => RenderProcessGone;
         on_new_window => NewWindow;
         on_popup_blocked => PopupBlocked;
+        on_request_blocked => RequestBlocked;
         on_window_closed => WindowClosed;
         on_download_requested => DownloadRequested;
         on_download_updated => DownloadUpdated;
