@@ -548,7 +548,13 @@ impl EngineView for WkPage {
             Command::CloseDevTools => self.close_inspector(),
             // `WebView::dev_tools` asks Chromium only.
             Command::DevToolsIn(_) => {}
-            Command::ExecuteJavaScript { code, world, done } => self.evaluate(&code, world.as_deref(), done),
+            // WKWebView's public evaluation always carries a user gesture.
+            Command::ExecuteJavaScript { code, world, frame: None, done, .. } => {
+                self.evaluate(&code, world.as_deref(), done)
+            }
+            Command::ExecuteJavaScript { frame: Some(_), done, .. } => {
+                done(Err(JsError("WebKit cannot run script in a frame by id".into())));
+            }
             Command::AddUserScript(script) => {
                 {
                     let mut st = self.st.borrow_mut();

@@ -11,7 +11,7 @@ use nd_ui::App;
 
 use crate::engine::{CefStyle, Command, Engine, EngineView, Page, PageShared, PageState, default_engine, factory};
 use crate::extensions::{ActionOutcome, ActionState, Anchor};
-use crate::{Cookie, FindOptions, JsError, JsValue, UserScript};
+use crate::{Cookie, FindOptions, JsError, JsValue, UserGesture, UserScript};
 
 /// Which cookie jar, cache and storage a page uses.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
@@ -408,9 +408,26 @@ impl WebView {
         world: Option<&str>,
         done: impl FnOnce(Result<JsValue, JsError>, &mut App) + 'static,
     ) {
+        self.execute_javascript_in_frame(code, world, None, UserGesture::With, done);
+    }
+
+    /// As [`Self::execute_javascript_in`], in `frame` (a [`crate::ScriptMessage::frame`],
+    /// cross-site frames included; the main frame when `None`), and with a user gesture only
+    /// when `gesture` says so. Targeting a frame is Chromium only: WebKit answers with an error.
+    /// WebKit's evaluation always carries a gesture.
+    pub fn execute_javascript_in_frame(
+        &self,
+        code: impl Into<String>,
+        world: Option<&str>,
+        frame: Option<&str>,
+        gesture: UserGesture,
+        done: impl FnOnce(Result<JsValue, JsError>, &mut App) + 'static,
+    ) {
         self.send(Command::ExecuteJavaScript {
             code: code.into(),
             world: world.map(Into::into),
+            frame: frame.map(Into::into),
+            gesture,
             done: Box::new(move |result| Page::defer(move |cx| done(result, cx))),
         });
     }

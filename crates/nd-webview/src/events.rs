@@ -197,6 +197,9 @@ pub struct ScriptMessage {
     pub body: JsValue,
     /// The security origin of the posting frame, `scheme://host[:port]`.
     pub origin: String,
+    /// The posting frame, for [`crate::WebView::execute_javascript_in_frame`]: an opaque id
+    /// (Chromium's frame id), empty on WebKit, which cannot target frames by id.
+    pub frame: String,
     pub main_frame: bool,
 }
 
@@ -387,7 +390,14 @@ mod tests {
 
     fn from(origin: &str) -> ScriptMessage {
         let body = JsValue::Null;
-        ScriptMessage { name: "bridge".into(), world: String::new(), body, origin: origin.into(), main_frame: true }
+        ScriptMessage {
+            name: "bridge".into(),
+            world: String::new(),
+            body,
+            origin: origin.into(),
+            frame: String::new(),
+            main_frame: true,
+        }
     }
 
     #[test]

@@ -18,13 +18,16 @@
 //! lists through the request filter, printing `ND_ADBLOCK_OK`), `private` (a private window's tabs
 //! share one in-memory profile, printing `ND_PRIVATE_OK`), `pip` (the floating video chord's script
 //! lifts a playing video into picture-in-picture and back, printing `ND_PIP_OK`), `print` (a page
-//! saved as PDF, then the OS print dialog, printing `ND_PRINT_REQUESTED`), `parity` (every event
+//! saved as PDF, then the OS print dialog, printing `ND_PRINT_REQUESTED`), `frames` (user scripts,
+//! script messages and `execute_javascript_in_frame` in a cross-site frame, printing
+//! `ND_FRAMES_OK`), `parity` (every event
 //! and command against a local test page, printing `ND_WEBVIEW_PARITY_OK`), `tabdrag` (two windows
 //! of tabs that drag between them, carrying live pages) or `reveal` (a hidden sidebar that slides
 //! in from the leading edge).
 
 mod adblock;
 mod extensions;
+mod frames;
 mod parity;
 mod pip;
 mod print;
@@ -490,6 +493,7 @@ pub fn init(cx: &mut App) {
         Ok("adblock") => adblock::open(cx),
         Ok("private") => private::open(cx),
         Ok("pip") => pip::open(cx),
+        Ok("frames") => frames::open(cx),
         Ok("print") => print::open(cx),
         Ok("tabdrag") => tabdrag::tabdrag(cx),
         Ok("reveal") => tabdrag::reveal(cx),

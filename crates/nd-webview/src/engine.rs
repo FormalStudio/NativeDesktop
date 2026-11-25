@@ -178,6 +178,9 @@ pub enum Command {
     ExecuteJavaScript {
         code: String,
         world: Option<String>,
+        /// A [`crate::ScriptMessage::frame`]; the main frame when `None`.
+        frame: Option<String>,
+        gesture: crate::UserGesture,
         done: Box<dyn FnOnce(Result<JsValue, JsError>)>,
     },
     AddUserScript(UserScript),

@@ -503,7 +503,7 @@ define_class!(
             }
             let frame = unsafe { message.frameInfo() };
             let (origin, main_frame) = unsafe { (origin_string(&frame.securityOrigin()), frame.isMainFrame()) };
-            let message = ScriptMessage { name, world, body, origin, main_frame };
+            let message = ScriptMessage { name, world, body, origin, frame: String::new(), main_frame };
             let allowed = owner
                 .st
                 .borrow()

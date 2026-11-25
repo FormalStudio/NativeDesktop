@@ -63,6 +63,16 @@ impl std::fmt::Display for JsError {
 
 impl std::error::Error for JsError {}
 
+/// Whether script the app runs acts for the user. With a gesture the page gets user activation
+/// and may open a popup, enter fullscreen or picture-in-picture; script the app runs on its own
+/// account (reacting to a page event) should go without.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum UserGesture {
+    #[default]
+    With,
+    Without,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SameSite {
     #[default]

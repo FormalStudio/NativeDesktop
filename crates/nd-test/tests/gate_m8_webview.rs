@@ -12,6 +12,8 @@
 //!   out in a Chrome-style page.
 //! - `real_adblock_cef*`: uBlock Origin's default lists on the request filter block and redirect
 //!   the 0.5.11 adblock fixture's requests as that build did (CEF only; WebKit has no filter).
+//! - `real_frames_cef*`: an all-frames user script posts from a cross-site (out-of-process) frame,
+//!   the message names that frame, and `execute_javascript_in_frame` changes its document.
 //! - `real_private_*`: two tabs of a private window share a cookie, a normal window does not
 //!   see it, and a private window opened after the first closed starts empty.
 //! - `real_pip_cef_chrome`: a page's own `requestPictureInPicture` is refused for want of a
@@ -116,6 +118,18 @@ mod gate_m8_webview {
     fn real_adblock_cef_chrome() {
         let line = scene("cef-chrome", "adblock", "ND_ADBLOCK_");
         println!("{line}; ND_M8_ADBLOCK_CEF_CHROME_OK");
+    }
+
+    #[test]
+    fn real_frames_cef() {
+        let line = scene("cef", "frames", "ND_FRAMES_");
+        println!("{line}; ND_M8_FRAMES_CEF_OK");
+    }
+
+    #[test]
+    fn real_frames_cef_chrome() {
+        let line = scene("cef-chrome", "frames", "ND_FRAMES_");
+        println!("{line}; ND_M8_FRAMES_CEF_CHROME_OK");
     }
 
     #[test]

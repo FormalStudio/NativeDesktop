@@ -1,5 +1,7 @@
 //! A local HTTP server for the parity and extensions scenes: a few fixed pages, a download, an icon,
-//! and `/origin`, which answers the request's `Origin` header.
+//! and `/origin`, which answers the request's `Origin` header. It listens on `127.0.0.1` and on
+//! `[::1]` at the same port: two sites, so a frame from one in a page from the other runs out of
+//! process.
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
@@ -44,12 +46,26 @@ pub const ADBLOCK: &str = r#"<!doctype html><html><head><meta charset="utf-8"><t
 pub const CSP_PROBE: &str = "<!doctype html><html><head><title>csp</title></head><body>\
 <script>window.ran = true;</script>csp probe</body></html>";
 
+/// A page on `127.0.0.1` with a frame from `[::1]` (`{port}` filled in).
+const FRAMES: &str = "<!doctype html><html><head><title>frames</title></head><body>outer\
+<iframe id=\"inner\" src=\"http://[::1]:{port}/inner\" width=\"400\" height=\"200\"></iframe></body></html>";
+
+const INNER: &str = "<!doctype html><html><head><title>inner</title></head><body>inner</body></html>";
+
 pub const DOWNLOAD_BODY: &str = "hello download";
 
 /// Serves on an ephemeral port in a thread of its own; returns `http://127.0.0.1:<port>`.
 pub fn start() -> String {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind a local port");
-    let base = format!("http://127.0.0.1:{}", listener.local_addr().expect("local addr").port());
+    let port = listener.local_addr().expect("local addr").port();
+    if let Ok(v6) = TcpListener::bind(("::1", port)) {
+        serve(v6, port);
+    }
+    serve(listener, port);
+    format!("http://127.0.0.1:{port}")
+}
+
+fn serve(listener: TcpListener, port: u16) {
     std::thread::spawn(move || {
         for stream in listener.incoming().flatten() {
             std::thread::spawn(move || {
@@ -75,6 +91,10 @@ pub fn start() -> String {
                 }
                 let (status, kind, extra, body): (&str, &str, &str, Vec<u8>) = match path {
                     "/" => ("200 OK", "text/html; charset=utf-8", "", INDEX.into()),
+                    "/frames" => {
+                        ("200 OK", "text/html; charset=utf-8", "", FRAMES.replace("{port}", &port.to_string()).into())
+                    }
+                    "/inner" => ("200 OK", "text/html; charset=utf-8", "", INNER.into()),
                     "/adblock" => ("200 OK", "text/html; charset=utf-8", "", ADBLOCK.into()),
                     "/nd-csp-probe" => ("200 OK", "text/html; charset=utf-8", "", CSP_PROBE.into()),
                     "/js/prebid.js" => ("200 OK", "text/javascript", "", b"window.__prebid = 1".to_vec()),
@@ -99,5 +119,4 @@ pub fn start() -> String {
             });
         }
     });
-    base
 }

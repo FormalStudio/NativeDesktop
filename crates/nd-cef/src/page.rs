@@ -346,8 +346,9 @@ impl CefPage {
     }
 
     /// A post through [`devtools::BINDING`].
-    pub(crate) fn script_message(&self, world: String, origin: String, main_frame: bool, payload: &str) {
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(payload) else { return };
+    pub(crate) fn script_message(&self, b: devtools::Binding) {
+        let devtools::Binding { world, origin, frame, main_frame, payload } = b;
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&payload) else { return };
         let name = v["name"].as_str().unwrap_or_default().to_owned();
         let body = v["body"].clone();
         if name == nd_webview::script::INTERNAL_HANDLER && world == nd_webview::script::INTERNAL_WORLD {
@@ -357,7 +358,7 @@ impl CefPage {
             }
             return;
         }
-        let message = ScriptMessage { name, world, body, origin, main_frame };
+        let message = ScriptMessage { name, world, body, origin, frame, main_frame };
         let allowed = self
             .st
             .borrow()
@@ -959,8 +960,9 @@ impl CefPage {
                 tools.adopt(child as Rc<dyn EngineView>);
                 host.show_dev_tools(Some(&info), Some(&mut client), Some(&Self::browser_settings()), None);
             }
-            Command::ExecuteJavaScript { code, world, done } => {
-                self.devtools.evaluate_as_user(&code, world.as_deref(), move |r| done(r.map_err(nd_webview::JsError)));
+            Command::ExecuteJavaScript { code, world, frame, gesture, done } => {
+                let done = move |r: Result<_, String>| done(r.map_err(nd_webview::JsError));
+                self.devtools.evaluate_for_app(&code, world.as_deref(), frame.as_deref(), gesture, done);
             }
             Command::AddUserScript(script) => {
                 let old = {
