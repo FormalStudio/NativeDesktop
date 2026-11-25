@@ -790,7 +790,7 @@ impl TableNative {
         if let Some(row_id) = under.filter(|r| self.props.drop_on.as_ref().is_some_and(|on| on.contains(r))) {
             if let Some(layer) = self.slot_line.layer() {
                 layer.setBackgroundColor(None);
-                layer.setBorderWidth(2.);
+                layer.setBorderWidth(2.); // nd-lint: allow, NSTableView's drop-on ring
                 layer.setBorderColor(Some(&accent));
                 layer.setCornerRadius(4.); // nd-lint: allow, NSTableView's drop-on ring
             }
