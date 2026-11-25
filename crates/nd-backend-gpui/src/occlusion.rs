@@ -107,7 +107,7 @@ impl Occluding {
     }
 
     /// A strip that takes the pointer and draws nothing, with the keyboard left where it is (a
-    /// pane's resize grab, half of which lies over the content beside it).
+    /// pane's or a split's resize grab, which lies over the content beside it).
     pub(crate) fn grab(inner: impl IntoElement) -> Self {
         Self { inner: inner.into_any_element(), draws: false, blocks_input: true, takes_keys: false, shadow: false }
     }

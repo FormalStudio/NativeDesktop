@@ -231,7 +231,8 @@ impl Build<'_> {
                 .children(panes.next())
                 .child(divider)
                 .children(panes)
-                .child(handle)
+                // The grab overlaps the panes beside the hairline, which may be native pages.
+                .child(crate::occlusion::Occluding::grab(handle))
                 .child(follow)
                 .into_any_element(),
         )
