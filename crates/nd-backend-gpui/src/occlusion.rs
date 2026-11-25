@@ -25,6 +25,8 @@ pub struct Occluder {
     pub blocks_input: bool,
     /// It takes the keyboard from what is under it: a menu or dialog does, window chrome does not.
     pub takes_keys: bool,
+    /// It casts a shadow past its bounds, which a surface under it must not cover either.
+    pub shadow: bool,
 }
 
 type Hide = Box<dyn FnOnce()>;
@@ -84,28 +86,29 @@ pub struct Occluding {
     draws: bool,
     blocks_input: bool,
     takes_keys: bool,
+    shadow: bool,
 }
 
 impl Occluding {
     /// Content that draws over what is under it and takes the pointer there.
     pub fn surface(inner: impl IntoElement) -> Self {
-        Self { inner: inner.into_any_element(), draws: true, blocks_input: true, takes_keys: true }
+        Self { inner: inner.into_any_element(), draws: true, blocks_input: true, takes_keys: true, shadow: true }
     }
 
     /// Window chrome over the content (Windows' caption buttons): it draws and takes the
-    /// pointer, and the keyboard stays with the page under it.
+    /// pointer, casts no shadow, and the keyboard stays with the page under it.
     pub fn chrome(inner: impl IntoElement) -> Self {
-        Self { inner: inner.into_any_element(), draws: true, blocks_input: true, takes_keys: false }
+        Self { inner: inner.into_any_element(), draws: true, blocks_input: true, takes_keys: false, shadow: false }
     }
 
     /// A transparent backdrop that takes the pointer and draws nothing.
     pub(crate) fn backdrop(inner: impl IntoElement) -> Self {
-        Self { inner: inner.into_any_element(), draws: false, blocks_input: true, takes_keys: true }
+        Self { inner: inner.into_any_element(), draws: false, blocks_input: true, takes_keys: true, shadow: false }
     }
 
     /// Content that draws and takes no input (a tooltip, a toast's shadow).
     pub(crate) fn passive(inner: impl IntoElement) -> Self {
-        Self { inner: inner.into_any_element(), draws: true, blocks_input: false, takes_keys: false }
+        Self { inner: inner.into_any_element(), draws: true, blocks_input: false, takes_keys: false, shadow: true }
     }
 }
 
@@ -149,8 +152,13 @@ impl gpui::Element for Occluding {
         window: &mut gpui::Window,
         cx: &mut App,
     ) -> usize {
-        let occluder =
-            Occluder { bounds, draws: self.draws, blocks_input: self.blocks_input, takes_keys: self.takes_keys };
+        let occluder = Occluder {
+            bounds,
+            draws: self.draws,
+            blocks_input: self.blocks_input,
+            takes_keys: self.takes_keys,
+            shadow: self.shadow,
+        };
         let index = FRAME.with(|f| {
             let mut f = f.borrow_mut();
             let list = f.entry(window.window_handle().window_id()).or_default();

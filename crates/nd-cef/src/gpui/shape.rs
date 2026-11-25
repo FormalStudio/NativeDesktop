@@ -80,21 +80,23 @@ pub(crate) struct Shape {
 }
 
 /// The shape of a page whose window covers `frame` and shows `visible` of it (both in window
-/// coordinates), under overlays given as (bounds, draws, takes the pointer) at `scale`.
-pub(crate) fn shape(frame: R, visible: Option<R>, overlays: &[(R, bool, bool)], scale: f32) -> Shape {
+/// coordinates), under overlays given as (bounds, draws, casts a shadow, takes the pointer) at
+/// `scale`.
+pub(crate) fn shape(frame: R, visible: Option<R>, overlays: &[(R, bool, bool, bool)], scale: f32) -> Shape {
     let Some(visible) = visible.and_then(|v| v.intersect(frame)) else { return Shape::default() };
     let pad = (SHADOW as f32 * scale).round() as i32;
     let mut bounding = vec![visible];
     let mut cut = false;
-    for &(bounds, draws, _) in overlays {
+    for &(bounds, draws, shadow, _) in overlays {
+        let drawn = if shadow { bounds.inflate(pad) } else { bounds };
         // An element laid out to nothing draws nothing, and its shadow pad would still cut.
-        if draws && !bounds.is_empty() && bounds.inflate(pad).intersect(visible).is_some() {
-            bounding = subtract(&bounding, bounds.inflate(pad));
+        if draws && !bounds.is_empty() && drawn.intersect(visible).is_some() {
+            bounding = subtract(&bounding, drawn);
             cut = true;
         }
     }
     let mut input = bounding.clone();
-    for &(bounds, _, blocks) in overlays {
+    for &(bounds, _, _, blocks) in overlays {
         if blocks {
             input = subtract(&input, bounds);
         }
@@ -132,7 +134,7 @@ mod tests {
     #[test]
     fn an_overlay_laid_out_to_nothing_cuts_nothing() {
         let frame = R::new(0, 0, 800, 600);
-        let s = shape(frame, Some(frame), &[(R::new(10, 590, 0, 0), true, false)], 1.);
+        let s = shape(frame, Some(frame), &[(R::new(10, 590, 0, 0), true, true, false)], 1.);
         assert!(!s.cut);
         assert_eq!(s.bounding, vec![frame]);
     }
@@ -140,17 +142,25 @@ mod tests {
     #[test]
     fn a_modal_backdrop_takes_all_input_and_cuts_nothing() {
         let frame = R::new(0, 40, 800, 560);
-        let s = shape(frame, Some(frame), &[(R::new(0, 0, 800, 600), false, true)], 1.);
+        let s = shape(frame, Some(frame), &[(R::new(0, 0, 800, 600), false, false, true)], 1.);
         assert_eq!(s.bounding, vec![R::new(0, 0, 800, 560)]);
         assert!(s.input.is_empty());
         assert!(!s.cut);
     }
 
     #[test]
+    fn window_chrome_above_the_page_casts_no_shadow_into_it() {
+        let frame = R::new(0, 32, 800, 568);
+        let s = shape(frame, Some(frame), &[(R::new(660, 0, 140, 32), true, false, true)], 1.);
+        assert!(!s.cut);
+        assert_eq!(s.bounding, vec![R::new(0, 0, 800, 568)]);
+    }
+
+    #[test]
     fn a_popover_cuts_a_padded_hole_in_window_coordinates() {
         let frame = R::new(100, 100, 400, 300);
         let popover = R::new(150, 120, 100, 50);
-        let s = shape(frame, Some(frame), &[(popover, true, true)], 2.);
+        let s = shape(frame, Some(frame), &[(popover, true, true, true)], 2.);
         assert!(s.cut);
         let hole = popover.inflate(24).offset(-100, -100);
         assert!(s.bounding.iter().all(|r| r.intersect(hole).is_none()));

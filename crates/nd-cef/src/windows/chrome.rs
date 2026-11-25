@@ -71,7 +71,7 @@ pub(crate) fn parent(window: &nd_gpui::gpui::Window) -> Option<HWND> {
 
 /// Win32 has one window region for what shows and what takes the pointer, so a part that only
 /// takes the pointer (a modal backdrop) is cut as well, and the snapshot shows there instead.
-pub(crate) fn shape(frame: R, visible: Option<R>, overlays: &[(R, bool, bool)], scale: f32) -> Shape {
+pub(crate) fn shape(frame: R, visible: Option<R>, overlays: &[(R, bool, bool, bool)], scale: f32) -> Shape {
     let s = shape::shape(frame, visible, overlays, scale);
     let cut = s.cut || s.input != s.bounding;
     Shape { bounding: s.input.clone(), input: s.input, cut }

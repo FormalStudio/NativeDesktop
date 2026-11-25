@@ -545,8 +545,8 @@ impl OsrView {
         }
         let visible = device(window.content_mask().bounds).intersect(frame);
         let occluders = nd_backend_gpui::occlusion::occluders(window);
-        let overlays: Vec<(R, bool, bool)> =
-            occluders.iter().map(|o| (device(o.bounds), o.draws, o.blocks_input)).collect();
+        let overlays: Vec<(R, bool, bool, bool)> =
+            occluders.iter().map(|o| (device(o.bounds), o.draws, o.shadow, o.blocks_input)).collect();
         let shape = chrome::shape(frame, visible, &overlays, scale);
         let cut = shape.cut;
         let had = self.st.borrow().frame.is_some();
