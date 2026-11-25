@@ -944,7 +944,11 @@ impl Pick {
             p.anchor = picked.anchor;
             p.cursor = picked.cursor;
         });
-        self.report(picked.selected, picked.cursor, cx);
+        // A click that leaves the selection as it was reports nothing, as AppKit's table does:
+        // apps take a click on the selected row with a tap handler of their own.
+        if picked.selected != self.selected {
+            self.report(picked.selected, picked.cursor, cx);
+        }
     }
 
     /// A move with the button held: past the slop a press on a row drags the selection (or the
