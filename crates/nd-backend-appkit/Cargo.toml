@@ -125,6 +125,11 @@ harness = false
 name = "file_drop"
 harness = false
 
+# Tier 2: a drag over a list marks the slot it would drop into.
+[[test]]
+name = "list_drop_slot"
+harness = false
+
 [[test]]
 name = "scroll_view"
 harness = false
