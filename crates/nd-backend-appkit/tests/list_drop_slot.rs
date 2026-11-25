@@ -18,9 +18,11 @@ mod app {
     use std::path::Path;
     use std::time::Duration;
 
+    use nd_backend_appkit::objc2::runtime::AnyObject;
     use nd_backend_appkit::objc2_app_kit::{
         NSAppearance, NSAppearanceCustomization, NSAppearanceNameAqua, NSTableView,
     };
+    use nd_backend_appkit::objc2_foundation::{NSArgumentDomain, NSDictionary, NSNumber, NSString, NSUserDefaults};
     use nd_backend_appkit::{AppHost, AppKitBackend};
     use nd_ui::backend::Backend;
     use nd_ui::prelude::*;
@@ -89,6 +91,18 @@ mod app {
         Ok(())
     }
 
+    /// Lets this process see the blue accent the golden was drawn with, whatever the user chose.
+    fn pin_accent() {
+        let defaults = NSUserDefaults::standardUserDefaults();
+        let key = NSString::from_str("AppleAccentColor");
+        // 4 is Blue in System Settings' accent choices.
+        let value = NSNumber::new_i64(4);
+        let value: &AnyObject = &value;
+        let domain = NSDictionary::from_slices(&[&*key], &[value]);
+        // SAFETY: a string-keyed dictionary of property-list values, as the domain requires.
+        unsafe { defaults.setVolatileDomain_forName(&domain, NSArgumentDomain) };
+    }
+
     fn settle(host: &AppHost) {
         let mut quiet = 0;
         for _ in 0..64 {
@@ -109,6 +123,7 @@ mod app {
     }
 
     pub fn run() -> ! {
+        pin_accent();
         let mut opened = None;
         let host = AppHost::new(|app| {
             let handle = app.open_window(WindowOptions::main("slots").size(size(px(240.), px(140.))), |_, cx| {
