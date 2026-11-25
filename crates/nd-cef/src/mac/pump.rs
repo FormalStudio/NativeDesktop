@@ -84,7 +84,7 @@ pub(crate) fn start() {
 fn close_browsers() {
     crate::page::close_all();
     let deadline = Instant::now() + Duration::from_secs(3);
-    while crate::page::browser_count() > 0 && Instant::now() < deadline {
+    while crate::page::open_count() > 0 && Instant::now() < deadline {
         do_message_loop_work();
         std::thread::sleep(Duration::from_millis(5));
     }

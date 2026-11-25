@@ -44,8 +44,14 @@ pub(crate) fn browser_count() -> usize {
     BROWSERS.with(|b| b.borrow().len())
 }
 
+/// Browsers shutdown has to wait for: the pages', and their DevTools.
+pub(crate) fn open_count() -> usize {
+    browser_count() + crate::client::devtools_count()
+}
+
 /// Closes every browser, for shutdown.
 pub(crate) fn close_all() {
+    crate::client::close_devtools();
     let pages: Vec<Rc<CefPage>> = PAGES.with(|p| p.borrow().values().filter_map(Weak::upgrade).collect());
     for page in pages {
         page.close_in_place();

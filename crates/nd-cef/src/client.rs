@@ -2,6 +2,8 @@
 //! handlers call) them off the main thread, so they never own main-thread state; every call
 //! looks its page up in the main thread's registry and does the work there.
 
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
 use std::os::raw::c_int;
 
 use cef::*;
@@ -83,16 +85,51 @@ pub(crate) fn devtools_client(id: u64) -> Client {
     NdDevtoolsClient::new(NdDevtoolsKeyboard::new(id), NdDevtoolsLifeSpan::new(id))
 }
 
+thread_local! {
+    /// DevTools browsers alive now. Chromium does not count them as the app's pages, and
+    /// shutting it down while one lives crashes its profile teardown.
+    static DEVTOOLS: RefCell<HashMap<i32, Browser>> = RefCell::default();
+    static CLOSING_DEVTOOLS: Cell<bool> = const { Cell::new(false) };
+}
+
+/// DevTools browsers not closed yet.
+pub(crate) fn devtools_count() -> usize {
+    DEVTOOLS.with(|d| d.borrow().len())
+}
+
+/// Closes every DevTools browser, and any created from now on, for shutdown.
+pub(crate) fn close_devtools() {
+    CLOSING_DEVTOOLS.with(|c| c.set(true));
+    let open: Vec<Browser> = DEVTOOLS.with(|d| d.borrow().values().cloned().collect());
+    for host in open.iter().filter_map(|b| b.host()) {
+        host.close_browser(1);
+    }
+}
+
 wrap_life_span_handler! {
     struct NdDevtoolsLifeSpan {
         id: u64,
     }
 
     impl LifeSpanHandler {
-        #[cfg(target_os = "linux")]
         fn on_after_created(&self, browser: Option<&mut Browser>) {
-            if let Some(window) = browser.and_then(|b| b.host()).map(|h| h.window_handle()).filter(|w| *w != 0) {
+            let Some(browser) = browser else { return };
+            DEVTOOLS.with(|d| d.borrow_mut().insert(browser.identifier(), browser.clone()));
+            if CLOSING_DEVTOOLS.with(Cell::get) {
+                if let Some(host) = browser.host() {
+                    host.close_browser(1);
+                }
+                return;
+            }
+            #[cfg(target_os = "linux")]
+            if let Some(window) = browser.host().map(|h| h.window_handle()).filter(|w| *w != 0) {
                 crate::platform::chrome::name_devtools(self.id, window as u32);
+            }
+        }
+
+        fn on_before_close(&self, browser: Option<&mut Browser>) {
+            if let Some(browser) = browser {
+                DEVTOOLS.with(|d| d.borrow_mut().remove(&browser.identifier()));
             }
         }
     }

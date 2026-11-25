@@ -171,7 +171,7 @@ fn shutdown() {
     });
     crate::page::close_all();
     let deadline = Instant::now() + SHUTDOWN;
-    while crate::page::browser_count() > 0 && Instant::now() < deadline {
+    while crate::page::open_count() > 0 && Instant::now() < deadline {
         do_message_loop_work();
         std::thread::sleep(Duration::from_millis(5));
     }
