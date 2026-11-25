@@ -863,7 +863,7 @@ impl CefPage {
                         runtime_style: RuntimeStyle::ALLOY,
                         ..WindowInfo::default()
                     };
-                    let mut client = crate::client::devtools_client();
+                    let mut client = crate::client::devtools_client(self.id);
                     host.show_dev_tools(Some(&info), Some(&mut client), Some(&BrowserSettings::default()), None);
                 }
             }

@@ -78,14 +78,43 @@ wrap_browser_process_handler! {
 }
 
 /// The DevTools window's browser: Chromium draws and handles it itself.
-pub(crate) fn devtools_client() -> Client {
-    NdDevtoolsClient::new()
+/// The handlers of the DevTools window for page `id`.
+pub(crate) fn devtools_client(id: u64) -> Client {
+    NdDevtoolsClient::new(NdDevtoolsKeyboard::new(id))
 }
 
 wrap_client! {
-    struct NdDevtoolsClient;
+    struct NdDevtoolsClient {
+        keyboard: KeyboardHandler,
+    }
 
-    impl Client {}
+    impl Client {
+        fn keyboard_handler(&self) -> Option<KeyboardHandler> {
+            Some(self.keyboard.clone())
+        }
+    }
+}
+
+wrap_keyboard_handler! {
+    struct NdDevtoolsKeyboard {
+        id: u64,
+    }
+
+    impl KeyboardHandler {
+        /// On Linux and Windows the DevTools window is Chromium's own, so the app's chords
+        /// (Quit among them) reach the app only from here.
+        #[cfg(target_os = "linux")]
+        fn on_pre_key_event(&self, _browser: Option<&mut Browser>, event: Option<&KeyEvent>, _os_event: Option<&mut cef::sys::XEvent>, _is_keyboard_shortcut: Option<&mut c_int>) -> c_int {
+            let Some(event) = event else { return 0 };
+            with(self.id, |p| p.view.pre_key(event)) as c_int
+        }
+
+        #[cfg(target_os = "windows")]
+        fn on_pre_key_event(&self, _browser: Option<&mut Browser>, event: Option<&KeyEvent>, _os_event: Option<&mut cef::sys::MSG>, _is_keyboard_shortcut: Option<&mut c_int>) -> c_int {
+            let Some(event) = event else { return 0 };
+            with(self.id, |p| p.view.pre_key(event)) as c_int
+        }
+    }
 }
 
 /// A page's handlers. A Chrome-style page is windowed: Chromium draws and takes input itself, so
