@@ -452,14 +452,17 @@ impl PaletteModel {
     }
 
     /// The app's `query`. Returns true when the field must be reseeded with it (and its text
-    /// selected): only while presented and only when it differs from what the field holds.
+    /// selected): only while presented, only when the app changed it, and only when it differs
+    /// from what the field holds. An app that renders again before it took the last keystroke
+    /// (a load's progress) hands back the query it had, which is no write.
     pub fn set_query(&mut self, query: &SharedString) -> bool {
+        let unchanged = self.controlled_query == *query;
         self.controlled_query = query.clone();
         if let Some(at) = self.unechoed.iter().position(|q| q == query) {
             self.unechoed.drain(..=at);
             return false;
         }
-        if self.native_query.as_ref() == Some(query) {
+        if unchanged || self.native_query.as_ref() == Some(query) {
             return false;
         }
         self.native_query = Some(query.clone());
@@ -779,6 +782,18 @@ mod tests {
         assert!(m.set_query(&"h".into()), "the same text set again by the app is a reseed");
         assert_eq!(m.field_text(), "h");
         assert_eq!(m.selection(), FieldSelection::All);
+    }
+
+    #[test]
+    fn a_render_before_the_app_took_the_last_keystroke_keeps_it() {
+        let mut m = open(rows(&["a"]), "https://example.com/");
+        m.edited("h");
+        assert!(!m.set_query(&"h".into()));
+        m.edited("ht");
+        assert!(!m.set_query(&"h".into()), "the query the app had, again");
+        assert_eq!((m.field_text().as_str(), m.selection()), ("ht", FieldSelection::Caret(2)));
+        assert!(!m.set_query(&"ht".into()));
+        assert_eq!(m.field_text(), "ht");
     }
 
     fn typed(text: &str) -> PaletteModel {
