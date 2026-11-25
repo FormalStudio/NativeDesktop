@@ -346,13 +346,15 @@ impl Drop for Hyprland {
     }
 }
 
-/// `$XDG_RUNTIME_DIR/nd<pid in hex>-<n>`, mode 0700 as the Wayland spec asks of a runtime dir. The
-/// name stays short: Hyprland puts `hypr/<60-character signature>/.socket2.sock` under it, and a
-/// unix socket path is capped at 107 bytes.
+/// `$XDG_RUNTIME_DIR/n<pid><n>`, both in fixed-width hex, mode 0700 as the Wayland spec asks of a
+/// runtime dir. The name stays at ten characters: Hyprland puts `hypr/<61-character
+/// signature>/.socket2.sock` under it, and a unix socket path is capped at 107 bytes, which a
+/// name that grew with the count overran from a run's hundredth compositor on.
 pub(crate) fn new_runtime_dir() -> Result<PathBuf, String> {
     static NEXT: AtomicU32 = AtomicU32::new(0);
     let base = std::env::var_os("XDG_RUNTIME_DIR").map_or_else(std::env::temp_dir, PathBuf::from);
-    let dir = base.join(format!("nd{:x}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+    let n = NEXT.fetch_add(1, Ordering::Relaxed) & 0xfff;
+    let dir = base.join(format!("n{:06x}{n:03x}", std::process::id() & 0xff_ffff));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(dir.join("config")).map_err(|e| format!("{}: {e}", dir.display()))?;
     fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).map_err(|e| format!("{}: {e}", dir.display()))?;
