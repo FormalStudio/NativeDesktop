@@ -814,7 +814,7 @@ impl Renderer {
                 0,
             );
         }
-        for px in bgra.chunks_exact_mut(4) {
+        for px in bgra.as_chunks_mut::<4>().0 {
             px.swap(0, 2);
         }
         (width, height, bgra)
