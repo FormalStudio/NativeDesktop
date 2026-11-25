@@ -33,6 +33,9 @@ pub fn package(project: &Project, opts: &Options) -> Result<Packed> {
         let dist = cef::distribution(project)?;
         let helper = cef::build_helper(project)?;
         cef::bundle_mac(project, &app, &dist, &helper)?;
+        if let Some(identity) = &project.config.macos.signing_identity {
+            sign_cef_libraries(&app, identity)?;
+        }
         entitlements_list.extend(cef::ENTITLEMENTS.iter().map(|e| (*e).to_owned()));
     } else {
         let findings = cef::chromium_findings(&app);
@@ -233,6 +236,21 @@ fn make_dmg(project: &Project, app: &Path, stage: &Path, dmg: &Path) -> Result<(
                 c.args(["notarytool", "submit", "--keychain-profile", profile, "--wait"]).arg(dmg)
             })?;
             system("/usr/bin/xcrun", |c| c.args(["stapler", "staple"]).arg(dmg))?;
+        }
+    }
+    Ok(())
+}
+
+/// Signs the dylibs in the CEF framework's `Libraries`. vpk's inside-out signing does not reach
+/// them, and notarization rejects a bundle carrying them unsigned.
+fn sign_cef_libraries(app: &Path, identity: &str) -> Result<()> {
+    let libraries = app.join("Contents/Frameworks").join(cef::FRAMEWORK).join("Libraries");
+    for entry in std::fs::read_dir(&libraries).with_context(|| format!("reading {}", libraries.display()))? {
+        let path = entry?.path();
+        if path.extension().is_some_and(|e| e == "dylib") {
+            system("/usr/bin/codesign", |c| {
+                c.args(["--force", "--timestamp", "--options", "runtime", "--sign", identity]).arg(&path)
+            })?;
         }
     }
     Ok(())
