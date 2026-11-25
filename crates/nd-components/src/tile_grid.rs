@@ -1,9 +1,9 @@
 //! `tile_grid()`: tiles in rows the user reorders by dragging, as Arc's pinned favourites. The
 //! grid takes as many columns as fit tiles of at least the minimum width, up to a maximum, and
-//! sizes tiles to share the width; a short last row keeps the pitch. Tiles move to new slots
-//! (new columns for a new width, a tile added or removed before them) on the grid's reflow
-//! animation, while a resize that keeps the columns moves and sizes them with the grid frame
-//! for frame and a tile's size never animates, as in Finder. New tiles fade and grow in, and
+//! sizes tiles to share the width; a short last row keeps the pitch. Tiles glide to new slots on
+//! the grid's reflow animation only when the tiles change: one added, removed or reordered, or
+//! a drag moving them aside. The first layout and a new width or column count (the window or
+//! sidebar resizing) place them at once, and a tile's size never animates. New tiles fade and grow in, and
 //! removed ones fade and shrink where they stood (under reduce motion tiles changing slots
 //! dissolve, and new and removed ones only fade). A dragged tile follows the pointer, takes the slot under it while the others slide aside, and
 //! settles where it is dropped or slides home on Escape or a release elsewhere. Built from
@@ -92,8 +92,8 @@ struct GridState {
     drag: Option<GridDrag>,
     /// Where a drag from elsewhere would land.
     gap: Option<usize>,
-    /// The width and column count tiles were last placed for.
-    placed: Option<(f32, usize)>,
+    /// The width, column count and tiles, in order, the grid was last placed for.
+    placed: Option<(f32, usize, Vec<SharedString>)>,
 }
 
 #[derive(Default)]
@@ -229,14 +229,17 @@ impl TileGrid {
         // first measured places.
         let animate = state.width.is_some();
         let m = TileMetrics::new(width, self.max_columns, self.min_width, self.aspect, self.gap);
-        // A new width with the same columns (a window or sidebar resizing) moves every tile with
-        // the grid, frame for frame, as Finder's do; only new columns or slots glide.
-        let resizing = state.placed.is_some_and(|(w, c)| w != width && c == m.columns);
-        let glide = if resizing { Animation::linear(Duration::ZERO) } else { self.reflow };
-        if animate {
-            app.global_mut::<TileGrids>().0.entry(key.clone()).or_default().placed = Some((width, m.columns));
-        }
         let ids: Vec<SharedString> = self.tiles.iter().map(|t| t.id.clone()).collect();
+        let moving = state.drag.is_some() || state.gap.is_some();
+        let glide = if glides(state.placed.as_ref(), width, m.columns, &ids, moving) {
+            self.reflow
+        } else {
+            Animation::linear(Duration::ZERO)
+        };
+        if animate {
+            app.global_mut::<TileGrids>().0.entry(key.clone()).or_default().placed =
+                Some((width, m.columns, ids.clone()));
+        }
 
         // Each tile's slot as shown now. A drag that ended while the grid was away (a
         // spring-loaded folder replaced its page) never told it: that tile is back at rest.
@@ -394,9 +397,38 @@ impl IntoElement for TileGrid {
     }
 }
 
+/// Whether tiles glide to their slots on this layout: only when the tiles changed (one added,
+/// removed or reordered) at the width they were last placed for, or a drag is moving them aside.
+/// A launch, a resize or new columns place every tile at once, so nothing is caught mid-flight
+/// on a measured layout.
+fn glides(
+    placed: Option<&(f32, usize, Vec<SharedString>)>,
+    width: f32,
+    columns: usize,
+    ids: &[SharedString],
+    dragging: bool,
+) -> bool {
+    dragging || placed.is_some_and(|(w, c, before)| *w == width && *c == columns && before.as_slice() != ids)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tiles_glide_only_when_the_tiles_change() {
+        let ids = |s: &[&str]| s.iter().map(|s| SharedString::from(s.to_string())).collect::<Vec<_>>();
+        let ab = ids(&["a", "b"]);
+        assert!(!glides(None, 212., 4, &ab, false), "the first layout places at once");
+        let placed = (212., 4, ab.clone());
+        assert!(!glides(Some(&placed), 212., 4, &ab, false), "nothing changed");
+        assert!(!glides(Some(&placed), 300., 4, &ab, false), "a resize keeping the columns");
+        assert!(!glides(Some(&placed), 130., 2, &ab, false), "a resize to new columns");
+        assert!(glides(Some(&placed), 212., 4, &ids(&["b", "a"]), false), "a reorder");
+        assert!(glides(Some(&placed), 212., 4, &ids(&["a", "b", "c"]), false), "a tile added");
+        assert!(glides(Some(&placed), 212., 4, &ids(&["a"]), false), "a tile removed");
+        assert!(glides(Some(&placed), 300., 4, &ab, true), "a drag moving tiles aside");
+    }
 
     #[test]
     fn columns_fill_the_width_up_to_the_maximum() {
