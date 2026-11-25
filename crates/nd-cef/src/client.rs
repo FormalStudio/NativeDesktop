@@ -842,10 +842,13 @@ wrap_keyboard_handler! {
             with(self.id, |p| p.view.unhandled_key(os_event.cast())) as c_int
         }
 
+        /// A key Chromium's window got while the page lacks nd's keyboard already went on to the
+        /// GPUI window (`linux::chrome::forward_keys`), so Chromium drops it. Handled here too, a
+        /// chord ran the app's binding twice (Ctrl+L opened the bar and shut it again).
         #[cfg(target_os = "linux")]
         fn on_pre_key_event(&self, _browser: Option<&mut Browser>, event: Option<&KeyEvent>, _os_event: Option<&mut cef::sys::XEvent>, _is_keyboard_shortcut: Option<&mut c_int>) -> c_int {
             let Some(event) = event else { return 0 };
-            with(self.id, |p| p.view.pre_key(event)) as c_int
+            with(self.id, |p| p.view.chrome().is_some_and(|c| c.forwards_keys()) || p.view.pre_key(event)) as c_int
         }
 
         #[cfg(target_os = "windows")]

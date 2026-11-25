@@ -72,6 +72,8 @@ thread_local! {
     static PAGES: RefCell<HashMap<Window, u64>> = RefCell::default();
     /// The page the last button press landed in, until the pump focuses it.
     static PRESSED: Cell<Option<u64>> = const { Cell::new(None) };
+    /// How many times X's events have been read.
+    static READS: Cell<u64> = const { Cell::new(0) };
 }
 
 /// Forwards the keys Chromium's windows got without the keyboard (`X::forward_key`); the pump
@@ -135,6 +137,7 @@ impl X {
                 event => self.forward_key(event),
             }
         }
+        READS.with(|r| r.set(r.get() + 1));
     }
 
     /// A press in a page's window gives that page nd's focus on the pump's next turn: Chromium
@@ -147,7 +150,12 @@ impl X {
             }
             at = reply.child;
             if let Some(page) = PAGES.with(|p| p.borrow().get(&at).copied()) {
-                PRESSED.with(|p| p.set(Some(page)));
+                // Chromium's window sits at the container's origin.
+                let Some(inner) = self.conn.query_pointer(at).ok().and_then(|c| c.reply().ok()) else { return };
+                let chrome = crate::page::get(page).and_then(|p| p.view.chrome());
+                if chrome.is_some_and(|c| c.took_press(i32::from(inner.win_x), i32::from(inner.win_y))) {
+                    PRESSED.with(|p| p.set(Some(page)));
+                }
                 return;
             }
         }
@@ -204,6 +212,9 @@ struct St {
     browser: Option<(Window, i32, i32)>,
     /// The page has the keyboard: Chromium keeps the keys its window gets.
     keyboard: bool,
+    /// The input shapes the container had since X's events were last read, by that read's
+    /// count: a press is read a pump turn late, after an overlay it hit may have closed.
+    inputs: Vec<(u64, Vec<R>)>,
 }
 
 pub(crate) struct Chrome {
@@ -336,6 +347,11 @@ impl Chrome {
             resized = true;
         }
         if st.shape.as_ref() != Some(&shape) {
+            let read = READS.with(Cell::get);
+            st.inputs.retain(|(r, _)| *r == read);
+            if let Some(old) = st.shape.take() {
+                st.inputs.push((read, old.input));
+            }
             let rects = |rs: &[R]| -> Vec<Rectangle> {
                 rs.iter()
                     .map(|r| Rectangle { x: r.x as i16, y: r.y as i16, width: r.w as u16, height: r.h as u16 })
@@ -381,6 +397,22 @@ impl Chrome {
             let _ = self.x.conn.set_input_focus(InputFocus::PARENT, target, x11rb::CURRENT_TIME);
             self.x.flush();
         }
+    }
+
+    /// Whether a press at `(x, y)` in the container reached the page: inside its input shape now
+    /// and in each one it had since X's events were last read.
+    fn took_press(&self, x: i32, y: i32) -> bool {
+        let st = self.st.borrow();
+        let read = READS.with(Cell::get);
+        let inside = |rs: &[R]| rs.iter().any(|r| R::new(x, y, 1, 1).intersect(*r).is_some());
+        st.shape.as_ref().is_none_or(|s| inside(&s.input))
+            && st.inputs.iter().filter(|(r, _)| *r == read).all(|(_, rs)| inside(rs))
+    }
+
+    /// Whether the keys Chromium's window gets go on to the GPUI window instead of the page.
+    pub(crate) fn forwards_keys(&self) -> bool {
+        let Some((browser, ..)) = self.st.borrow().browser else { return false };
+        KEYS_TO.with(|k| k.borrow().contains_key(&browser))
     }
 
     /// Keeps `KEYS_TO` in step with whether the page has the keyboard.
