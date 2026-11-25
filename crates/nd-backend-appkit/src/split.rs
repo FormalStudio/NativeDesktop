@@ -285,10 +285,11 @@ mod tests {
 
     #[test]
     fn a_thin_divider_grabs_eight_points_around_its_line() {
-        let line = NSRect::new(NSPoint::new(100., 0.), NSSize::new(1., 300.));
+        let line = NSRect::new(NSPoint::new(100., 0.), NSSize::new(1., 300.)); // nd-lint: allow test geometry
         let r = grab_rect(line, true);
         assert_eq!((r.origin.x, r.size.width, r.size.height), (96.5, 8., 300.));
-        let r = grab_rect(NSRect::new(NSPoint::new(0., 50.), NSSize::new(300., 1.)), false);
+        let line = NSRect::new(NSPoint::new(0., 50.), NSSize::new(300., 1.)); // nd-lint: allow test geometry
+        let r = grab_rect(line, false);
         assert_eq!((r.origin.y, r.size.height), (46.5, 8.));
     }
 }
