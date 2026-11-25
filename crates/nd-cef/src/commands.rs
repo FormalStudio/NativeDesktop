@@ -36,11 +36,6 @@ const ALLOWED: &[&str] = &[
     "IDC_COPY",
     "IDC_PASTE",
     "IDC_CLOSE_FIND_OR_STOP",
-    "IDC_DEV_TOOLS",
-    "IDC_DEV_TOOLS_CONSOLE",
-    "IDC_DEV_TOOLS_DEVICES",
-    "IDC_DEV_TOOLS_INSPECT",
-    "IDC_DEV_TOOLS_TOGGLE",
 ];
 
 /// macOS's Chromium shows the system print panel itself. On Linux the shortcut reaches the app,
@@ -84,6 +79,11 @@ fn routed() -> Vec<(&'static str, Route)> {
         app("IDC_TASK_MANAGER", TaskManager),
         app("IDC_TASK_MANAGER_SHORTCUT", TaskManager),
         app("IDC_EXIT", Quit),
+        app("IDC_DEV_TOOLS", DevTools),
+        app("IDC_DEV_TOOLS_CONSOLE", DevTools),
+        app("IDC_DEV_TOOLS_DEVICES", DevTools),
+        app("IDC_DEV_TOOLS_INSPECT", DevTools),
+        app("IDC_DEV_TOOLS_TOGGLE", DevTools),
         ("IDC_PRINT", PRINT),
         ("IDC_BASIC_PRINT", PRINT),
     ]
@@ -156,6 +156,7 @@ mod tests {
             ("IDC_SHOW_BOOKMARK_MANAGER", BrowserCommand::Bookmarks),
             ("IDC_TAB_SEARCH", BrowserCommand::TabSearch),
             ("IDC_NEW_TAB", BrowserCommand::NewTab),
+            ("IDC_DEV_TOOLS_TOGGLE", BrowserCommand::DevTools),
         ] {
             assert_eq!(routes.get(name), Some(&Route::App(command)), "{name}");
         }

@@ -149,6 +149,9 @@ pub enum BrowserCommand {
     Home,
     TaskManager,
     Print,
+    /// Chromium's DevTools shortcuts and menu items, for the app to open the page's DevTools
+    /// where it shows them ([`crate::WebView::dev_tools`]).
+    DevTools,
     Quit,
 }
 
