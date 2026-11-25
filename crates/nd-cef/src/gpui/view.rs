@@ -177,6 +177,12 @@ impl OsrView {
         }
     }
 
+    /// This view's page is the DevTools its inspected page is about to open: a windowed
+    /// browser in the view's container, like a popup.
+    pub(crate) fn expect_chrome_dev_tools(&self, info: &mut WindowInfo) {
+        self.expect_chrome_popup(info);
+    }
+
     /// The browser exists: its window takes the page's place on the next frame.
     pub(crate) fn browser_created(self: &Rc<Self>) {
         if let Some(chrome) = self.chrome() {

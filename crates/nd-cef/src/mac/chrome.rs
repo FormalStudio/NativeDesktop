@@ -86,6 +86,8 @@ thread_local! {
     /// Chromium builds them (`get_delegate_for_popup_browser_view`, then
     /// `on_popup_browser_view_created`).
     static PENDING_POPUPS: RefCell<std::collections::VecDeque<u64>> = RefCell::default();
+    /// Pages waiting for the DevTools BrowserView their inspected page opens, as with popups.
+    static PENDING_DEVTOOLS: RefCell<std::collections::VecDeque<u64>> = RefCell::default();
     /// The last window other than an anchor to give up key, which is where key goes back to
     /// when Chromium takes it for an anchor. Watched from the first anchor on.
     static LAST_KEY: RefCell<Weak<NSWindow>> = RefCell::default();
@@ -404,6 +406,20 @@ impl Chrome {
                 center.addObserverForName_object_queue_usingBlock(Some(name), Some(object), None, &sync)
             });
         }
+        let left = RcBlock::new(move |_note: NonNull<NSNotification>| {
+            if let Some(page) = page::get(id) {
+                page.window_left_fullscreen();
+            }
+        });
+        let object: &AnyObject = host;
+        observers.push(unsafe {
+            center.addObserverForName_object_queue_usingBlock(
+                Some(NSWindowDidExitFullScreenNotification),
+                Some(object),
+                None,
+                &left,
+            )
+        });
         *self.observers.borrow_mut() = observers;
     }
 
@@ -735,6 +751,17 @@ pub(crate) fn expect_popup(child: u64) {
     PENDING_POPUPS.with(|p| p.borrow_mut().push_back(child));
 }
 
+/// Queues the page that the next DevTools a Chrome-style page opens become.
+pub(crate) fn expect_dev_tools(child: u64) {
+    PENDING_DEVTOOLS.with(|p| p.borrow_mut().push_back(child));
+}
+
+fn pending(
+    is_devtools: std::os::raw::c_int,
+) -> &'static std::thread::LocalKey<RefCell<std::collections::VecDeque<u64>>> {
+    if is_devtools != 0 { &PENDING_DEVTOOLS } else { &PENDING_POPUPS }
+}
+
 fn browser_view_delegate(id: u64) -> BrowserViewDelegate {
     NdBrowserView::new(id)
 }
@@ -779,24 +806,20 @@ wrap_browser_view_delegate! {
             _client: Option<&mut Client>,
             is_devtools: std::os::raw::c_int,
         ) -> Option<BrowserViewDelegate> {
-            if is_devtools != 0 {
-                return None;
-            }
-            PENDING_POPUPS.with(|p| p.borrow().front().copied()).map(browser_view_delegate)
+            pending(is_devtools).with(|p| p.borrow().front().copied()).map(browser_view_delegate)
         }
 
-        /// A popup the opener's page adopted gets a window of its own, like any page; anything
-        /// else (DevTools) gets Chromium's default window.
+        /// A popup the opener's page adopted, or DevTools the app asked for as a page, gets a
+        /// window of its own like any page; anything else (DevTools in a window,
+        /// `open_dev_tools`) gets Chromium's default window.
         fn on_popup_browser_view_created(
             &self,
             _browser_view: Option<&mut BrowserView>,
             popup_browser_view: Option<&mut BrowserView>,
             is_devtools: std::os::raw::c_int,
         ) -> std::os::raw::c_int {
-            if is_devtools != 0 {
-                return 0;
-            }
-            let (Some(popup), Some(child)) = (popup_browser_view, PENDING_POPUPS.with(|p| p.borrow_mut().pop_front()))
+            let (Some(popup), Some(child)) =
+                (popup_browser_view, pending(is_devtools).with(|p| p.borrow_mut().pop_front()))
             else {
                 return 0;
             };

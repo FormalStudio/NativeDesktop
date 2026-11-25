@@ -89,6 +89,8 @@ struct State {
     last_hover: String,
     closing: bool,
     closed: bool,
+    /// The page holds element fullscreen, as Chromium last said.
+    fullscreen: bool,
     default_ua: Option<String>,
     downloads: HashMap<u32, DownloadEntry>,
     prompts: HashMap<u64, (String, PermissionResponder)>,
@@ -282,6 +284,25 @@ impl CefPage {
             host.close_browser(1);
         }
         PAGES.with(|p| p.borrow_mut().remove(&self.id));
+    }
+
+    pub(crate) fn fullscreen_changed(&self, fullscreen: bool) {
+        if std::mem::replace(&mut self.st.borrow_mut().fullscreen, fullscreen) != fullscreen {
+            self.page.emit(nd_webview::FullscreenChanged { fullscreen });
+        }
+    }
+
+    /// The window holding the page left fullscreen. Chromium can take a Chrome-style page's
+    /// window out on Esc without saying the page left (it does with the page's DevTools open),
+    /// so the page is taken out too.
+    pub(crate) fn window_left_fullscreen(&self) {
+        if !self.st.borrow().fullscreen {
+            return;
+        }
+        if let Some(host) = self.host() {
+            host.exit_fullscreen(1);
+        }
+        self.fullscreen_changed(false);
     }
 
     pub(crate) fn host(&self) -> Option<BrowserHost> {
@@ -914,6 +935,23 @@ impl CefPage {
                 if let Some(host) = host {
                     host.close_dev_tools();
                 }
+            }
+            Command::DevToolsIn(tools) => {
+                let Some(host) = host else { return };
+                if host.has_dev_tools() != 0 {
+                    tracing::warn!("nd-cef: the page's DevTools are open elsewhere already");
+                    return;
+                }
+                let child = CefPage::new(tools.clone());
+                let mut info = WindowInfo::default();
+                if child.style == CefStyle::Chrome {
+                    child.view.expect_chrome_dev_tools(&mut info);
+                } else {
+                    info = child.view.window_info();
+                }
+                let mut client = crate::client::client(child.id, child.style);
+                tools.adopt(child as Rc<dyn EngineView>);
+                host.show_dev_tools(Some(&info), Some(&mut client), Some(&Self::browser_settings()), None);
             }
             Command::ExecuteJavaScript { code, world, done } => {
                 self.devtools.evaluate_as_user(&code, world.as_deref(), move |r| done(r.map_err(nd_webview::JsError)));

@@ -366,6 +366,27 @@ impl WebView {
         self.send(Command::CloseDevTools);
     }
 
+    /// The page's DevTools as a page of their own, for the app to show where it likes: docked
+    /// beside the page, or in a window of its own, moved between the two like any page without
+    /// losing their state. Dropping the handle closes them. A page has one DevTools at a time,
+    /// so while [`Self::open_dev_tools`]' window is up this page stays empty. `None` on WebKit
+    /// and before the page has come up.
+    pub fn dev_tools(&self) -> Option<WebView> {
+        if self.0.engine != Engine::Cef {
+            return None;
+        }
+        let view = self.0.view.borrow().clone()?;
+        let options = self.options();
+        let tools = WebView::with_options(WebViewOptions {
+            profile: options.profile.clone(),
+            engine: Some(Engine::Cef),
+            cef_style: options.cef_style,
+            ..WebViewOptions::default()
+        });
+        view.command(Command::DevToolsIn(tools.page()));
+        Some(tools)
+    }
+
     /// Runs `code` in the page's main frame and hands its completion value, as JSON, to `done`.
     /// A thrown exception is `Err` with its message; a returned promise is not awaited, so have
     /// it report through the page (a title, a script message) instead. The code runs with a user

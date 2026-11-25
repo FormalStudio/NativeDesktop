@@ -31,6 +31,8 @@ use crate::views::NdLayerView;
 
 /// Positions closer than this are the same placement: what a ratio round trip loses to floats.
 const SAME_POSITION: f64 = 0.5; // nd-lint: allow, a float tolerance, not a metric
+/// The thin divider draws 1 pt; the pointer takes it this far across, half each side.
+const GRAB: f64 = 8.; // nd-lint: allow, AppKit grows a thin divider's hit area only a little
 
 pub struct SplitIvars {
     ratio: Rc<RefCell<Synced<f32>>>,
@@ -61,6 +63,11 @@ define_class!(
         fn constrain_max(&self, split: &NSSplitView, proposed: f64, _divider: NSInteger) -> f64 {
             let (_, hi) = bounds(split);
             proposed.min(hi)
+        }
+
+        #[unsafe(method(splitView:effectiveRect:forDrawnRect:ofDividerAtIndex:))]
+        fn effective_rect(&self, split: &NSSplitView, _proposed: NSRect, drawn: NSRect, _divider: NSInteger) -> NSRect {
+            grab_rect(drawn, split.isVertical())
         }
 
         // The split view changed size (the window, or nd's layout): the panes keep the ratio.
@@ -98,6 +105,21 @@ impl NdSplitDelegate {
     fn target(&self) -> f32 {
         self.ivars().ratio.borrow().value().copied().unwrap_or(nd_components::split::DEFAULT_RATIO)
     }
+}
+
+/// `drawn` grown across the divider to [`GRAB`], around its middle.
+fn grab_rect(drawn: NSRect, vertical: bool) -> NSRect {
+    let mut r = drawn;
+    if vertical {
+        let grow = (GRAB - r.size.width).max(0.);
+        r.origin.x -= grow / 2.;
+        r.size.width += grow;
+    } else {
+        let grow = (GRAB - r.size.height).max(0.);
+        r.origin.y -= grow / 2.;
+        r.size.height += grow;
+    }
+    r
 }
 
 /// The room the divider leaves along the split's axis.
@@ -254,5 +276,19 @@ impl SplitPaneNative {
     pub fn boundary(&self) -> Size {
         let s = self.host.bounds().size;
         Size { width: s.width.max(0.) as f32, height: s.height.max(0.) as f32 }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_thin_divider_grabs_eight_points_around_its_line() {
+        let line = NSRect::new(NSPoint::new(100., 0.), NSSize::new(1., 300.));
+        let r = grab_rect(line, true);
+        assert_eq!((r.origin.x, r.size.width, r.size.height), (96.5, 8., 300.));
+        let r = grab_rect(NSRect::new(NSPoint::new(0., 50.), NSSize::new(300., 1.)), false);
+        assert_eq!((r.origin.y, r.size.height), (46.5, 8.));
     }
 }

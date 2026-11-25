@@ -546,6 +546,8 @@ impl EngineView for WkPage {
             Command::SetUserAgent(ua) => unsafe { web.setCustomUserAgent(ua.as_deref().map(ns).as_deref()) },
             Command::OpenDevTools => self.open_inspector(),
             Command::CloseDevTools => self.close_inspector(),
+            // `WebView::dev_tools` asks Chromium only.
+            Command::DevToolsIn(_) => {}
             Command::ExecuteJavaScript { code, world, done } => self.evaluate(&code, world.as_deref(), done),
             Command::AddUserScript(script) => {
                 {

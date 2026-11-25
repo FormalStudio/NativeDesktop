@@ -826,6 +826,13 @@ impl OsrView {
         super::chrome::expect_popup(self.ivars().id.get());
     }
 
+    /// This view's page is the DevTools its inspected page is about to open, a BrowserView
+    /// Chromium builds like a popup's.
+    pub(crate) fn expect_chrome_dev_tools(&self, _info: &mut WindowInfo) {
+        self.become_chrome();
+        super::chrome::expect_dev_tools(self.ivars().id.get());
+    }
+
     /// The browser exists: its views move in.
     pub(crate) fn browser_created(&self) {
         if let Some(chrome) = self.chrome() {

@@ -173,6 +173,8 @@ pub enum Command {
     SetUserAgent(Option<String>),
     OpenDevTools,
     CloseDevTools,
+    /// DevTools for this page, made the page of [`crate::WebView::dev_tools`]'s handle.
+    DevToolsIn(Page),
     ExecuteJavaScript {
         code: String,
         world: Option<String>,
@@ -262,6 +264,7 @@ impl std::fmt::Debug for Command {
             Command::SetUserAgent(_) => "SetUserAgent",
             Command::OpenDevTools => "OpenDevTools",
             Command::CloseDevTools => "CloseDevTools",
+            Command::DevToolsIn(_) => "DevToolsIn",
             Command::ExecuteJavaScript { .. } => "ExecuteJavaScript",
             Command::AddUserScript(_) => "AddUserScript",
             Command::RemoveUserScript(_) => "RemoveUserScript",
@@ -424,6 +427,14 @@ impl Page {
     pub fn report_zoom(&self, factor: f64, source: ZoomSource) {
         if self.update(|s| &mut s.zoom, factor) {
             self.emit(ZoomChanged { factor, source });
+        }
+    }
+
+    /// Makes `view` this page's engine object, for an engine that builds a page on its own
+    /// schedule ([`Command::DevToolsIn`]).
+    pub fn adopt(&self, view: Rc<dyn EngineView>) {
+        if let Some(inner) = self.inner.upgrade() {
+            inner.adopt(view);
         }
     }
 

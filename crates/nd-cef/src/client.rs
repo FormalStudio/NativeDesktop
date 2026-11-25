@@ -552,7 +552,7 @@ wrap_display_handler! {
         }
 
         fn on_fullscreen_mode_change(&self, _browser: Option<&mut Browser>, fullscreen: c_int) {
-            with(self.id, |p| p.page.emit(nd_webview::FullscreenChanged { fullscreen: fullscreen != 0 }));
+            with(self.id, |p| p.fullscreen_changed(fullscreen != 0));
         }
 
         fn on_status_message(&self, _browser: Option<&mut Browser>, value: Option<&CefString>) {

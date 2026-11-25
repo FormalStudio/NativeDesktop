@@ -86,6 +86,7 @@ macro_rules! icons {
 }
 
 icons! {
+    AppWindow "app-window" ["macwindow"] '\u{E8A7}';
     Archive "archive" ["archivebox"] '\u{E7B8}';
     ArrowLeft "arrow-left" ["arrow.left"] '\u{E72B}';
     ArrowUp "arrow-up" ["arrow.up"] '\u{E74A}';
@@ -136,6 +137,7 @@ icons! {
     Moon "moon" ["moon.fill"] '\u{E708}';
     Music "music" ["music.note"] '\u{E8D6}';
     Notebook "notebook" ["book.closed"] '\u{E70B}';
+    PanelBottom "panel-bottom" ["rectangle.bottomthird.inset.filled"] '\u{E90E}';
     PanelLeft "panel-left" ["sidebar.left"] '\u{E90C}';
     PanelRight "panel-right" ["sidebar.right"] '\u{E90D}';
     Paperclip "paperclip" ["paperclip"] '\u{E723}';

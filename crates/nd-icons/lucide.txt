@@ -1,4 +1,5 @@
 # Lucide names vendored by scripts/vendor-lucide. Every Icon variant needs one.
+app-window
 archive
 arrow-left
 arrow-up
@@ -49,6 +50,7 @@ minus
 moon
 music
 notebook
+panel-bottom
 panel-left
 panel-right
 paperclip
