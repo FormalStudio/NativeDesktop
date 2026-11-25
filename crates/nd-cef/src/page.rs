@@ -149,14 +149,33 @@ impl CefPage {
 
     pub(crate) fn create(page: Page) -> Result<Rc<dyn EngineView>, String> {
         let this = Self::new(page);
-        let mut context = crate::context(&this.page.options().profile);
+        let profile = this.page.options().profile.clone();
+        let context = crate::context(&profile);
+        if crate::runtime::ready(&profile) {
+            this.start(context)?;
+        } else {
+            // Commands wait in `queue` until the browser binds, as they do for any new page.
+            let id = this.id;
+            crate::runtime::when_ready(&profile, move || {
+                if let Some(page) = get(id)
+                    && let Err(e) = page.start(context)
+                {
+                    tracing::error!("nd-cef: {e}");
+                }
+            });
+        }
+        Ok(this)
+    }
+
+    /// Creates the page's browser in `context`.
+    fn start(&self, mut context: Option<RequestContext>) -> Result<(), String> {
+        let this = self;
         let mut client = crate::client::client(this.id, this.style);
         if this.style == CefStyle::Chrome {
             if let Some(context) = &context {
                 crate::runtime::quiet_chrome(context);
             }
-            this.view.create_chrome(client, &Self::browser_settings(), context)?;
-            return Ok(this);
+            return this.view.create_chrome(client, &Self::browser_settings(), context);
         }
         let browser = browser_host_create_browser_sync(
             Some(&this.view.window_info()),
@@ -168,7 +187,7 @@ impl CefPage {
         )
         .ok_or("Chromium could not create the browser")?;
         this.bind(browser);
-        Ok(this)
+        Ok(())
     }
 
     /// Chromium created the browser (`create`, or a popup this page adopted).

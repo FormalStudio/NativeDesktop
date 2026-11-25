@@ -15,12 +15,17 @@ use crate::platform;
 /// Carries the app's registered schemes to subprocesses, which must register the same set.
 pub(crate) const SCHEMES_SWITCH: &str = "nd-schemes";
 
+/// Work that waits for a named context to initialize.
+type Waiter = Box<dyn FnOnce()>;
+
 thread_local! {
     static APP_NAME: RefCell<String> = RefCell::default();
     static STARTED: Cell<Option<bool>> = const { Cell::new(None) };
     static CONTEXTS: RefCell<HashMap<Profile, RequestContext>> = RefCell::default();
     /// Private sessions' in-memory contexts, by session id, until the session ends.
     static PRIVATE: RefCell<HashMap<u64, RequestContext>> = RefCell::default();
+    /// Named contexts Chromium has not initialized yet, with what waits for each.
+    static PENDING: RefCell<HashMap<String, Vec<Waiter>>> = RefCell::default();
     /// Kept alive for as long as Chromium runs.
     static APP: RefCell<Option<App>> = const { RefCell::new(None) };
 }
@@ -206,7 +211,9 @@ pub(crate) fn context(profile: &Profile) -> Option<RequestContext> {
                 persist_session_cookies: 1,
                 ..RequestContextSettings::default()
             };
-            let ctx = request_context_create_context(Some(&settings), None)?;
+            PENDING.with(|p| p.borrow_mut().insert(name.clone(), Vec::new()));
+            let mut handler = ContextReady::new(name.clone());
+            let ctx = request_context_create_context(Some(&settings), Some(&mut handler))?;
             crate::scheme::register_on(&ctx);
             c.borrow_mut().insert(profile.clone(), ctx.clone());
             Some(ctx)
@@ -349,4 +356,44 @@ impl EngineFactory for Factory {
 /// Converts what CEF hands out as `CefStringUserfree` into a Rust string.
 pub(crate) fn text(s: &CefStringUserfree) -> String {
     CefString::from(s).to_string()
+}
+
+/// Whether `profile`'s context, made by [`context`], can take a browser now. A context with a
+/// cache path initializes after `CreateContext` returns, and Chromium refuses a browser for it
+/// until then (`CefRequestContextImpl::VerifyBrowserContext`).
+pub(crate) fn ready(profile: &Profile) -> bool {
+    match profile {
+        Profile::Named(name) => PENDING.with(|p| !p.borrow().contains_key(name)),
+        _ => true,
+    }
+}
+
+/// Runs `f` once `profile`'s context is initialized, at once when it already is.
+pub(crate) fn when_ready(profile: &Profile, f: impl FnOnce() + 'static) {
+    let mut f = Some(f);
+    if let Profile::Named(name) = profile {
+        PENDING.with(|p| {
+            if let Some(waiting) = p.borrow_mut().get_mut(name) {
+                waiting.extend(f.take().map(|f| Box::new(f) as Waiter));
+            }
+        });
+    }
+    if let Some(f) = f {
+        f();
+    }
+}
+
+wrap_request_context_handler! {
+    struct ContextReady {
+        name: String,
+    }
+
+    impl RequestContextHandler {
+        fn on_request_context_initialized(&self, _context: Option<&mut RequestContext>) {
+            let waiting = PENDING.with(|p| p.borrow_mut().remove(&self.name)).unwrap_or_default();
+            for f in waiting {
+                f();
+            }
+        }
+    }
 }
