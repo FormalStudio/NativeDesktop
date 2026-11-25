@@ -80,17 +80,37 @@ wrap_browser_process_handler! {
 /// The DevTools window's browser: Chromium draws and handles it itself.
 /// The handlers of the DevTools window for page `id`.
 pub(crate) fn devtools_client(id: u64) -> Client {
-    NdDevtoolsClient::new(NdDevtoolsKeyboard::new(id))
+    NdDevtoolsClient::new(NdDevtoolsKeyboard::new(id), NdDevtoolsLifeSpan::new(id))
+}
+
+wrap_life_span_handler! {
+    struct NdDevtoolsLifeSpan {
+        id: u64,
+    }
+
+    impl LifeSpanHandler {
+        #[cfg(target_os = "linux")]
+        fn on_after_created(&self, browser: Option<&mut Browser>) {
+            if let Some(window) = browser.and_then(|b| b.host()).map(|h| h.window_handle()).filter(|w| *w != 0) {
+                crate::platform::chrome::name_devtools(self.id, window as u32);
+            }
+        }
+    }
 }
 
 wrap_client! {
     struct NdDevtoolsClient {
         keyboard: KeyboardHandler,
+        life_span: LifeSpanHandler,
     }
 
     impl Client {
         fn keyboard_handler(&self) -> Option<KeyboardHandler> {
             Some(self.keyboard.clone())
+        }
+
+        fn life_span_handler(&self) -> Option<LifeSpanHandler> {
+            Some(self.life_span.clone())
         }
     }
 }

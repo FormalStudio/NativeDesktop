@@ -22,8 +22,8 @@ use x11rb::protocol::Event;
 use x11rb::protocol::shape::{ConnectionExt as _, SK, SO};
 use x11rb::protocol::xinput::{self, ConnectionExt as _};
 use x11rb::protocol::xproto::{
-    ClipOrdering, ConfigureWindowAux, ConnectionExt as _, CreateWindowAux, EventMask, ImageFormat, InputFocus,
-    KEY_PRESS_EVENT, KEY_RELEASE_EVENT, KeyPressEvent, Rectangle, StackMode, Window, WindowClass,
+    AtomEnum, ClipOrdering, ConfigureWindowAux, ConnectionExt as _, CreateWindowAux, EventMask, ImageFormat,
+    InputFocus, KEY_PRESS_EVENT, KEY_RELEASE_EVENT, KeyPressEvent, PropMode, Rectangle, StackMode, Window, WindowClass,
 };
 use x11rb::rust_connection::RustConnection;
 use x11rb::wrapper::ConnectionExt as _;
@@ -453,6 +453,38 @@ impl Chrome {
         self.x.flush();
         RELEASED.with(|r| r.borrow_mut().insert(self.page, self.container));
     }
+}
+
+/// Chromium maps page `page`'s DevTools window with no class or title. It takes the class of
+/// the app window the page is in, so it groups with the app, and "<App> DevTools" as its title.
+pub(crate) fn name_devtools(page: u64, window: Window) {
+    let Some(chrome) = crate::page::get(page).and_then(|p| p.view.chrome()) else { return };
+    let parent = chrome.st.borrow().parent;
+    let x = &chrome.x;
+    if parent == x.root {
+        return;
+    }
+    let Some(class) = x
+        .conn
+        .get_property(false, parent, AtomEnum::WM_CLASS, AtomEnum::STRING, 0, 256)
+        .ok()
+        .and_then(|c| c.reply().ok())
+        .map(|r| r.value)
+        .filter(|v| !v.is_empty())
+    else {
+        return;
+    };
+    let name = class.split(|b| *b == 0).nth(1).unwrap_or_default();
+    let app = String::from_utf8_lossy(name.rsplit(|b| *b == b'.').next().unwrap_or(name)).into_owned();
+    let title = format!("{app} DevTools");
+    let utf8 = x.conn.intern_atom(false, b"UTF8_STRING").ok().and_then(|c| c.reply().ok()).map(|r| r.atom);
+    let net_name = x.conn.intern_atom(false, b"_NET_WM_NAME").ok().and_then(|c| c.reply().ok()).map(|r| r.atom);
+    let _ = x.conn.change_property8(PropMode::REPLACE, window, AtomEnum::WM_CLASS, AtomEnum::STRING, &class);
+    let _ = x.conn.change_property8(PropMode::REPLACE, window, AtomEnum::WM_NAME, AtomEnum::STRING, title.as_bytes());
+    if let (Some(utf8), Some(net_name)) = (utf8, net_name) {
+        let _ = x.conn.change_property8(PropMode::REPLACE, window, net_name, utf8, title.as_bytes());
+    }
+    x.flush();
 }
 
 /// Page `id`'s browser is gone: its container goes too.
