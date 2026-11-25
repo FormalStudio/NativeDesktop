@@ -106,6 +106,12 @@ impl Occluding {
         Self { inner: inner.into_any_element(), draws: false, blocks_input: true, takes_keys: true, shadow: false }
     }
 
+    /// A strip that takes the pointer and draws nothing, with the keyboard left where it is (a
+    /// pane's resize grab, half of which lies over the content beside it).
+    pub(crate) fn grab(inner: impl IntoElement) -> Self {
+        Self { inner: inner.into_any_element(), draws: false, blocks_input: true, takes_keys: false, shadow: false }
+    }
+
     /// Content that draws and takes no input (a tooltip, a toast's shadow).
     pub(crate) fn passive(inner: impl IntoElement) -> Self {
         Self { inner: inner.into_any_element(), draws: true, blocks_input: false, takes_keys: false, shadow: true }

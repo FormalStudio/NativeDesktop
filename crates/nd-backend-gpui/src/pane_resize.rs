@@ -122,20 +122,22 @@ impl Build<'_> {
             });
             let pressed = grab.clone();
             grabs.push(
-                div()
-                    .id(ElementId::Name(format!("nd-pane-divider-{}", pane.0).into()))
-                    .absolute()
-                    .top_0()
-                    .bottom_0()
-                    .left(px(edge - row.origin.x - GRAB))
-                    .w(px(GRAB * 2.))
-                    .occlude()
-                    .cursor_col_resize()
-                    .on_mouse_down(MouseButton::Left, move |event: &MouseDownEvent, _, cx| {
-                        cx.stop_propagation();
-                        pressed.press(event.position.x.as_f32());
-                    })
-                    .into_any_element(),
+                crate::occlusion::Occluding::grab(
+                    div()
+                        .id(ElementId::Name(format!("nd-pane-divider-{}", pane.0).into()))
+                        .absolute()
+                        .top_0()
+                        .bottom_0()
+                        .left(px(edge - row.origin.x - GRAB))
+                        .w(px(GRAB * 2.))
+                        .occlude()
+                        .cursor_col_resize()
+                        .on_mouse_down(MouseButton::Left, move |event: &MouseDownEvent, _, cx| {
+                            cx.stop_propagation();
+                            pressed.press(event.position.x.as_f32());
+                        }),
+                )
+                .into_any_element(),
             );
             // Window-wide while dragging, so the edge follows the pointer past the window.
             grabs.push(

@@ -194,6 +194,19 @@ pub(crate) fn icon_glyph(icon: Option<nd_components::Icon>) -> Option<Glyph> {
     icon.filter(|i| i.shape().is_some()).map(Glyph::of)
 }
 
+fn palette_card_width(window_width: f32) -> f32 {
+    PALETTE.width.min(window_width - 2. * PALETTE.margin).max(0.)
+}
+
+/// Where the palette's field strip sits in a window of `width` by `height`: the card's top band,
+/// across the card.
+fn palette_field_rect(width: f32, height: f32) -> nd_core::Rect {
+    let m = PALETTE;
+    let card_w = palette_card_width(width);
+    let top = (height * m.top_fraction).max(m.margin).round();
+    nd_core::Rect::new(((width - card_w) / 2.).round(), top, card_w, 1. + m.field_top + m.field_font_size * 1.25)
+}
+
 /// The presented palette over a window of `viewport`: the scrim, the card, the field and the
 /// rows. Nothing when the model is not presented.
 pub fn palette_overlay(
@@ -211,8 +224,8 @@ pub fn palette_overlay(
     }
     let m = PALETTE;
     let (w, h) = (viewport.width.as_f32(), viewport.height.as_f32());
-    let card_w = m.width.min(w - 2. * m.margin).max(0.);
-    let top = (h * m.top_fraction).max(m.margin);
+    let card_w = palette_card_width(w);
+    let field_strip = palette_field_rect(w, h);
     let line = m.field_font_size * 1.25;
     let rows = model.rows();
     let scrim = theme.scrim;
@@ -378,8 +391,8 @@ pub fn palette_overlay(
         .role(gpui::Role::Dialog)
         .aria_label(placeholder.unwrap_or("Command Palette").to_owned())
         .absolute()
-        .left(px(((w - card_w) / 2.).round()))
-        .top(px(top.round()))
+        .left(px(field_strip.origin.x))
+        .top(px(field_strip.origin.y))
         .w(px(card_w))
         .flex()
         .flex_col()
@@ -404,6 +417,7 @@ pub fn palette_overlay(
                 .pl(px(m.search_icon_inset))
                 .pr(px(m.field_trailing))
                 .gap(px(m.search_icon_gap))
+                .cursor(gpui::CursorStyle::IBeam)
                 .child(glyph(Glyph::Search, px(m.search_icon), theme.text.secondary, px(1.75)))
                 .child(field.role(gpui::Role::SearchInput).aria_value(model.field_text())),
         );
@@ -1844,6 +1858,13 @@ impl GpuiBackend {
             Drawn::Palette(p) => {
                 probe.value = Some(p.model.field_text());
                 probe.expanded = Some(p.model.is_presented());
+                // The palette node lays out to nothing; what it draws is the deferred card.
+                let root = self.window_of(node).and_then(|w| self.state.borrow().windows.get(&w)?.root);
+                if p.model.is_presented()
+                    && let Some(window) = root.and_then(|r| self.bounds(r))
+                {
+                    probe.bounds = Some(palette_field_rect(window.size.width, window.size.height));
+                }
             }
             Drawn::Toasts(t) => probe.name = t.queue.current().map(|t| t.title.to_string()),
             Drawn::Tree(_) => {}
