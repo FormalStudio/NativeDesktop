@@ -536,7 +536,10 @@ impl OsrView {
         // loses its scroll position; an element laid out to nothing shows nothing, so the page
         // stays at its last size, out of sight.
         if frame.w <= 0 || frame.h <= 0 {
-            self.st.borrow_mut().keyboard = false;
+            // A parked page hands the keyboard back: its hidden window would keep the keys.
+            if std::mem::take(&mut self.st.borrow_mut().keyboard) {
+                chrome.focus(false);
+            }
             chrome.park();
             return;
         }
@@ -569,8 +572,11 @@ impl OsrView {
         let view = Rc::downgrade(self);
         nd_backend_gpui::occlusion::shown(window, self.id, move || {
             let Some(view) = view.upgrade() else { return };
-            view.st.borrow_mut().keyboard = false;
+            let keyboard = std::mem::take(&mut view.st.borrow_mut().keyboard);
             if let Some(chrome) = view.chrome() {
+                if keyboard {
+                    chrome.focus(false);
+                }
                 chrome.park();
             }
         });
