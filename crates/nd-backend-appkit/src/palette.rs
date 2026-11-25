@@ -381,9 +381,15 @@ impl NdPaletteSource {
             PaletteKey::Up
         } else if command == sel!(moveDown:) {
             PaletteKey::Down
-        } else if command == sel!(moveToBeginningOfDocument:) {
+        } else if command == sel!(moveToBeginningOfDocument:)
+            || command == sel!(scrollPageUp:)
+            || command == sel!(pageUp:)
+        {
             PaletteKey::FirstRow
-        } else if command == sel!(moveToEndOfDocument:) {
+        } else if command == sel!(moveToEndOfDocument:)
+            || command == sel!(scrollPageDown:)
+            || command == sel!(pageDown:)
+        {
             PaletteKey::LastRow
         } else if command == sel!(insertTab:) {
             PaletteKey::Tab

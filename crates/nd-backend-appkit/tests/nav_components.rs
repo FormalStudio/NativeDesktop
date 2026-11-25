@@ -390,6 +390,20 @@ mod nav {
                 rows == 3 && highlighted == Some(1),
                 &format!("Down moves the highlight ({highlighted:?} of {rows})"),
             );
+            let row = |env: &mut Env| {
+                env.settle();
+                env.backend.palette_layout(node).and_then(|l| l.rows.iter().position(|r| r.highlighted))
+            };
+            let _: () =
+                unsafe { nd_backend_appkit::objc2::msg_send![&*editor, doCommandBySelector: sel!(scrollPageDown:)] };
+            let last = row(env);
+            let _: () =
+                unsafe { nd_backend_appkit::objc2::msg_send![&*editor, doCommandBySelector: sel!(scrollPageUp:)] };
+            let first = row(env);
+            c.check(
+                last == Some(2) && first == Some(0),
+                &format!("Page Down and Page Up jump to the last and first rows ({last:?}, {first:?})"),
+            );
             let _: () =
                 unsafe { nd_backend_appkit::objc2::msg_send![&*editor, doCommandBySelector: sel!(cancelOperation:)] };
             env.settle();

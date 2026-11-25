@@ -316,9 +316,9 @@ impl IntoElement for CommandPalette {
 pub enum PaletteKey {
     Up,
     Down,
-    /// The first row (Page Up, or AppKit's move to the beginning of the document).
+    /// The first row: Page Up, or Cmd+Up on macOS.
     FirstRow,
-    /// The last row.
+    /// The last row: Page Down, or Cmd+Down on macOS.
     LastRow,
     Tab,
     BackTab,
