@@ -168,9 +168,22 @@ define_class!(
             self.with(Inner::place_lights);
         }
 
+        #[unsafe(method(windowWillEnterFullScreen:))]
+        fn will_enter_full_screen(&self, _n: &NSNotification) {
+            self.with(|h| entering(&h.window, true));
+        }
+
+        #[unsafe(method(windowDidFailToEnterFullScreen:))]
+        fn did_fail_to_enter_full_screen(&self, _n: &NSWindow) {
+            self.with(|h| entering(&h.window, false));
+        }
+
         #[unsafe(method(windowDidEnterFullScreen:))]
         fn did_enter_full_screen(&self, _n: &NSNotification) {
-            self.with(|h| h.diag("full screen enter"));
+            self.with(|h| {
+                entering(&h.window, false);
+                h.diag("full screen enter");
+            });
         }
 
         #[unsafe(method(windowDidExitFullScreen:))]
@@ -214,6 +227,26 @@ impl NdWindowDelegate {
             f(&host);
         }
     }
+}
+
+thread_local! {
+    /// Windows AppKit is still animating into fullscreen, by window number. Their style mask
+    /// already says fullscreen, but they take no input until the animation ends.
+    static ENTERING: RefCell<Vec<isize>> = const { RefCell::new(Vec::new()) };
+}
+
+fn entering(window: &NSWindow, on: bool) {
+    let number = window.windowNumber();
+    ENTERING.with_borrow_mut(|e| {
+        e.retain(|n| *n != number);
+        if on {
+            e.push(number);
+        }
+    });
+}
+
+pub(crate) fn entering_fullscreen(window: &NSWindow) -> bool {
+    ENTERING.with_borrow(|e| e.contains(&window.windowNumber()))
 }
 
 /// Owns the window's nd side. Dropping it detaches the window from the backend.

@@ -48,6 +48,8 @@ pub struct WindowState {
     pub frame: Option<Rect>,
     /// In the OS's fullscreen, however it got there.
     pub fullscreen: bool,
+    /// Still animating into fullscreen, and taking no input until it is done. Only AppKit tells.
+    pub entering_fullscreen: bool,
 }
 
 /// An action on one node, carried out the way the platform's accessibility action would: through

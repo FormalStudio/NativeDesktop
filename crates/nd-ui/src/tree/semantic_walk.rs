@@ -118,6 +118,7 @@ impl Tree {
             main: state.main,
             visible: state.visible,
             frame: state.frame,
+            fullscreen: state.fullscreen && !state.entering_fullscreen,
             tab_group: window.options().tab_group.as_ref().map(|g| g.to_string()),
             root,
         }
@@ -130,7 +131,14 @@ impl App {
     fn window_state_or_default(&self, id: WindowId) -> WindowState {
         self.backend.window_state(id).unwrap_or_else(|| {
             let first = self.windows.keys().next() == Some(&id);
-            WindowState { key: first, main: first, visible: true, frame: None, fullscreen: false }
+            WindowState {
+                key: first,
+                main: first,
+                visible: true,
+                frame: None,
+                fullscreen: false,
+                entering_fullscreen: false,
+            }
         })
     }
 

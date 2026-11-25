@@ -205,6 +205,9 @@ pub struct SemanticWindow {
     /// The window's frame in global top-left screen points, where the backend knows it.
     #[serde(with = "opt_rect")]
     pub frame: Option<Rect>,
+    /// In the OS's fullscreen with the move into it over, so input reaches the window.
+    #[serde(default)]
+    pub fullscreen: bool,
     /// The tab group the window opened in (`WindowOptions::tab_group`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tab_group: Option<String>,
@@ -364,6 +367,7 @@ mod tests {
                 main: true,
                 visible: true,
                 frame: None,
+                fullscreen: false,
                 tab_group: None,
                 root: node(1, Role::Window, "Hello", vec![node(2, Role::TextField, "", vec![])]),
             }],

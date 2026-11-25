@@ -331,6 +331,7 @@ pub fn handle(app: &mut App, method: &str, p: &Value) -> Result<Value, RpcError>
                     .iter()
                     .map(|w| json!({
                         "id": w.id.0, "title": w.title, "key": w.key, "main": w.main, "visible": w.visible,
+                        "fullscreen": w.fullscreen,
                         "frame": w.frame.map(|f| json!({ "x": f.origin.x, "y": f.origin.y, "width": f.size.width, "height": f.size.height })),
                     }))
                     .collect::<Vec<_>>()

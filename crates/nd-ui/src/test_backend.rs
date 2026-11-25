@@ -443,6 +443,7 @@ impl Backend for TestBackend {
             visible: true,
             frame: Some(frame),
             fullscreen: false,
+            entering_fullscreen: false,
         })
     }
 
