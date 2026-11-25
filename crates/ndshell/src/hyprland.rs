@@ -416,6 +416,10 @@ impl PrivateBus {
             .arg(format!("--address={address}"))
             .env("XDG_RUNTIME_DIR", dir)
             .env_remove("DBUS_SESSION_BUS_ADDRESS")
+            // gvfsd, which the bus starts for GIO clients, would mount its FUSE view on
+            // `<dir>/gvfs`; once the bus is gone that mount answers ENOTCONN and the dir cannot be
+            // removed.
+            .env("GVFS_DISABLE_FUSE", "1")
             .current_dir(dir)
             .stdin(Stdio::null())
             .stdout(log.try_clone().map_err(|e| e.to_string())?)
