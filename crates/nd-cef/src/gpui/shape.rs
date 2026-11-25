@@ -80,12 +80,22 @@ pub(crate) struct Shape {
 }
 
 /// The shape of a page whose window covers `frame` and shows `visible` of it (both in window
-/// coordinates), under overlays given as (bounds, draws, casts a shadow, takes the pointer) at
-/// `scale`.
-pub(crate) fn shape(frame: R, visible: Option<R>, overlays: &[(R, bool, bool, bool)], scale: f32) -> Shape {
+/// coordinates), with its corners (top left, top right, bottom right, bottom left) rounded by
+/// `radii` device pixels, under overlays given as (bounds, draws, casts a shadow, takes the
+/// pointer) at `scale`.
+pub(crate) fn shape(
+    frame: R,
+    visible: Option<R>,
+    overlays: &[(R, bool, bool, bool)],
+    scale: f32,
+    radii: [i32; 4],
+) -> Shape {
     let Some(visible) = visible.and_then(|v| v.intersect(frame)) else { return Shape::default() };
     let pad = (SHADOW as f32 * scale).round() as i32;
     let mut bounding = vec![visible];
+    for corner in corners(frame, radii) {
+        bounding = subtract(&bounding, corner);
+    }
     let mut cut = false;
     for &(bounds, draws, shadow, _) in overlays {
         let drawn = if shadow { bounds.inflate(pad) } else { bounds };
@@ -105,12 +115,54 @@ pub(crate) fn shape(frame: R, visible: Option<R>, overlays: &[(R, bool, bool, bo
     Shape { bounding: local(bounding), input: local(input), cut }
 }
 
+/// What rounded corners leave out of `frame`: a strip per pixel row at each corner, as wide as
+/// the arc is from the edge on that row. A window shape is all or nothing per pixel, so the arc
+/// is the nearest pixel, not antialiased; whatever draws around the page covers the step.
+fn corners(frame: R, radii: [i32; 4]) -> Vec<R> {
+    let mut out = Vec::new();
+    for (corner, radius) in radii.into_iter().enumerate() {
+        let r = radius.min(frame.w / 2).min(frame.h / 2);
+        for row in 0..r {
+            let dy = r as f32 - row as f32 - 0.5;
+            let inset = (r as f32 - (r as f32 * r as f32 - dy * dy).sqrt()).round() as i32;
+            if inset <= 0 {
+                continue;
+            }
+            let y = if corner < 2 { frame.y + row } else { frame.bottom() - 1 - row };
+            let x = if corner == 0 || corner == 3 { frame.x } else { frame.right() - inset };
+            out.push(R::new(x, y, inset, 1));
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn area(rs: &[R]) -> i32 {
         rs.iter().map(|r| r.w * r.h).sum()
+    }
+
+    #[test]
+    fn rounded_corners_leave_the_corner_pixels_out_and_the_edges_in() {
+        let frame = R::new(10, 20, 200, 100);
+        let s = shape(frame, Some(frame), &[], 2., [20; 4]);
+        let shows = |x: i32, y: i32| s.bounding.iter().any(|r| r.intersect(R::new(x, y, 1, 1)).is_some());
+        for (x, y) in [(0, 0), (199, 0), (0, 99), (199, 99), (3, 3), (196, 96)] {
+            assert!(!shows(x, y), "corner pixel {x},{y} shows");
+        }
+        for (x, y) in [(100, 0), (0, 50), (199, 50), (100, 99), (20, 20), (180, 80)] {
+            assert!(shows(x, y), "pixel {x},{y} is cut");
+        }
+        assert_eq!(s.input, s.bounding);
+        assert!(!s.cut, "corners are not an overlay's hole");
+        let square = shape(frame, Some(frame), &[], 2., [0; 4]);
+        assert_eq!(square.bounding, vec![R::new(0, 0, 200, 100)]);
+        // Only the left corners, as for a page with the DevTools docked to its right.
+        let left = shape(frame, Some(frame), &[], 2., [20, 0, 0, 20]);
+        let shows = |x: i32, y: i32| left.bounding.iter().any(|r| r.intersect(R::new(x, y, 1, 1)).is_some());
+        assert!(!shows(0, 0) && !shows(0, 99) && shows(199, 0) && shows(199, 99));
     }
 
     #[test]
@@ -134,7 +186,7 @@ mod tests {
     #[test]
     fn an_overlay_laid_out_to_nothing_cuts_nothing() {
         let frame = R::new(0, 0, 800, 600);
-        let s = shape(frame, Some(frame), &[(R::new(10, 590, 0, 0), true, true, false)], 1.);
+        let s = shape(frame, Some(frame), &[(R::new(10, 590, 0, 0), true, true, false)], 1., [0; 4]);
         assert!(!s.cut);
         assert_eq!(s.bounding, vec![frame]);
     }
@@ -142,7 +194,7 @@ mod tests {
     #[test]
     fn a_modal_backdrop_takes_all_input_and_cuts_nothing() {
         let frame = R::new(0, 40, 800, 560);
-        let s = shape(frame, Some(frame), &[(R::new(0, 0, 800, 600), false, false, true)], 1.);
+        let s = shape(frame, Some(frame), &[(R::new(0, 0, 800, 600), false, false, true)], 1., [0; 4]);
         assert_eq!(s.bounding, vec![R::new(0, 0, 800, 560)]);
         assert!(s.input.is_empty());
         assert!(!s.cut);
@@ -151,7 +203,7 @@ mod tests {
     #[test]
     fn window_chrome_above_the_page_casts_no_shadow_into_it() {
         let frame = R::new(0, 32, 800, 568);
-        let s = shape(frame, Some(frame), &[(R::new(660, 0, 140, 32), true, false, true)], 1.);
+        let s = shape(frame, Some(frame), &[(R::new(660, 0, 140, 32), true, false, true)], 1., [0; 4]);
         assert!(!s.cut);
         assert_eq!(s.bounding, vec![R::new(0, 0, 800, 568)]);
     }
@@ -160,7 +212,7 @@ mod tests {
     fn a_popover_cuts_a_padded_hole_in_window_coordinates() {
         let frame = R::new(100, 100, 400, 300);
         let popover = R::new(150, 120, 100, 50);
-        let s = shape(frame, Some(frame), &[(popover, true, true, true)], 2.);
+        let s = shape(frame, Some(frame), &[(popover, true, true, true)], 2., [0; 4]);
         assert!(s.cut);
         let hole = popover.inflate(24).offset(-100, -100);
         assert!(s.bounding.iter().all(|r| r.intersect(hole).is_none()));
@@ -170,8 +222,8 @@ mod tests {
     #[test]
     fn a_page_scrolled_out_of_its_clip_shows_nothing() {
         let frame = R::new(0, 0, 100, 100);
-        assert_eq!(shape(frame, Some(R::new(200, 0, 10, 10)), &[], 1.), Shape::default());
-        let s = shape(frame, Some(R::new(0, 50, 100, 100)), &[], 1.);
+        assert_eq!(shape(frame, Some(R::new(200, 0, 10, 10)), &[], 1., [0; 4]), Shape::default());
+        let s = shape(frame, Some(R::new(0, 50, 100, 100)), &[], 1., [0; 4]);
         assert_eq!(s.bounding, vec![R::new(0, 50, 100, 50)]);
     }
 }

@@ -49,6 +49,7 @@ impl CustomWidget for Presenter {
     fn create(&self, cx: &CustomCx<'_>) -> Box<dyn CustomNative> {
         let props = props(cx);
         let host = HostView::new(cx.mtm());
+        host.round(&props.style);
         let mut native = Native { host, page: props.page.clone(), engine: None, props: props.clone() };
         native.mount(cx);
         Box::new(native)
@@ -154,6 +155,9 @@ impl CustomNative for Native {
             return;
         }
         *self.page.0.shared.props.borrow_mut() = Some(new.clone());
+        if new.style.corner_radii != self.props.style.corner_radii {
+            self.host.round(&new.style);
+        }
         if let Some(engine) = &self.engine {
             engine.apply(&new, Some(&self.props));
         }
@@ -201,6 +205,30 @@ impl HostView {
     fn new(mtm: MainThreadMarker) -> Retained<Self> {
         let this = Self::alloc(mtm).set_ivars(HostIvars { content: RefCell::default() });
         unsafe { msg_send![super(this), initWithFrame: NSRect::ZERO] }
+    }
+
+    /// Clips the page to the element's corner radius, on Apple's continuous curve. Core
+    /// Animation rounds by one radius, so the largest given rounds every corner that has one.
+    fn round(&self, style: &nd_ui::StyleRefinement) {
+        use objc2_quartz_core::{CACornerMask, kCACornerCurveContinuous};
+        let r = &style.corner_radii;
+        let radii = [r.top_left, r.top_right, r.bottom_right, r.bottom_left]
+            .map(|r| r.map_or(0., |l| f64::from(l.to_pixels(nd_ui::prelude::px(16.)).as_f32())));
+        let radius = radii.into_iter().fold(0., f64::max);
+        self.setWantsLayer(true);
+        let Some(layer) = self.layer() else { return };
+        let corners = [
+            CACornerMask::LayerMinXMinYCorner,
+            CACornerMask::LayerMaxXMinYCorner,
+            CACornerMask::LayerMaxXMaxYCorner,
+            CACornerMask::LayerMinXMaxYCorner,
+        ];
+        let mask = radii.iter().zip(corners).filter(|(r, _)| **r > 0.).fold(CACornerMask::empty(), |m, (_, c)| m | c);
+        layer.setCornerRadius(radius);
+        layer.setMaskedCorners(mask);
+        // SAFETY: a constant Core Animation defines.
+        layer.setCornerCurve(unsafe { kCACornerCurveContinuous });
+        layer.setMasksToBounds(radius > 0.);
     }
 
     /// The engine could not start: say why where the page would be.

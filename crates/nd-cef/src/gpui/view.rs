@@ -22,11 +22,11 @@ use nd_backend_gpui::custom::{CustomCx, FocusReporter};
 use nd_backend_gpui::{GpuiBackend, MenuRow};
 use nd_core::{NodeId, WindowId};
 use nd_gpui::gpui::{
-    self, AnyElement, AnyWindowHandle, App, AppContext, AsyncApp, Bounds, ContentMask, Corners, CursorStyle,
-    DispatchPhase, Element, ElementId, FocusHandle, GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId,
-    IntoElement, KeyDownEvent, KeyUpEvent, Keystroke, LayoutId, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, Pixels, Point, RenderImage, ScrollEvent, Style, StyleRefinement, UTF16Selection, Window, fill, point,
-    px, size,
+    self, AbsoluteLength, AnyElement, AnyWindowHandle, App, AppContext, AsyncApp, Bounds, ContentMask, Corners,
+    CursorStyle, DispatchPhase, Element, ElementId, FocusHandle, GlobalElementId, Hitbox, HitboxBehavior,
+    InspectorElementId, IntoElement, KeyDownEvent, KeyUpEvent, Keystroke, LayoutId, Modifiers, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, RenderImage, ScrollEvent, Style, StyleRefinement,
+    UTF16Selection, Window, fill, point, px, size,
 };
 use nd_webview::WebViewProps;
 use nd_webview::menu::Entry;
@@ -99,6 +99,9 @@ struct St {
     /// The element's bounds in the window, and the window's scale.
     bounds: Option<Bounds<Pixels>>,
     scale: f32,
+    /// The element's corner radii (top left, top right, bottom right, bottom left): the page is
+    /// clipped to them.
+    radii: Corners<Pixels>,
     window: Option<AnyWindowHandle>,
     placement: Option<Placement>,
     focus: Option<FocusHandle>,
@@ -501,10 +504,11 @@ impl OsrView {
             // Under a frame that has not caught up with a resize yet: the page's own edge colour,
             // so a flat page reads as one surface while Chromium draws the new size.
             let under = st.frame.as_ref().map_or(gpui::Rgba { r: 1., g: 1., b: 1., a: 1. }, |f| f.edge);
-            window.paint_quad(fill(bounds, under));
+            let corners = st.radii;
+            window.paint_quad(fill(bounds, under).corner_radii(corners));
             if let Some(frame) = &st.frame {
                 let at = Bounds::new(origin, size(px(frame.width as f32 / scale), px(frame.height as f32 / scale)));
-                let _ = window.paint_image(bounds, at, Corners::default(), frame.image.clone(), 0, false);
+                let _ = window.paint_image(bounds, at, corners, frame.image.clone(), 0, false);
             }
             if let (true, Some(popup), Some(rect)) = (st.popup_visible, &st.popup, &st.popup_rect) {
                 let at = Bounds::new(
@@ -553,7 +557,10 @@ impl OsrView {
         let occluders = nd_backend_gpui::occlusion::occluders(window);
         let overlays: Vec<(R, bool, bool, bool)> =
             occluders.iter().map(|o| (device(o.bounds), o.draws, o.shadow, o.blocks_input)).collect();
-        let shape = chrome::shape(frame, visible, &overlays, scale);
+        let r = self.st.borrow().radii;
+        let snap = |p: Pixels| (p.as_f32() * scale).round() as i32;
+        let radii = [snap(r.top_left), snap(r.top_right), snap(r.bottom_right), snap(r.bottom_left)];
+        let shape = chrome::shape(frame, visible, &overlays, scale, radii);
         let cut = shape.cut;
         let had = self.st.borrow().frame.is_some();
         // The snapshot is taken before the overlay's hole is cut, while the page still shows.
@@ -875,6 +882,15 @@ impl Element for PageElement {
         window: &mut Window,
         cx: &mut App,
     ) -> Hitbox {
+        let rem = window.rem_size();
+        let r = &self.style.corner_radii;
+        let length = |l: Option<AbsoluteLength>| l.map_or(Pixels::ZERO, |l| l.to_pixels(rem));
+        self.view.st.borrow_mut().radii = Corners {
+            top_left: length(r.top_left),
+            top_right: length(r.top_right),
+            bottom_right: length(r.bottom_right),
+            bottom_left: length(r.bottom_left),
+        };
         self.view.prepaint(bounds, window, cx)
     }
 

@@ -27,6 +27,7 @@ nd-backend-appkit.workspace = true
 objc2 = "0.6.5"
 objc2-foundation = "0.3.2"
 objc2-app-kit = "0.3.2"
+objc2-quartz-core = "0.3.2"
 objc2-web-kit = "0.3.2"
 block2 = "0.6.2"
 dispatch2 = "0.3.1"
