@@ -12,7 +12,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use nd_backend_gpui::GpuiHost;
-use nd_backend_gpui::nav::{Marks, Paint, banner_view, palette_overlay, source_tree_view, theme_for, toast_view};
+use nd_backend_gpui::nav::{
+    FieldScroll, Marks, Paint, banner_view, field_measure, palette_overlay, source_tree_view, theme_for, toast_view,
+};
 use nd_components::*;
 use nd_core::semantic::Role;
 use nd_gpui::gpui::{self, HeadlessAppContext};
@@ -189,6 +191,45 @@ mod gate_m6 {
         press(&mut o, "escape");
         assert_eq!(o.log.borrow().cancels, 1, "Esc cancels once");
         assert_eq!(palette_node(&o).expanded, Some(false));
+    }
+
+    /// Left, Home and End move the caret through the text; typing lands at the caret.
+    pub fn gpui_palette_caret_edits_mid_text() {
+        let mut o = open(|log| Nav { log, open: true, query: "".into(), toasts: Vec::new() });
+        for key in ["a", "b", "c", "left", "left", "x", "home", "y", "end", "z", "shift-left", "shift-left", "q"] {
+            press(&mut o, key);
+        }
+        assert_eq!(o.log.borrow().queries.last().map(String::as_str), Some("yaxbq"));
+        let word = if cfg!(target_os = "macos") { "alt-left" } else { "ctrl-left" };
+        press(&mut o, word);
+        press(&mut o, "delete");
+        assert_eq!(o.log.borrow().queries.last().map(String::as_str), Some("axbq"), "a word move, then delete forward");
+    }
+
+    /// A long address stays inside the field: the strips beside the card, at the field's
+    /// height, look as they do with a short query.
+    pub fn gpui_palette_long_address_stays_in_its_field() {
+        if nd_gpui::gpui_platform::current_headless_renderer().ok().flatten().is_none() {
+            println!("skipped: GPUI has no headless renderer on this OS");
+            return;
+        }
+        for scheme in [Scheme::Light, Scheme::Dark] {
+            let short = capture(GoldenView::Palette, scheme).expect("short");
+            for view in [GoldenView::LongAddress, GoldenView::LongAddressEnd] {
+                let long = capture(view, scheme).expect("long");
+                let scale = long.width() as f32 / 800.;
+                // The card spans 80 to 720 pt; the field's line sits in its top 60 pt.
+                let rows = (94. * scale) as u32..(154. * scale) as u32;
+                let columns = (0..(78. * scale) as u32).chain((722. * scale) as u32..long.width());
+                for x in columns {
+                    for y in rows.clone() {
+                        let (a, b) = (long.get_pixel(x, y).0, short.get_pixel(x, y).0);
+                        let off = a.iter().zip(b).any(|(a, b)| (*a as i16 - b as i16).abs() > CHANNEL_TOLERANCE);
+                        assert!(!off, "{view:?} {scheme:?}: text at ({x}, {y}), {a:?} where {b:?}");
+                    }
+                }
+            }
+        }
     }
 
     pub fn gpui_toasts_time_out_in_order() {
@@ -600,7 +641,8 @@ mod gate_m6 {
         }
         let mut failed = Vec::new();
         for scheme in [Scheme::Light, Scheme::Dark] {
-            for view in [GoldenView::Sidebar, GoldenView::Palette] {
+            for view in [GoldenView::Sidebar, GoldenView::Palette, GoldenView::LongAddress, GoldenView::LongAddressEnd]
+            {
                 if let Err(e) = golden(view, scheme) {
                     failed.push(e);
                 }
@@ -616,6 +658,20 @@ enum GoldenView {
     Sidebar,
     /// The palette with a completion, over the same window.
     Palette,
+    /// The palette on a 300 character address, all of it selected.
+    LongAddress,
+    /// The same address with the caret moved to its end.
+    LongAddressEnd,
+}
+
+/// A 300 character address.
+fn long_address() -> String {
+    let mut url = "https://example.com/".to_owned();
+    while url.len() < 300 {
+        url.push_str("segment/");
+    }
+    url.truncate(300);
+    url
 }
 
 struct Golden {
@@ -685,22 +741,34 @@ impl gpui::Render for Golden {
                     .child(gpui::div().p(gpui::px(24.)).child("Q3 planning")),
             )
             .child(toast_view(Some(&toast), &theme, viewport, false, None, &Marks::default()));
-        if let GoldenView::Palette = self.view {
-            let mut model = PaletteModel::default();
-            model.set_items(&items("tri"));
-            model.present();
-            model.edited("tri");
-            model.set_items(&items("tri"));
-            root = root.child(palette_overlay(
-                &model,
-                Some("Search notes"),
-                &theme,
-                viewport,
-                None,
-                None,
-                &Marks::default(),
-            ));
+        let mut model = PaletteModel::default();
+        match self.view {
+            GoldenView::Sidebar => return root.into_any_element(),
+            GoldenView::Palette => {
+                model.set_items(&items("tri"));
+                model.present();
+                model.edited("tri");
+                model.set_items(&items("tri"));
+            }
+            GoldenView::LongAddress | GoldenView::LongAddressEnd => {
+                model.set_query(&long_address().into());
+                model.present();
+                if let GoldenView::LongAddressEnd = self.view {
+                    model.move_caret(CaretMove::End, false);
+                }
+            }
         }
+        let measure = field_measure(window);
+        let offset = std::cell::Cell::new(0.);
+        root = root.child(palette_overlay(
+            &model,
+            Some("Search notes"),
+            Paint { theme: &theme, marks: &Marks::default() },
+            viewport,
+            None,
+            None,
+            Some(FieldScroll { measure: &measure, offset: &offset }),
+        ));
         root.into_any_element()
     }
 }
@@ -974,6 +1042,8 @@ fn golden_path(view: GoldenView, scheme: Scheme) -> PathBuf {
     let view = match view {
         GoldenView::Sidebar => "sidebar",
         GoldenView::Palette => "palette",
+        GoldenView::LongAddress => "palette-long",
+        GoldenView::LongAddressEnd => "palette-long-end",
     };
     let scheme = if scheme.is_dark() { "dark" } else { "light" };
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -984,14 +1054,18 @@ fn golden_path(view: GoldenView, scheme: Scheme) -> PathBuf {
 const CHANNEL_TOLERANCE: i16 = 24;
 const PIXEL_TOLERANCE: f64 = 0.004;
 
-fn golden(view: GoldenView, scheme: Scheme) -> Result<(), String> {
+fn capture(view: GoldenView, scheme: Scheme) -> Result<image::RgbaImage, String> {
     use gpui::AppContext as _;
     let mut cx = headless();
     let handle = cx
         .open_window(gpui::size(gpui::px(800.), gpui::px(520.)), |_, cx| cx.new(|_| Golden { view, scheme }))
         .map_err(|e| e.to_string())?;
     cx.run_until_parked();
-    let image = cx.capture_screenshot(handle.into()).map_err(|e| e.to_string())?;
+    cx.capture_screenshot(handle.into()).map_err(|e| e.to_string())
+}
+
+fn golden(view: GoldenView, scheme: Scheme) -> Result<(), String> {
+    let image = capture(view, scheme)?;
     let path = golden_path(view, scheme);
     if std::env::var_os("ND_UPDATE_GOLDENS").is_some_and(|v| v == "1") {
         std::fs::create_dir_all(path.parent().expect("dir")).map_err(|e| e.to_string())?;
@@ -1032,6 +1106,11 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let tests: Vec<(&str, fn())> = vec![
         ("gate_m6::gpui_palette_types_completes_and_activates", gate_m6::gpui_palette_types_completes_and_activates),
+        ("gate_m6::gpui_palette_caret_edits_mid_text", gate_m6::gpui_palette_caret_edits_mid_text),
+        (
+            "gate_m6::gpui_palette_long_address_stays_in_its_field",
+            gate_m6::gpui_palette_long_address_stays_in_its_field,
+        ),
         ("gate_m6::gpui_toasts_time_out_in_order", gate_m6::gpui_toasts_time_out_in_order),
         ("gate_m6::gpui_rail_rows_keep_their_artwork", gate_m6::gpui_rail_rows_keep_their_artwork),
         ("gate_m6::gpui_source_row_meter_fills_in_proportion", gate_m6::gpui_source_row_meter_fills_in_proportion),

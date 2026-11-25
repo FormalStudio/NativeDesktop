@@ -6,7 +6,7 @@
 //! The view builders are pure: a model snapshot, a [`Theme`] and optional input handlers in, an
 //! element out. The backend wires the handlers; goldens render the builders as they are.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -17,7 +17,7 @@ use crate::forms::glyph::{Glyph, glyph, turned_glyph};
 use crate::tree_motion::{RISE, Timing, drawer_rows, reveal};
 pub use crate::tree_motion::{TreeFrame, TreeMotion};
 use nd_components::{
-    BANNER, BannerProps, CommandPaletteProps, DecodeRequest, FieldSelection, ImageFit, PALETTE, PaletteKey,
+    BANNER, BannerProps, CaretMove, CommandPaletteProps, DecodeRequest, FieldSelection, ImageFit, PALETTE, PaletteKey,
     PaletteModel, SourceIndex, SourceTreeProps, TOAST, Toast, ToastOverlayProps, ToastQueue,
 };
 use nd_core::{NodeId, WindowId};
@@ -67,12 +67,40 @@ impl Marks {
     }
 }
 
+/// How the drawn field measures its text and remembers how far it is scrolled.
+pub struct FieldScroll<'a> {
+    /// The width of a run of the field's text, in pixels.
+    pub measure: &'a dyn Fn(&str) -> f32,
+    pub offset: &'a Cell<f32>,
+}
+
+/// Measures a run of the palette field's text in the window's font at the field's size.
+pub fn field_measure(window: &gpui::Window) -> impl Fn(&str) -> f32 + use<> {
+    let font = window.text_style().font();
+    let text_system = window.text_system().clone();
+    move |text: &str| {
+        let run = gpui::TextRun {
+            len: text.len(),
+            font: font.clone(),
+            color: gpui::black(),
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        text_system.shape_line(text.to_owned().into(), px(PALETTE.field_font_size), &[run], None).width.as_f32()
+    }
+}
+
 /// Input the drawn palette turns into model calls.
 #[derive(Clone, Debug, PartialEq)]
 pub enum PaletteInput {
     Key(PaletteKey),
     Insert(String),
     Backspace,
+    Delete,
+    /// A caret key; `true` extends the selection (Shift).
+    Caret(CaretMove, bool),
+    SelectAll,
     Click(usize),
     /// A click outside the card.
     Cancel,
@@ -87,18 +115,31 @@ pub type OnAction = Rc<dyn Fn(&mut gpui::App)>;
 pub fn palette_input(keystroke: &Keystroke) -> Option<PaletteInput> {
     let m = &keystroke.modifiers;
     let key = |k| Some(PaletteInput::Key(k));
+    let mac = cfg!(target_os = "macos");
+    // Word moves are Option on macOS and Ctrl elsewhere; Cmd-Left and Cmd-Right go to the ends.
+    let word = if mac { m.alt } else { m.control };
+    let caret = |to| Some(PaletteInput::Caret(to, m.shift));
     match keystroke.key.as_str() {
         "up" => key(PaletteKey::Up),
         "down" => key(PaletteKey::Down),
-        "home" => key(PaletteKey::Home),
-        "end" => key(PaletteKey::End),
+        "pageup" => key(PaletteKey::FirstRow),
+        "pagedown" => key(PaletteKey::LastRow),
+        "home" => caret(CaretMove::Home),
+        "end" => caret(CaretMove::End),
+        "left" if mac && m.platform => caret(CaretMove::Home),
+        "right" if mac && m.platform => caret(CaretMove::End),
+        "left" if word => caret(CaretMove::WordLeft),
+        "right" if word => caret(CaretMove::WordRight),
+        "left" => caret(CaretMove::Left),
+        "right" => caret(CaretMove::Right),
+        "a" if (if mac { m.platform } else { m.control }) && !m.alt && !m.shift => Some(PaletteInput::SelectAll),
         "tab" if m.shift => key(PaletteKey::BackTab),
         "tab" => key(PaletteKey::Tab),
-        "right" => key(PaletteKey::Right),
         "enter" if m.platform || m.control => key(PaletteKey::SecondaryReturn),
         "enter" => key(PaletteKey::Return),
         "escape" => key(PaletteKey::Escape),
         "backspace" => Some(PaletteInput::Backspace),
+        "delete" => Some(PaletteInput::Delete),
         _ if m.control || m.platform => None,
         // A keystroke synthesized from its key name carries no typed character: a one-character
         // key name is that character.
@@ -128,12 +169,13 @@ pub(crate) fn icon_glyph(icon: Option<nd_components::Icon>) -> Option<Glyph> {
 pub fn palette_overlay(
     model: &PaletteModel,
     placeholder: Option<&str>,
-    theme: &Theme,
+    paint: Paint<'_>,
     viewport: gpui::Size<gpui::Pixels>,
     focus: Option<&FocusHandle>,
     on_input: Option<OnInput<PaletteInput>>,
-    marks: &Marks,
+    scroll: Option<FieldScroll<'_>>,
 ) -> AnyElement {
+    let Paint { theme, marks } = paint;
     if !model.is_presented() {
         return div().into_any_element();
     }
@@ -150,6 +192,9 @@ pub fn palette_overlay(
     let field_size = px(m.field_font_size);
     let regular = FontWeight::NORMAL;
 
+    // The field's own width: the card less its border, the glyph's inset, glyph and gap, and
+    // the trailing room.
+    let field_w = (card_w - 2. - m.search_icon_inset - m.search_icon - m.search_icon_gap - m.field_trailing).max(0.);
     let mut field = div()
         .id("nd-palette-field")
         .flex()
@@ -158,6 +203,7 @@ pub fn palette_overlay(
         .min_w_0()
         .flex_1()
         .h(px(line))
+        .overflow_hidden()
         .text_size(px(m.field_font_size));
     let text = model.field_text();
     let selected = [scrim, theme.surface.overlay, theme.selection];
@@ -165,30 +211,58 @@ pub fn palette_overlay(
         // Secondary, not tertiary: a placeholder is read text and needs 4.5:1.
         let placeholder = placeholder.unwrap_or("");
         marks.text(placeholder, theme.text.secondary, &card_under, field_size, regular);
-        field =
-            field.child(caret(theme, line)).child(div().text_color(theme.text.secondary).child(placeholder.to_owned()));
+        field = field
+            .child(caret(theme, line))
+            .child(div().whitespace_nowrap().text_color(theme.text.secondary).child(placeholder.to_owned()));
     } else {
-        match model.selection() {
-            FieldSelection::All => {
-                marks.fill("field selection", theme.selection, &card_under);
-                marks.text(&text, theme.text.primary, &selected, field_size, regular);
-                field = field.child(div().bg(theme.selection).text_color(theme.text.primary).child(text));
-            }
-            FieldSelection::Caret => {
-                marks.text(model.typed(), theme.text.primary, &card_under, field_size, regular);
-                field = field
-                    .child(div().text_color(theme.text.primary).child(model.typed().to_owned()))
-                    .child(caret(theme, line));
-            }
-            FieldSelection::Completion => {
-                marks.text(model.typed(), theme.text.primary, &card_under, field_size, regular);
-                marks.fill("field selection", theme.selection, &card_under);
-                marks.text(model.completion(), theme.text.primary, &selected, field_size, regular);
-                field = field.child(div().text_color(theme.text.primary).child(model.typed().to_owned())).child(
-                    div().bg(theme.selection).text_color(theme.text.primary).child(model.completion().to_owned()),
-                );
-            }
+        let typed = model.typed().len();
+        // The selected bytes, and where the caret is drawn (none over a selection).
+        let (from, to, at) = match model.selection() {
+            FieldSelection::All => (0, text.len(), None),
+            FieldSelection::Caret(at) => (at, at, Some(at)),
+            FieldSelection::Range(from, to) => (from, to, None),
+            FieldSelection::Completion => (typed, text.len(), None),
+        };
+        // Select-all shows the start, as Chrome and Arc do; otherwise the caret's end stays in
+        // view, moving the text only as far as it has to.
+        let offset = scroll.map_or(0., |scroll| {
+            let follow = match model.selection() {
+                FieldSelection::All => None,
+                FieldSelection::Completion => Some(text.len()),
+                _ => Some(model.caret()),
+            };
+            let room = (field_w - 2.).max(0.);
+            let max = ((scroll.measure)(&text) - room).max(0.);
+            let next = match follow {
+                None => 0.,
+                Some(at) => {
+                    let x = (scroll.measure)(&text[..at]);
+                    scroll.offset.get().max(x - room).min(x)
+                }
+            };
+            let next = next.clamp(0., max);
+            scroll.offset.set(next);
+            next
+        });
+        let piece = |part: &str| div().whitespace_nowrap().text_color(theme.text.primary).child(part.to_owned());
+        let mut run = div().flex().flex_row().flex_none().items_center().ml(px(-offset));
+        if from > 0 {
+            marks.text(&text[..from], theme.text.primary, &card_under, field_size, regular);
+            run = run.child(piece(&text[..from]));
         }
+        if at.is_some() {
+            run = run.child(caret(theme, line));
+        }
+        if to > from {
+            marks.fill("field selection", theme.selection, &card_under);
+            marks.text(&text[from..to], theme.text.primary, &selected, field_size, regular);
+            run = run.child(piece(&text[from..to]).bg(theme.selection));
+        }
+        if to < text.len() {
+            marks.text(&text[to..], theme.text.primary, &card_under, field_size, regular);
+            run = run.child(piece(&text[to..]));
+        }
+        field = field.child(run);
     }
 
     let mut list = div()
@@ -1597,6 +1671,9 @@ pub(crate) struct PaletteDrawn {
     /// Where focus was before the palette took it.
     pub previous: Option<FocusHandle>,
     pub applied: Option<CommandPaletteProps>,
+    /// How far the field's text is scrolled left, kept between frames so the caret only moves
+    /// it as far as it has to.
+    pub scroll: Cell<f32>,
 }
 
 #[derive(Default)]
@@ -1816,6 +1893,7 @@ impl GpuiBackend {
                     focus: cx.focus_handle(),
                     previous: None,
                     applied: None,
+                    scroll: Cell::new(0.),
                 })))
             })
             .clone();
@@ -1969,6 +2047,9 @@ impl Build<'_> {
                         PaletteInput::Key(key) => p.model.key(key).unwrap_or_default(),
                         PaletteInput::Insert(text) => p.model.insert(&text),
                         PaletteInput::Backspace => p.model.backspace(),
+                        PaletteInput::Delete => p.model.delete_forward(),
+                        PaletteInput::Caret(to, extend) => p.model.move_caret(to, extend),
+                        PaletteInput::SelectAll => p.model.select_all_text(),
                         PaletteInput::Click(i) => p.model.click(i),
                         PaletteInput::Cancel => p.model.dismiss(false).into_iter().collect(),
                     };
@@ -1987,14 +2068,15 @@ impl Build<'_> {
                 }
                 window.refresh();
             });
+            let measure = field_measure(window);
             let overlay = palette_overlay(
                 &p.model,
                 props.placeholder.as_deref(),
-                theme,
+                Paint { theme, marks },
                 window.viewport_size(),
                 Some(&p.focus),
                 Some(on_input),
-                marks,
+                Some(FieldScroll { measure: &measure, offset: &p.scroll }),
             );
             return Some(div().absolute().size_0().child(overlay).into_any_element());
         }

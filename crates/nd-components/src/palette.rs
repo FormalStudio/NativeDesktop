@@ -17,6 +17,7 @@ use nd_core::semantic::Role;
 use nd_ui::prelude::*;
 use nd_ui::semantics::{SemanticAction, SemanticPart, Semantics, WidgetSemantics};
 use nd_ui::{Key, NativeElement, StyleRefinement};
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::icon::Icon;
 
@@ -315,8 +316,10 @@ impl IntoElement for CommandPalette {
 pub enum PaletteKey {
     Up,
     Down,
-    Home,
-    End,
+    /// The first row (Page Up, or AppKit's move to the beginning of the document).
+    FirstRow,
+    /// The last row.
+    LastRow,
     Tab,
     BackTab,
     /// Right arrow or end of line: accepts a shown completion, otherwise moves the caret.
@@ -341,10 +344,25 @@ pub enum PaletteEvent {
 pub enum FieldSelection {
     /// The whole text, as a fresh present or a reseed leaves it.
     All,
-    /// Caret at the end of the text.
-    Caret,
+    /// A caret at this byte offset of the typed text.
+    Caret(usize),
+    /// The typed text's bytes from the first offset to the second, selected.
+    Range(usize, usize),
     /// The completion after the typed text.
     Completion,
+}
+
+/// Where a caret key moves the caret in a drawn field.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CaretMove {
+    Left,
+    Right,
+    /// The start of the previous word: Option-Left on macOS, Ctrl-Left elsewhere.
+    WordLeft,
+    /// The end of the next word.
+    WordRight,
+    Home,
+    End,
 }
 
 /// The palette's behaviour, backend-neutral. Feed it the app's props and the user's input; read
@@ -370,7 +388,11 @@ pub struct PaletteModel {
     may_complete: bool,
     highlight: Option<usize>,
     presented: bool,
-    select_all: bool,
+    /// The selection in `typed` as byte offsets on grapheme boundaries: it runs from `anchor`
+    /// to `caret`, and is empty when they are equal. A native field keeps its own and leaves
+    /// these at the end of the text.
+    anchor: usize,
+    caret: usize,
 }
 
 impl PaletteModel {
@@ -391,6 +413,11 @@ impl PaletteModel {
         &self.typed
     }
 
+    /// Where the caret is in the typed text, a byte offset.
+    pub fn caret(&self) -> usize {
+        self.caret
+    }
+
     /// The completion shown after the typed text, empty when none.
     pub fn completion(&self) -> &str {
         &self.suffix
@@ -402,13 +429,26 @@ impl PaletteModel {
     }
 
     pub fn selection(&self) -> FieldSelection {
-        if self.select_all {
-            FieldSelection::All
-        } else if self.suffix.is_empty() {
-            FieldSelection::Caret
-        } else {
+        let (start, end) = self.selected();
+        if !self.suffix.is_empty() {
             FieldSelection::Completion
+        } else if start == end {
+            FieldSelection::Caret(self.caret)
+        } else if start == 0 && end == self.typed.len() {
+            FieldSelection::All
+        } else {
+            FieldSelection::Range(start, end)
         }
+    }
+
+    /// The selected bytes of the typed text, start first.
+    fn selected(&self) -> (usize, usize) {
+        (self.anchor.min(self.caret), self.anchor.max(self.caret))
+    }
+
+    fn select_all(&mut self) {
+        self.anchor = 0;
+        self.caret = self.typed.len();
     }
 
     /// The app's `query`. Returns true when the field must be reseeded with it (and its text
@@ -430,7 +470,7 @@ impl PaletteModel {
         self.typed = query.to_string();
         self.suffix.clear();
         self.may_complete = false;
-        self.select_all = true;
+        self.select_all();
         true
     }
 
@@ -464,7 +504,7 @@ impl PaletteModel {
         self.unechoed.clear();
         self.suffix.clear();
         self.may_complete = false;
-        self.select_all = true;
+        self.select_all();
         self.highlight = (!self.rows.is_empty()).then_some(0);
         true
     }
@@ -477,44 +517,99 @@ impl PaletteModel {
         }
         self.presented = false;
         self.suffix.clear();
-        self.select_all = false;
+        self.caret = self.typed.len();
+        self.anchor = self.caret;
         (!programmatic).then_some(PaletteEvent::Cancelled)
     }
 
-    /// The field's text after a user edit (a keystroke, a paste, automation typing).
+    /// The field's text after a user edit in a native field (a keystroke, a paste, automation
+    /// typing), with its caret at the end.
     pub fn edited(&mut self, text: &str) -> Vec<PaletteEvent> {
-        self.may_complete = text.chars().count() > self.typed.chars().count();
-        self.typed = text.to_owned();
+        self.edit(text.to_owned(), text.len())
+    }
+
+    /// The text after an edit and where the caret sits in it. A completion shows only after an
+    /// insertion that leaves the caret at the end.
+    fn edit(&mut self, text: String, caret: usize) -> Vec<PaletteEvent> {
+        self.may_complete = caret == text.len() && text.chars().count() > self.typed.chars().count();
+        self.typed = text;
+        self.caret = caret;
+        self.anchor = caret;
         self.suffix.clear();
-        self.select_all = false;
-        self.native_query = Some(text.into());
-        self.unechoed.push(text.to_owned().into());
-        let events = vec![PaletteEvent::QueryChanged(text.to_owned().into())];
+        self.native_query = Some(self.typed.clone().into());
+        self.unechoed.push(self.typed.clone().into());
+        let events = vec![PaletteEvent::QueryChanged(self.typed.clone().into())];
         self.apply_completion();
         events
     }
 
-    /// Characters typed where the field's selection is. For backends whose field is drawn.
+    /// Characters typed over the selection, or at the caret. For backends whose field is drawn.
     pub fn insert(&mut self, text: &str) -> Vec<PaletteEvent> {
-        let base = if self.select_all { String::new() } else { self.typed.clone() };
-        self.edited(&format!("{base}{text}"))
+        let (start, end) = self.selected();
+        let next = format!("{}{text}{}", &self.typed[..start], &self.typed[end..]);
+        self.edit(next, start + text.len())
     }
 
-    /// Backspace in a drawn field: removes the selection, or the last character.
+    /// Backspace in a drawn field: removes the selection, a shown completion, or the grapheme
+    /// before the caret.
     pub fn backspace(&mut self) -> Vec<PaletteEvent> {
-        let next = if self.select_all {
-            String::new()
-        } else if !self.suffix.is_empty() {
-            self.typed.clone()
-        } else {
-            let mut t = self.typed.clone();
-            t.pop();
-            t
-        };
-        if next == self.typed && self.suffix.is_empty() && !self.select_all {
+        self.delete(|m| prev_grapheme(&m.typed, m.caret))
+    }
+
+    /// Forward delete in a drawn field: the selection, a shown completion, or the grapheme after
+    /// the caret.
+    pub fn delete_forward(&mut self) -> Vec<PaletteEvent> {
+        self.delete(|m| next_grapheme(&m.typed, m.caret))
+    }
+
+    fn delete(&mut self, to: impl Fn(&Self) -> usize) -> Vec<PaletteEvent> {
+        if !self.suffix.is_empty() {
+            return self.edit(self.typed.clone(), self.typed.len());
+        }
+        let (mut start, mut end) = self.selected();
+        if start == end {
+            let other = to(self);
+            (start, end) = (start.min(other), start.max(other));
+        }
+        if start == end {
             return Vec::new();
         }
-        self.edited(&next)
+        let next = format!("{}{}", &self.typed[..start], &self.typed[end..]);
+        self.edit(next, start)
+    }
+
+    /// Moves the caret in a drawn field, or extends the selection with Shift. A shown
+    /// completion is taken first, as AppKit's field keeps the selected text a key moves off.
+    pub fn move_caret(&mut self, to: CaretMove, extend: bool) -> Vec<PaletteEvent> {
+        let mut events = Vec::new();
+        if !self.suffix.is_empty() {
+            let from = self.typed.len();
+            events = self.accept_completion().unwrap_or_default();
+            self.anchor = from;
+        }
+        let (start, end) = self.selected();
+        let target = match to {
+            CaretMove::Left if !extend && start != end => start,
+            CaretMove::Right if !extend && start != end => end,
+            CaretMove::Left => prev_grapheme(&self.typed, self.caret),
+            CaretMove::Right => next_grapheme(&self.typed, self.caret),
+            CaretMove::WordLeft => word_left(&self.typed, self.caret),
+            CaretMove::WordRight => word_right(&self.typed, self.caret),
+            CaretMove::Home => 0,
+            CaretMove::End => self.typed.len(),
+        };
+        self.caret = target;
+        if !extend {
+            self.anchor = target;
+        }
+        events
+    }
+
+    /// Selects the whole text (Cmd+A, Ctrl+A).
+    pub fn select_all_text(&mut self) -> Vec<PaletteEvent> {
+        let events = self.accept_completion().unwrap_or_default();
+        self.select_all();
+        events
     }
 
     /// A key the field handles itself. Returns `None` when the key is not the palette's (the
@@ -524,12 +619,12 @@ impl PaletteModel {
         match key {
             PaletteKey::Up => self.move_highlight(-1),
             PaletteKey::Down => self.move_highlight(1),
-            PaletteKey::Home => {
+            PaletteKey::FirstRow => {
                 if !self.rows.is_empty() {
                     self.highlight = Some(0);
                 }
             }
-            PaletteKey::End => {
+            PaletteKey::LastRow => {
                 if !self.rows.is_empty() {
                     self.highlight = Some(self.rows.len() - 1);
                 }
@@ -601,7 +696,8 @@ impl PaletteModel {
         self.typed.push_str(&self.suffix);
         self.suffix.clear();
         self.may_complete = false;
-        self.select_all = false;
+        self.caret = self.typed.len();
+        self.anchor = self.caret;
         self.native_query = Some(self.typed.clone().into());
         self.unechoed.push(self.typed.clone().into());
         Some(vec![PaletteEvent::QueryChanged(self.typed.clone().into())])
@@ -623,6 +719,27 @@ impl PaletteModel {
             None => vec![self.submit()],
         }
     }
+}
+
+fn prev_grapheme(text: &str, at: usize) -> usize {
+    text[..at].grapheme_indices(true).next_back().map_or(0, |(i, _)| i)
+}
+
+fn next_grapheme(text: &str, at: usize) -> usize {
+    text[at..].graphemes(true).next().map_or(at, |g| at + g.len())
+}
+
+/// Words as AppKit's word moves see them: runs holding a letter or digit.
+fn words(text: &str) -> impl DoubleEndedIterator<Item = (usize, usize)> + '_ {
+    text.split_word_bound_indices().filter(|(_, w)| w.chars().any(char::is_alphanumeric)).map(|(i, w)| (i, i + w.len()))
+}
+
+fn word_left(text: &str, at: usize) -> usize {
+    words(text).rev().find(|(start, _)| *start < at).map_or(0, |(start, _)| start)
+}
+
+fn word_right(text: &str, at: usize) -> usize {
+    words(text).find(|(_, end)| *end > at).map_or(text.len(), |(_, end)| end)
 }
 
 /// Sends a model event to the app as the matching typed event.
@@ -664,6 +781,113 @@ mod tests {
         assert_eq!(m.selection(), FieldSelection::All);
     }
 
+    fn typed(text: &str) -> PaletteModel {
+        let mut m = open(rows(&["a"]), "");
+        m.insert(text);
+        m
+    }
+
+    #[test]
+    fn the_caret_moves_and_inserts_mid_text() {
+        let mut m = typed("example.com/path");
+        for _ in 0..5 {
+            m.move_caret(CaretMove::Left, false);
+        }
+        assert_eq!(m.selection(), FieldSelection::Caret(11));
+        m.insert(":8080");
+        assert_eq!(m.field_text(), "example.com:8080/path");
+        assert_eq!(m.selection(), FieldSelection::Caret(16));
+        assert_eq!(m.completion(), "", "no completion with the caret mid text");
+        m.move_caret(CaretMove::Home, false);
+        m.insert("https://");
+        assert_eq!(m.field_text(), "https://example.com:8080/path");
+        m.move_caret(CaretMove::End, false);
+        assert_eq!(m.selection(), FieldSelection::Caret(m.typed().len()));
+    }
+
+    #[test]
+    fn shift_extends_and_an_edit_replaces_the_selection() {
+        let mut m = typed("hello world");
+        m.move_caret(CaretMove::WordLeft, true);
+        assert_eq!(m.selection(), FieldSelection::Range(6, 11));
+        m.insert("there");
+        assert_eq!(m.field_text(), "hello there");
+        m.move_caret(CaretMove::Home, true);
+        assert_eq!(m.selection(), FieldSelection::All);
+        m.backspace();
+        assert_eq!(m.field_text(), "");
+        assert!(m.backspace().is_empty(), "nothing to delete reports nothing");
+    }
+
+    #[test]
+    fn left_and_right_collapse_a_selection_to_its_ends() {
+        let mut m = typed("abcdef");
+        m.move_caret(CaretMove::Left, false);
+        m.move_caret(CaretMove::Left, true);
+        m.move_caret(CaretMove::Left, true);
+        assert_eq!(m.selection(), FieldSelection::Range(3, 5));
+        m.move_caret(CaretMove::Right, false);
+        assert_eq!(m.selection(), FieldSelection::Caret(5));
+        m.move_caret(CaretMove::Left, true);
+        m.move_caret(CaretMove::Left, false);
+        assert_eq!(m.selection(), FieldSelection::Caret(4));
+    }
+
+    #[test]
+    fn the_caret_steps_over_whole_graphemes() {
+        let mut m = typed("ae\u{301}\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}b");
+        m.move_caret(CaretMove::Left, false);
+        m.move_caret(CaretMove::Left, false);
+        m.backspace();
+        assert_eq!(m.field_text(), "a\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}b", "the accented e whole");
+        m.delete_forward();
+        assert_eq!(m.field_text(), "ab", "the family emoji at once");
+        m.move_caret(CaretMove::Right, false);
+        m.move_caret(CaretMove::Right, false);
+        assert_eq!(m.selection(), FieldSelection::Caret(2), "the caret stops at the end");
+    }
+
+    #[test]
+    fn right_to_left_and_cjk_text_edit_without_panicking() {
+        let mut m = typed("\u{645}\u{631}\u{62d}\u{628}\u{627} \u{4f60}\u{597d}");
+        for to in [CaretMove::WordLeft, CaretMove::Left, CaretMove::WordRight, CaretMove::Home, CaretMove::Right] {
+            m.move_caret(to, false);
+            m.move_caret(to, true);
+            m.insert("x");
+            m.backspace();
+            m.delete_forward();
+        }
+        if let FieldSelection::Caret(at) = m.selection() {
+            assert!(m.typed().is_char_boundary(at));
+        }
+    }
+
+    #[test]
+    fn a_caret_key_over_a_completion_takes_it_where_appkit_does() {
+        let mut items = rows(&["first"]);
+        items[0].completion = Some("example.com".into());
+        let mut m = open(items, "");
+        m.insert("ex");
+        assert_eq!(m.completion(), "ample.com");
+        let events = m.move_caret(CaretMove::Left, false);
+        assert_eq!(events, vec![PaletteEvent::QueryChanged("example.com".into())]);
+        assert_eq!(m.selection(), FieldSelection::Caret(2), "Left lands where the completion began");
+        m.move_caret(CaretMove::End, false);
+        m.insert("/");
+        assert_eq!(m.field_text(), "example.com/");
+    }
+
+    #[test]
+    fn page_keys_move_the_highlight_not_the_caret() {
+        let mut m = open(rows(&["a", "b", "c"]), "");
+        m.insert("q");
+        m.key(PaletteKey::LastRow);
+        assert_eq!(m.highlight(), Some(2));
+        m.key(PaletteKey::FirstRow);
+        assert_eq!(m.highlight(), Some(0));
+        assert_eq!(m.selection(), FieldSelection::Caret(1));
+    }
+
     #[test]
     fn present_starts_from_the_last_query_with_everything_selected() {
         let mut m = open(rows(&["a", "b"]), "hello");
@@ -685,9 +909,9 @@ mod tests {
         m.key(PaletteKey::Down);
         m.key(PaletteKey::Down);
         assert_eq!(m.highlight(), Some(2));
-        m.key(PaletteKey::Home);
+        m.key(PaletteKey::FirstRow);
         assert_eq!(m.highlight(), Some(0));
-        m.key(PaletteKey::End);
+        m.key(PaletteKey::LastRow);
         assert_eq!(m.highlight(), Some(2));
     }
 

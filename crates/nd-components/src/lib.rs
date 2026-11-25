@@ -49,7 +49,7 @@ pub use media::*;
 pub use menu::{ContextMenu, ContextMenuRequested, Menu, MenuItem, MenuKind, MenuRole, primary_menu_items};
 pub use overrides::{HasScope, OnPlatform, Pattern, Patterns, ScopedContainer, SubtreeOverrides, SubtreeScope};
 pub use palette::{
-    CommandPalette, CommandPaletteKind, CommandPaletteProps, FieldSelection, PALETTE, PaletteActivated,
+    CaretMove, CommandPalette, CommandPaletteKind, CommandPaletteProps, FieldSelection, PALETTE, PaletteActivated,
     PaletteCancelled, PaletteEvent, PaletteItem, PaletteKey, PaletteMetrics, PaletteModel, PaletteQueryChanged,
     PaletteSubmitted, command_palette, emit_palette_event, palette_item,
 };

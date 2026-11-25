@@ -382,9 +382,9 @@ impl NdPaletteSource {
         } else if command == sel!(moveDown:) {
             PaletteKey::Down
         } else if command == sel!(moveToBeginningOfDocument:) {
-            PaletteKey::Home
+            PaletteKey::FirstRow
         } else if command == sel!(moveToEndOfDocument:) {
-            PaletteKey::End
+            PaletteKey::LastRow
         } else if command == sel!(insertTab:) {
             PaletteKey::Tab
         } else if command == sel!(insertBacktab:) {
@@ -857,8 +857,8 @@ impl Palette {
         match selection {
             FieldSelection::All => editor.setSelectedRange(NSRange::new(0, utf16(&text))),
             FieldSelection::Completion => editor.setSelectedRange(NSRange::new(typed, suffix)),
-            FieldSelection::Caret if caret_to_end => editor.setSelectedRange(NSRange::new(typed, 0)),
-            FieldSelection::Caret => {}
+            FieldSelection::Caret(_) if caret_to_end => editor.setSelectedRange(NSRange::new(typed, 0)),
+            FieldSelection::Caret(_) | FieldSelection::Range(..) => {}
         }
     }
 
