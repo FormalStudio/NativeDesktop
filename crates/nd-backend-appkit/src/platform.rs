@@ -36,6 +36,23 @@ define_class!(
             crate::app_host::app_will_quit();
         }
 
+        // Activation is cooperative since macOS 14: a process launched from the background has
+        // its activation refused when its windows show, so their makeKeyAndOrderFront leaves no
+        // key window, and AppKit picks none when the app is brought forward later.
+        #[unsafe(method(applicationDidBecomeActive:))]
+        fn did_become_active(&self, _notification: &objc2_foundation::NSNotification) {
+            let app = NSApplication::sharedApplication(self.mtm());
+            if app.keyWindow().is_some() {
+                return;
+            }
+            // nd's own windows only: Chromium's anchor windows can become key too.
+            let windows = app.orderedWindows();
+            let front = windows.iter().find(|w| w.isVisible() && w.downcast_ref::<NdWindow>().is_some());
+            if let Some(window) = front {
+                window.makeKeyWindow();
+            }
+        }
+
         // Light-dismiss overlays close when the app loses activation (ARCHITECTURE.md 6.3).
         #[unsafe(method(applicationDidResignActive:))]
         fn did_resign_active(&self, _notification: &objc2_foundation::NSNotification) {

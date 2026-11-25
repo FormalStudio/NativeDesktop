@@ -1884,6 +1884,10 @@ impl Backend for AppKitBackend {
                     group.setSelectedWindow(Some(&ns));
                 }
                 ns.makeKeyAndOrderFront(None);
+                // Key only counts in the active app; an inactive one keeps it for later.
+                #[allow(deprecated)]
+                objc2_app_kit::NSApplication::sharedApplication(MainThreadMarker::from(&*ns))
+                    .activateIgnoringOtherApps(true);
             }
             nd_ui::backend::WindowCommand::ToggleTabOverview => ns.toggleTabOverview(None),
             nd_ui::backend::WindowCommand::ToggleSidebar => {
