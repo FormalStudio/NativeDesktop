@@ -75,8 +75,13 @@ pub(crate) fn settings() -> Result<Settings, String> {
     let framework = framework_dir().ok_or(MISSING)?;
     let (subprocess, main_bundle) = match bundle_contents() {
         Some(contents) => {
-            let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-            let name = exe.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            // `nd package` names the helpers after the bundle's display name, which can differ
+            // from the executable's (`Lynk Browser Helper.app` beside `MacOS/lynk`).
+            let name = objc2_foundation::NSBundle::mainBundle()
+                .objectForInfoDictionaryKey(&objc2_foundation::NSString::from_str("CFBundleName"))
+                .and_then(|v| v.downcast::<objc2_foundation::NSString>().ok())
+                .map(|v| v.to_string())
+                .ok_or("the app bundle's Info.plist has no CFBundleName")?;
             let helper = format!("{name} Helper");
             let path = contents.join("Frameworks").join(format!("{helper}.app/Contents/MacOS/{helper}"));
             (path, contents.parent().map(Path::to_owned))
