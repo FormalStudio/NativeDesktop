@@ -1128,9 +1128,22 @@ impl Inner {
                     if deferred {
                         window.request_animation_frame();
                     } else {
+                        let opened = app.window(id).is_some_and(|w| w.viewport_size().width > 0.);
                         app.resize_window(id, size);
                         if let Some(w) = self.windows.borrow_mut().get_mut(&id) {
                             w.resized = Some(started);
+                        }
+                        // A resize is a frame change too, and gpui's bounds observer runs before
+                        // the new size reaches the tree here; the window's first size is none.
+                        if opened {
+                            let weak = Rc::downgrade(self);
+                            cx.defer(move |cx| {
+                                let Some(inner) = weak.upgrade() else { return };
+                                if let Ok(mut app) = inner.app.try_borrow_mut() {
+                                    app.window_frame_changed(id, None);
+                                }
+                                inner.pump(cx);
+                            });
                         }
                         if self.debug.diag {
                             eprintln!("nd: viewport {}x{}", size.width, size.height);
