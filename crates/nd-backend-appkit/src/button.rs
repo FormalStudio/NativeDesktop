@@ -14,9 +14,12 @@ use objc2::runtime::AnyObject;
 use objc2::runtime::Sel;
 use objc2::{DefinedClass, MainThreadOnly, define_class, msg_send, sel};
 use objc2_app_kit::{
-    NSBezelStyle, NSButton, NSCellImagePosition, NSColor, NSFont, NSFontAttributeName, NSForegroundColorAttributeName,
+    NSBezelStyle, NSBezierPath, NSButton, NSCellImagePosition, NSColor, NSControl, NSFont, NSFontAttributeName,
+    NSForegroundColorAttributeName, NSResponder, NSView,
 };
-use objc2_foundation::{MainThreadMarker, NSAttributedString, NSDictionary, NSObject, NSObjectProtocol, NSString};
+use objc2_foundation::{
+    MainThreadMarker, NSAttributedString, NSDictionary, NSObject, NSObjectProtocol, NSRect, NSString,
+};
 
 use crate::events::Wake;
 use crate::look::{Color, ns_font};
@@ -44,6 +47,45 @@ define_class!(
     }
 );
 
+#[derive(Default)]
+pub struct NdButtonIvars {
+    /// No bezel: the focus ring goes round the button's rounded bounds.
+    borderless: Cell<bool>,
+}
+
+define_class!(
+    // SAFETY: the subclass overrides the focus ring mask methods (falling back to super) and does
+    // not implement Drop.
+    #[unsafe(super(NSButton, NSControl, NSView, NSResponder))]
+    #[thread_kind = MainThreadOnly]
+    #[ivars = NdButtonIvars]
+    pub struct NdButton;
+
+    impl NdButton {
+        // AppKit takes a borderless image button's ring from its template image, so the ring
+        // traces the glyph's strokes inside and out. The button's own capsule replaces it, the
+        // shape an on toggle's circle has.
+        #[unsafe(method(focusRingMaskBounds))]
+        fn focus_ring_mask_bounds(&self) -> NSRect {
+            if self.ivars().borderless.get() {
+                self.bounds()
+            } else {
+                unsafe { msg_send![super(self), focusRingMaskBounds] }
+            }
+        }
+
+        #[unsafe(method(drawFocusRingMask))]
+        fn draw_focus_ring_mask(&self) {
+            if !self.ivars().borderless.get() {
+                return unsafe { msg_send![super(self), drawFocusRingMask] };
+            }
+            let bounds = self.bounds();
+            let radius = bounds.size.width.min(bounds.size.height) / 2.;
+            NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(bounds, radius, radius).fill();
+        }
+    }
+);
+
 /// The accent's opacity in the circle behind an on toggle.
 const TOGGLE_FILL: f64 = 0.18;
 
@@ -53,7 +95,7 @@ thread_local! {
 
 /// An `NSButton` and its target, which AppKit holds weakly.
 pub(crate) struct NativeButtonView {
-    pub button: Retained<NSButton>,
+    pub button: Retained<NdButton>,
     target: Retained<NdButtonTarget>,
     props: RefCell<ButtonProps>,
     /// The accent a theme override sets for the button's subtree.
@@ -64,14 +106,14 @@ impl NativeButtonView {
     pub fn new(mtm: MainThreadMarker, emit: Emit, wake: Wake, props: &ButtonProps) -> Self {
         let target = NdButtonTarget::alloc(mtm).set_ivars(TargetIvars { emit, wake });
         let target: Retained<NdButtonTarget> = unsafe { msg_send![super(target), init] };
-        let button = unsafe {
-            NSButton::buttonWithTitle_target_action(
-                &NSString::from_str(&props.label),
-                Some(&target),
-                Some(sel!(press:)),
-                mtm,
-            )
-        };
+        let button = NdButton::alloc(mtm).set_ivars(NdButtonIvars::default());
+        let button: Retained<NdButton> = unsafe { msg_send![super(button), initWithFrame: NSRect::ZERO] };
+        // What `buttonWithTitle:target:action:` sets up: a push button sending `press:`.
+        button.setBezelStyle(NSBezelStyle::Push);
+        unsafe {
+            button.setTarget(Some(&target));
+            button.setAction(Some(sel!(press:)));
+        }
         let this = Self { button, target, props: RefCell::new(props.clone()), accent: Cell::new(None) };
         this.apply(None, props);
         this
@@ -191,6 +233,9 @@ impl NativeButtonView {
         // borderless icon button is the accent glyph (Messages' send arrow).
         let plain = props.bezel == Bezel::Plain;
         let borderless = (props.bezel == Bezel::Borderless || plain) && props.label.is_empty();
+        if self.button.ivars().borderless.replace(borderless) != borderless {
+            self.button.noteFocusRingMaskChanged();
+        }
         // A toggle draws its glyph in the accent when on and, unless plain, secondary when off, as
         // Music's repeat and shuffle do; an on borderless icon toggle also sits in a tinted circle.
         let accent = || match self.accent.get() {
@@ -238,6 +283,9 @@ impl NativeButtonView {
         if let Some(layer) = self.button.layer() {
             let size = self.button.frame().size;
             layer.setCornerRadius(size.width.min(size.height) / 2.);
+        }
+        if self.button.ivars().borderless.get() {
+            self.button.noteFocusRingMaskChanged();
         }
     }
 
