@@ -19,6 +19,8 @@
 //! - `real_pip_cef_chrome`: a page's own `requestPictureInPicture` is refused for want of a
 //!   gesture; nativebrowser's floating video script through `execute_javascript` lifts the
 //!   playing video into Chromium's picture-in-picture window and back.
+//! - `real_keys_survive_a_new_page_cef_chrome`: keys typed into a native field while a
+//!   Chrome-style page is created, and Chromium activates its window, all reach the field.
 //! - `real_print_*`: `print_to_pdf` writes a PDF, and `print` opens the system print panel
 //!   (WebKit and Chrome style; an off-screen page has no window for the panel).
 //!
@@ -423,5 +425,39 @@ mod gate_m8_webview {
         if real_allowed("real_overlay_leak_cef_chrome") {
             overlay_leak("cef-chrome");
         }
+    }
+
+    /// The field's first keystroke mounts the page. Typing goes on, a key every 8 ms or so for
+    /// 2.4 s: through Chromium creating the page's window and activating it, within 200 ms of the
+    /// page's creation and after.
+    #[test]
+    fn real_keys_survive_a_new_page_cef_chrome() {
+        if !real_allowed("real_keys_survive_a_new_page_cef_chrome") {
+            return;
+        }
+        if let Err(e) = ndshell::preflight::real_input() {
+            panic!("{e}");
+        }
+        let mut options = browser("cef-chrome", "keys");
+        options.ready_timeout = Duration::from_secs(60);
+        let app = launch_app(options).expect("launch browser");
+        let sc = Scene { app: &app };
+        input::activate(app.pid());
+        sc.wait("the window to be key", |sc| sc.window().key);
+        input::click(sc.area("field").expect("field bounds").at(0.5, 0.5));
+        sc.wait("the field to have the keyboard", |sc| find(&sc.window().root, "field").is_some_and(|n| n.focused));
+        let node = |id: &str| find(&sc.window().root, id).cloned();
+        // Nothing here waits on the app while the keys go in, so they keep coming while its main
+        // thread is busy, as a person's do.
+        let typed: String = "abcdefghijklmnopqrstuvwxyz0123456789".chars().cycle().take(300).collect();
+        input::type_text(&typed);
+        sc.wait("the page to load", |_| node("web").is_some_and(|n| n.name.starts_with("page")));
+        let field = || node("field").and_then(|n| n.value).unwrap_or_default();
+        let start = Instant::now();
+        while field() != typed && start.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let page = node("web").map(|n| n.name).unwrap_or_default();
+        assert_eq!(field(), typed, "keys typed while the page came up went elsewhere; the page's title {page:?}");
     }
 }

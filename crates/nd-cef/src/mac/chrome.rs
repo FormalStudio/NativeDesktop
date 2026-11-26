@@ -23,10 +23,11 @@ use objc2::rc::{Retained, Weak};
 use objc2::runtime::{AnyObject, NSObjectProtocol, ProtocolObject};
 use objc2::{MainThreadOnly, Message, msg_send};
 use objc2_app_kit::{
-    NSView, NSWindow, NSWindowAnimationBehavior, NSWindowCollectionBehavior, NSWindowDidBecomeKeyNotification,
-    NSWindowDidChangeScreenNotification, NSWindowDidDeminiaturizeNotification, NSWindowDidEndLiveResizeNotification,
-    NSWindowDidEnterFullScreenNotification, NSWindowDidExitFullScreenNotification, NSWindowDidMoveNotification,
-    NSWindowDidResizeNotification, NSWindowOrderingMode,
+    NSApplication, NSEvent, NSEventMask, NSView, NSWindow, NSWindowAnimationBehavior, NSWindowCollectionBehavior,
+    NSWindowDidBecomeKeyNotification, NSWindowDidChangeScreenNotification, NSWindowDidDeminiaturizeNotification,
+    NSWindowDidEndLiveResizeNotification, NSWindowDidEnterFullScreenNotification,
+    NSWindowDidExitFullScreenNotification, NSWindowDidMoveNotification, NSWindowDidResizeNotification,
+    NSWindowOrderingMode,
 };
 use objc2_foundation::{
     NSNotification, NSNotificationCenter, NSPoint, NSRect, NSRunLoop, NSRunLoopCommonModes, NSTimer,
@@ -92,6 +93,8 @@ thread_local! {
     /// when Chromium takes it for an anchor. Watched from the first anchor on.
     static LAST_KEY: RefCell<Weak<NSWindow>> = RefCell::default();
     static LAST_KEY_WATCH: RefCell<Option<Observer>> = const { RefCell::new(None) };
+    /// Redirects keys that reach an anchor, installed with [`LAST_KEY_WATCH`].
+    static ANCHOR_KEYS: RefCell<Option<Retained<AnyObject>>> = const { RefCell::new(None) };
 }
 
 impl Chrome {
@@ -688,7 +691,34 @@ fn watch_last_key() {
             )
         };
         *watch.borrow_mut() = Some(observer);
+        redirect_anchor_keys();
     });
+}
+
+/// A key that arrives while an anchor is key, in the turn before [`key_back`] hands key back,
+/// goes where key goes back to, now and as it came: Chromium's window would take Cmd+L and the
+/// like as its own accelerators and drop typed text. Refusing key on the anchor is not an option
+/// (see [`Chrome::observe`]), and handing key back from the notification itself does not hold.
+fn redirect_anchor_keys() {
+    let block = RcBlock::new(|event: NonNull<NSEvent>| -> *mut NSEvent {
+        let pass = event.as_ptr();
+        let event = unsafe { event.as_ref() };
+        let Some(mtm) = objc2::MainThreadMarker::new() else { return pass };
+        let Some(anchor) = event.window(mtm).filter(|w| w.ignoresMouseEvents() && w.isKeyWindow()) else {
+            return pass;
+        };
+        let before = LAST_KEY.with(|k| k.borrow().load()).filter(|w| w.isVisible() && w.canBecomeKeyWindow());
+        let Some(target) = before.or_else(app_window).filter(|w| **w != *anchor) else { return pass };
+        target.makeKeyWindow();
+        // The application routes a key to its key window, menu key equivalents included, and the
+        // original event keeps what input methods and dead keys read from it.
+        NSApplication::sharedApplication(mtm).sendEvent(event);
+        std::ptr::null_mut()
+    });
+    let monitor = unsafe {
+        NSEvent::addLocalMonitorForEventsMatchingMask_handler(NSEventMask::KeyDown | NSEventMask::KeyUp, &block)
+    };
+    ANCHOR_KEYS.with(|m| *m.borrow_mut() = monitor);
 }
 
 #[derive(Debug, PartialEq)]

@@ -904,6 +904,16 @@ wrap_focus_handler! {
         fn on_take_focus(&self, _browser: Option<&mut Browser>, next: c_int) {
             with(self.id, |p| p.take_focus(next != 0));
         }
+
+        /// A Chrome-style page focuses itself when it is created and when it navigates, taking
+        /// the window's first responder from wherever the app had put the keyboard. Only the
+        /// app's focus, or a click in the page, gives a page the keyboard it does not have.
+        #[cfg(target_os = "macos")]
+        fn on_set_focus(&self, _browser: Option<&mut Browser>, source: FocusSource) -> c_int {
+            let refuse = source == FocusSource::NAVIGATION
+                && with(self.id, |p| p.view.chrome().is_some_and(|c| !c.has_focus()));
+            c_int::from(refuse)
+        }
     }
 }
 
