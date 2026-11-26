@@ -117,14 +117,16 @@ pub(crate) fn shape(
 
 /// What rounded corners leave out of `frame`: a strip per pixel row at each corner, as wide as
 /// the arc is from the edge on that row. A window shape is all or nothing per pixel, so the arc
-/// is the nearest pixel, not antialiased; whatever draws around the page covers the step.
+/// is pixel steps, not antialiased.
 fn corners(frame: R, radii: [i32; 4]) -> Vec<R> {
     let mut out = Vec::new();
     for (corner, radius) in radii.into_iter().enumerate() {
         let r = radius.min(frame.w / 2).min(frame.h / 2);
         for row in 0..r {
             let dy = r as f32 - row as f32 - 0.5;
-            let inset = (r as f32 - (r as f32 * r as f32 - dy * dy).sqrt()).round() as i32;
+            // Rounded up, so the shape stays inside the arc and every pixel the arc cuts through
+            // is left to what is drawn under the page, which antialiases it.
+            let inset = (r as f32 - (r as f32 * r as f32 - dy * dy).sqrt()).ceil() as i32;
             if inset <= 0 {
                 continue;
             }
