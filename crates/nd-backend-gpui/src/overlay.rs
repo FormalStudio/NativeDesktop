@@ -83,6 +83,8 @@ pub(crate) struct MenuOverlay {
     /// Where the pointer last moved over a row.
     pub pointer: Option<Point>,
     pub placed: Placed,
+    /// Where the top level was laid out in its last frame; `None` until one draws it.
+    pub shown: Rc<std::cell::Cell<Option<Rect>>>,
     /// The single keystroke bound to each action, as the menu shows it ("Ctrl+C").
     pub shortcuts: Vec<(Box<dyn gpui::Action>, SharedString)>,
     /// What the user typed to select a row, and when the last key of it came.
@@ -110,6 +112,7 @@ impl MenuOverlay {
             pointer_in: Default::default(),
             pointer: None,
             placed: Default::default(),
+            shown: Default::default(),
             shortcuts: Vec::new(),
             typed: String::new(),
             typed_at: None,
@@ -959,7 +962,19 @@ impl Build<'_> {
                     .position(point(px(menu.at.x), px(menu.at.y)))
                     .anchor(if menu.above { Anchor::BottomLeft } else { Anchor::TopLeft })
                     .snap_to_window_with_margin(px(8.))
-                    .child(Occluding::surface(list)),
+                    .child(div().child(Occluding::surface(list)).on_children_prepainted({
+                        let shown = menu.shown.clone();
+                        move |bounds, _, _| {
+                            shown.set(bounds.first().map(|b| {
+                                Rect::new(
+                                    b.origin.x.as_f32(),
+                                    b.origin.y.as_f32(),
+                                    b.size.width.as_f32(),
+                                    b.size.height.as_f32(),
+                                )
+                            }))
+                        }
+                    })),
             );
         deferred(anchored().position(point(px(0.), px(0.))).child(Occluding::backdrop(backdrop)))
             .with_priority(MENU_PRIORITY)
@@ -977,12 +992,14 @@ impl MenuOverlay {
 }
 
 impl GpuiBackend {
-    /// The window's open drawn menu as a node, its innermost level's rows as items. It has no
-    /// bounds: the menu sizes itself as it draws.
+    /// The window's open drawn menu as a node, its innermost level's rows as items, once a frame
+    /// has drawn it. Until then a Chrome-style page under it may still have the keyboard, which
+    /// the page hands back as it is drawn with the menu over it.
     pub(crate) fn menu_node(&self, window: WindowId) -> Option<SemanticNode> {
         let state = self.state.try_borrow().ok()?;
         let menu = state.menus.get(&window)?;
-        let node = |id, role, kind: &str, name: SharedString, enabled, children| SemanticNode {
+        let bounds = menu.shown.get()?;
+        let node = |id, role, kind: &str, name: SharedString, enabled, bounds, children| SemanticNode {
             id,
             role,
             kind: kind.into(),
@@ -995,7 +1012,7 @@ impl GpuiBackend {
             checked: None,
             selected: None,
             expanded: None,
-            bounds: None,
+            bounds,
             visible: true,
             children,
         };
@@ -1005,10 +1022,10 @@ impl GpuiBackend {
             .enumerate()
             .filter(|(_, (_, _, label))| !label.is_empty())
             .map(|(i, (enabled, _, label))| {
-                node(part_id(menu.node, i + 1), Role::MenuItem, "MenuItem", label, enabled, Vec::new())
+                node(part_id(menu.node, i + 1), Role::MenuItem, "MenuItem", label, enabled, None, Vec::new())
             })
             .collect();
-        Some(node(part_id(menu.node, 0), Role::Menu, "Menu", SharedString::default(), true, items))
+        Some(node(part_id(menu.node, 0), Role::Menu, "Menu", SharedString::default(), true, Some(bounds), items))
     }
 
     /// Closes the window's context menu and queues `action` for its focused node.

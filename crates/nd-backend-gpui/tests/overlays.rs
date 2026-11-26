@@ -182,6 +182,7 @@ fn menu_rows(o: &Opened) -> Option<Vec<String>> {
     o.host.read(|app| {
         let tree = app.semantic_window(o.window).expect("window");
         let menu = tree.root.children.iter().find(|n| n.kind == "Menu")?;
+        assert!(menu.bounds.is_some_and(|b| b.size.width > 0.), "laid out");
         Some(menu.children.iter().map(|n| n.name.clone()).collect())
     })
 }
