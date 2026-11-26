@@ -522,6 +522,7 @@ impl OsrView {
         if self.chrome().is_some() {
             drop(st);
             self.listen_wheel(hitbox, window);
+            self.listen_missed_keys(window);
             return;
         }
         window.set_cursor_style(st.cursor, hitbox);
@@ -688,6 +689,40 @@ impl OsrView {
             }
             if let Some(host) = view.host() {
                 host.send_key_event(Some(&keys::key_event(&e.keystroke, KeyEventType::KEYUP, false)));
+            }
+        });
+    }
+
+    /// A key the GPUI window gets while a Chrome-style page holds the keyboard goes to the page.
+    /// X routes a key to whichever window has its focus when the key arrives, and the page's
+    /// window takes it in the paint after the page takes nd's focus, so a key typed in between
+    /// reaches the GPUI window. The app's key bindings have had it by the time these listeners
+    /// run, and Chromium never saw it. Nothing composes text on the GPUI side, since the page
+    /// sets no input handler there: a dead key goes on as the raw key it is.
+    fn listen_missed_keys(self: &Rc<Self>, window: &mut Window) {
+        let view = Rc::downgrade(self);
+        window.on_key_event(move |e: &KeyDownEvent, phase, _, cx| {
+            let Some(view) = view.upgrade() else { return };
+            if phase != DispatchPhase::Bubble || !view.st.borrow().keyboard {
+                return;
+            }
+            let Some(host) = view.host() else { return };
+            host.send_key_event(Some(&keys::key_event(&e.keystroke, KeyEventType::RAWKEYDOWN, e.is_held)));
+            let typed = keys::key_event(&e.keystroke, KeyEventType::CHAR, e.is_held);
+            if typed.character != 0 {
+                host.send_key_event(Some(&typed));
+            }
+            cx.stop_propagation();
+        });
+        let view = Rc::downgrade(self);
+        window.on_key_event(move |e: &KeyUpEvent, phase, _, cx| {
+            let Some(view) = view.upgrade() else { return };
+            if phase != DispatchPhase::Bubble || !view.st.borrow().keyboard {
+                return;
+            }
+            if let Some(host) = view.host() {
+                host.send_key_event(Some(&keys::key_event(&e.keystroke, KeyEventType::KEYUP, false)));
+                cx.stop_propagation();
             }
         });
     }

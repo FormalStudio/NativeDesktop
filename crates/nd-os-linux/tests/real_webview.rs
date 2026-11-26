@@ -12,6 +12,9 @@
 //!   consumed, release included. Positive controls show the same input reaching the page.
 //! - `real_input_cef`: a click focuses a text field in the page, keys typed on the compositor's
 //!   keyboard (shift included) land in it and the wheel scrolls the page.
+//! - `real_key_after_focus_cef_chrome`: `BROWSER_SCENE=keys`: Return in a native field gives a
+//!   Chrome-style page the keyboard and holds the main thread, and the key typed right after it,
+//!   which X hands to the app's window before the page's window has X's focus, reaches the page.
 //! - `real_resize_cef`: the resize gate with one flat page filling the window
 //!   (`BROWSER_SCENE=resize`, `ND_DEBUG_EXPOSE=1`): in no presented frame of a border drag does
 //!   the window background (magenta) or the compositor's show. Until Chromium's frame for a new
@@ -706,6 +709,31 @@ mod gate_m8_webview {
         drop(app);
         let _ = std::fs::remove_dir_all(&dir);
         println!("{}", run.marker("INPUT"));
+    }
+
+    #[test]
+    fn real_key_after_focus_cef_chrome() {
+        let run = Run::start("chrome");
+        let dir = std::env::temp_dir().join(format!("nd-webview-handoff-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let app = launch(&run, "keys", &dir);
+        assert_chrome_style(&run, &app.probe);
+        let mut input = VirtualInput::connect(&run.hyprland).unwrap();
+        let field = app.at("field", 0.5, 0.5).expect("the field");
+        wiggle(&mut input, field);
+        click(&mut input, field);
+        app.wait("the field to have the keyboard", |a| find(&a.root(), "field").is_some_and(|n| n.focused));
+        // The field's first key mounts the page.
+        input.key(keys::A, &[]).unwrap();
+        app.wait("the page to load", |a| a.title().starts_with("page"));
+        input.key(keys::ENTER, &[]).unwrap();
+        input.key(keys::S, &[]).unwrap();
+        app.wait("the key after Return in the page", |a| a.title() == "pages");
+        let field = find(&app.root(), "field").and_then(|n| n.value.clone()).unwrap_or_default();
+        assert_eq!(field, "a", "the field keeps only its own key");
+        drop(app);
+        let _ = std::fs::remove_dir_all(&dir);
+        println!("{}", run.marker("KEY_AFTER_FOCUS"));
     }
 
     /// The page's colour, `#2f8f5b`.

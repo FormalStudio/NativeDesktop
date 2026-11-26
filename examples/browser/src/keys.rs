@@ -4,15 +4,20 @@
 //! while after, as a browser's is when a load starts, so those keys queue up and are dispatched
 //! in the turns Chromium's window holds key. Every key is the field's
 //! (`gate_m8_webview::real_keys_survive_a_new_page_cef_chrome`).
+//!
+//! Return in the field gives the page the keyboard and holds the main thread for 300 ms, so a key
+//! typed right after it arrives before the page's window has X's focus. That key is the page's
+//! (`real_webview::real_key_after_focus_cef_chrome` on Linux).
 
 use std::time::{Duration, Instant};
 
 use nd::prelude::*;
 use nd::webview::{WebView, webview};
 
-/// Its title is "page" and every key the page gets, so a key that went to it shows.
+/// Its title is "page" and every key the page gets, so a key that went to it shows. Its text is
+/// painted at once: Chromium drops input to a page until its first contentful paint.
 const PAGE: &str = "<!doctype html><title>page</title>\
-<body style=\"margin:0\" onkeydown=\"document.title += event.key\"></body>";
+<body style=\"margin:0\" onkeydown=\"document.title += event.key\"><p>page</p></body>";
 
 struct Scene {
     text: SharedString,
@@ -32,6 +37,12 @@ impl Render for Scene {
                 }
                 cx.notify();
             }));
+        let field = field.on_submit(cx.listener(|this, _: &TextSubmitted, _, _| {
+            if let Some(page) = &this.page {
+                page.focus();
+                std::thread::sleep(Duration::from_millis(300));
+            }
+        }));
         let page = self.page.as_ref().map(|page| webview("web", page).size_full());
         v_flex().size_full().child(field).child(div().flex_1().min_h_0().children(page))
     }
