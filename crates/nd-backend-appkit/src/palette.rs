@@ -457,6 +457,9 @@ pub(crate) struct Palette {
     /// A present waits for a window to anchor to.
     pending: Cell<bool>,
     return_focus: RefCell<Option<objc2::rc::Weak<NSResponder>>>,
+    /// The window's count of nd focus ops at the open: a focus nd set while the palette was up
+    /// (the command it ran opened a field) stays where nd put it.
+    focus_moves: Cell<u64>,
     /// Set while nd writes the field, so the write is not taken for a user edit.
     writing: Cell<bool>,
     /// Keys typed between the open and the present, which would otherwise reach the page
@@ -488,6 +491,7 @@ impl PaletteNative {
                 open: Cell::new(false),
                 pending: Cell::new(false),
                 return_focus: RefCell::new(None),
+                focus_moves: Cell::new(0),
                 writing: Cell::new(false),
                 typed_ahead: RefCell::new(Vec::new()),
                 ahead_monitor: RefCell::new(None),
@@ -738,6 +742,7 @@ impl Palette {
         let layer = crate::overlay::WindowLayer::new(self.mtm, &window, true);
         let host = layer.host();
         *self.return_focus.borrow_mut() = window.firstResponder().map(|r| objc2::rc::Weak::from_retained(&r));
+        self.focus_moves.set(focus_moves(&window));
         let presented = self.model.borrow_mut().present();
         if !presented {
             self.pass_typing_on();
@@ -801,7 +806,7 @@ impl Palette {
             let any: &AnyObject = &back;
             let in_window = any.downcast_ref::<NSView>().is_some_and(|v| v.window().is_some_and(|w| w == window))
                 || any.downcast_ref::<NSWindow>().is_some_and(|w| *w == *window);
-            if in_window {
+            if in_window && focus_moves(&window) == self.focus_moves.get() {
                 window.makeFirstResponder(Some(&back));
             }
         }
@@ -1084,4 +1089,8 @@ fn fade(panel: &NSWindow, to: f64, duration: std::time::Duration, done: impl Fn(
     });
     let done = block2::RcBlock::new(done);
     NSAnimationContext::runAnimationGroup_completionHandler(&changes, Some(&done));
+}
+
+fn focus_moves(window: &NSWindow) -> u64 {
+    window.downcast_ref::<crate::NdWindow>().map_or(0, crate::NdWindow::nd_focus_moves)
 }

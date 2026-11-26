@@ -65,6 +65,9 @@ pub trait KeyRouter {
     fn drag_pointer(&self, _at: (f32, f32), _released: bool) {}
 }
 
+/// Run loop turns a focused view gets to join the window before nd gives up on it.
+const FOCUS_RETRIES: u32 = 10;
+
 #[derive(Default)]
 pub struct NdWindowIvars {
     router: RefCell<Option<Rc<dyn KeyRouter>>>,
@@ -73,6 +76,10 @@ pub struct NdWindowIvars {
     last_key: RefCell<Option<Retained<NSEvent>>>,
     /// Set while nd's own focus op moves the first responder, so it is not reported back.
     nd_focus: Cell<bool>,
+    /// The view nd focused before it was in the window, which takes first responder once it is.
+    pending_focus: RefCell<Option<Retained<NSView>>>,
+    /// Counts nd's focus ops, so a panel that hands focus back on close can tell nd moved it.
+    nd_focus_moves: Cell<u64>,
 }
 
 define_class!(
@@ -214,6 +221,7 @@ impl NdWindow {
     /// The backend's focus op: moves AppKit's first responder to `view` (the window itself for
     /// `None`) without reporting it back to nd as a platform focus change.
     pub(crate) fn make_first_responder_from_nd(&self, view: Option<&NSView>) {
+        self.ivars().nd_focus_moves.set(self.ivars().nd_focus_moves.get() + 1);
         self.ivars().nd_focus.set(true);
         self.makeFirstResponder(view.map(|v| &**v));
         self.ivars().nd_focus.set(false);
@@ -222,6 +230,34 @@ impl NdWindow {
         if let Some(view) = view {
             self.setInitialFirstResponder(Some(view));
         }
+        // A view in a list row the table has not asked for yet (a row just added) joins the
+        // window during the table's next layout, and AppKit refuses first responder until then.
+        let outside = view.filter(|v| v.window().is_none_or(|w| !std::ptr::eq(&*w, self.as_super())));
+        *self.ivars().pending_focus.borrow_mut() = outside.map(|v| v.retain());
+        if outside.is_some() {
+            self.retry_focus(FOCUS_RETRIES);
+        }
+    }
+
+    pub(crate) fn nd_focus_moves(&self) -> u64 {
+        self.ivars().nd_focus_moves.get()
+    }
+
+    fn retry_focus(&self, left: u32) {
+        let this = self.retain();
+        crate::events::defer(move || {
+            let Some(view) = this.ivars().pending_focus.borrow().clone() else { return };
+            if view.window().is_some_and(|w| std::ptr::eq(&*w, this.as_super())) {
+                this.ivars().pending_focus.borrow_mut().take();
+                this.ivars().nd_focus.set(true);
+                this.makeFirstResponder(Some(&view));
+                this.ivars().nd_focus.set(false);
+            } else if left > 0 {
+                this.retry_focus(left - 1);
+            } else {
+                this.ivars().pending_focus.borrow_mut().take();
+            }
+        });
     }
 
     /// Hands a drop's files to the router; false when the drag carried none.
