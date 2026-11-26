@@ -174,7 +174,10 @@ impl Build<'_> {
             let divider = || div().absolute().top_0().bottom_0().w(px(1.)).bg(look.border);
             let (pane, fill, edge) = match p.role {
                 PaneRole::Sidebar | PaneRole::Inspector if clear_sidebar => (pane, None, None),
-                PaneRole::Sidebar => (pane.relative().bg(sidebar), Some(sidebar), Some(divider().right_0())),
+                PaneRole::Sidebar => {
+                    let edge = (!p.sidebar_ground).then(|| divider().right_0());
+                    (pane.relative().bg(sidebar), Some(sidebar), edge)
+                }
                 PaneRole::Inspector => (pane.relative().bg(sidebar), Some(sidebar), Some(divider().left_0())),
                 PaneRole::Content if clear_sidebar && self.beside_sidebar(node) => {
                     // NavigationView's content grid: CardStrokeColorDefault on its top and
@@ -185,6 +188,7 @@ impl Build<'_> {
                         .when(fluent, |p| p.border_t_1().border_l_1().border_color(card_stroke(&theme)));
                     (layer, Some(theme.surface.layer), None)
                 }
+                PaneRole::Content if p.sidebar_ground => (pane.bg(sidebar), Some(sidebar), None),
                 PaneRole::Content | PaneRole::Overlay => (pane, None, None),
             };
             let header = self.take_pane_header(node, p.role);

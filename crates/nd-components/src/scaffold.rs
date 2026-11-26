@@ -58,6 +58,10 @@ pub struct PaneProps {
     /// The user drags the pane's inner edge to resize it (on macOS the split view's divider
     /// always drags).
     pub resizable: bool,
+    /// The content sits on the sidebar's ground: one surface from the sidebar under the content,
+    /// for content drawn as a card inset from the window's edges. Set on the sidebar and the
+    /// content alike, so the sidebar drops the divider between them.
+    pub sidebar_ground: bool,
     pub style: StyleRefinement,
 }
 
@@ -103,6 +107,7 @@ pub struct Scaffold {
     content_edge_on_hover: bool,
     content_bottom_bar: f32,
     content_min_width: f32,
+    sidebar_ground: bool,
 }
 
 #[track_caller]
@@ -120,6 +125,7 @@ pub fn scaffold() -> Scaffold {
         content_edge_on_hover: false,
         content_bottom_bar: 0.,
         content_min_width: 0.,
+        sidebar_ground: false,
     }
 }
 
@@ -162,6 +168,13 @@ impl Scaffold {
     /// stops narrowing there while the sidebar shows, and widens to make room when it opens.
     pub fn content_min_width(mut self, points: f32) -> Self {
         self.content_min_width = points;
+        self
+    }
+
+    /// The content sits on the sidebar's ground, one surface with the sidebar and no divider
+    /// between them: for content the app draws as a card inset from the window's edges.
+    pub fn content_on_sidebar_ground(mut self) -> Self {
+        self.sidebar_ground = true;
         self
     }
 
@@ -214,12 +227,18 @@ impl IntoElement for Scaffold {
         let edge_on_hover = self.content_edge_on_hover;
         let bottom_bar = self.content_bottom_bar;
         let min_width = self.content_min_width;
+        let ground = self.sidebar_ground;
+        let sidebar = self.sidebar.map(|mut s| {
+            s.0.props_mut().sidebar_ground = ground;
+            s
+        });
         let content = self.content.map(|c| {
             let mut pane = pane_with(Key::Id("nd-content".into()), PaneRole::Content);
             pane.0.props_mut().under_toolbar = under;
             pane.0.props_mut().toolbar_extension = extension;
             pane.0.props_mut().edge_on_hover = edge_on_hover;
             pane.0.props_mut().bottom_bar = bottom_bar;
+            pane.0.props_mut().sidebar_ground = ground;
             pane.flex_1().min_w(px(min_width)).h_full().child(c)
         });
         let overlay = self.overlay.map(|o| {
@@ -227,7 +246,7 @@ impl IntoElement for Scaffold {
         });
         self.root
             .children(self.toolbar)
-            .children(self.sidebar)
+            .children(sidebar)
             .children(content)
             .children(self.inspector)
             .children(overlay)

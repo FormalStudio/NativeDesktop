@@ -159,6 +159,9 @@ pub(crate) struct PaneNative {
     reveal: Option<Rc<crate::reveal::Reveal>>,
 }
 
+/// `NSGlassEffectView._variant` of the split view's own sidebar on macOS 26 and later.
+const SIDEBAR_GLASS_VARIANT: isize = 17;
+
 impl PaneNative {
     pub fn new(
         mtm: MainThreadMarker,
@@ -171,6 +174,31 @@ impl PaneNative {
             content.set_passes_clicks();
         }
         let host = NdPaneView::new(mtm, &content);
+        if props.role == PaneRole::Content && props.sidebar_ground {
+            // The sidebar's own material under the content, so the two read as one surface: the
+            // split view draws a macOS 26 sidebar on Liquid Glass, an older one on vibrancy.
+            let ground: Retained<NSView> = if crate::glass::has_liquid_glass() {
+                let glass = objc2_app_kit::NSGlassEffectView::new(mtm);
+                // The split view draws its sidebar in glass variant 17; the public default reads
+                // lighter in both appearances. The setter is private, so an OS without it keeps
+                // the default.
+                if objc2::runtime::NSObjectProtocol::respondsToSelector(&*glass, objc2::sel!(set_variant:)) {
+                    let _: () = unsafe { msg_send![&glass, set_variant: SIDEBAR_GLASS_VARIANT] };
+                }
+                glass.into_super()
+            } else {
+                let effect = objc2_app_kit::NSVisualEffectView::new(mtm);
+                effect.setMaterial(objc2_app_kit::NSVisualEffectMaterial::Sidebar);
+                effect.setBlendingMode(objc2_app_kit::NSVisualEffectBlendingMode::BehindWindow);
+                effect.setState(objc2_app_kit::NSVisualEffectState::FollowsWindowActiveState);
+                effect.into_super()
+            };
+            ground.setAutoresizingMask(
+                objc2_app_kit::NSAutoresizingMaskOptions::ViewWidthSizable
+                    | objc2_app_kit::NSAutoresizingMaskOptions::ViewHeightSizable,
+            );
+            host.addSubview_positioned_relativeTo(&ground, NSWindowOrderingMode::Below, Some(&content));
+        }
         host.ivars().sidebar.set(props.role == PaneRole::Sidebar);
         if props.role == PaneRole::Content && props.edge_on_hover {
             *host.ivars().edge.borrow_mut() = Some(Rc::new(Cell::new(false)));
