@@ -190,6 +190,20 @@ impl DisplayConnection {
         dispatch!(self, connection => connection.read_from_clipboard(), headless => None)
     }
 
+    /// Reads the primary selection, or the clipboard, without blocking this thread on its owner.
+    pub(crate) fn read_selection_async(
+        &self,
+        primary: bool,
+        executor: &gpui::BackgroundExecutor,
+    ) -> gpui::Task<Option<ClipboardItem>> {
+        match self {
+            #[cfg(feature = "x11")]
+            DisplayConnection::X11(connection) => connection.read_selection_async(primary, executor),
+            _ if primary => gpui::Task::ready(self.read_from_primary()),
+            _ => gpui::Task::ready(self.read_from_clipboard()),
+        }
+    }
+
     #[cfg(any(feature = "wayland", feature = "x11"))]
     pub(crate) fn window_identifier(
         &self,

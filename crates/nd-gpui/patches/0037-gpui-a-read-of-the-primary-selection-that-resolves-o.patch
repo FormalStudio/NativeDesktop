@@ -1,0 +1,48 @@
+From 3d2042850854b1ee451861df63d60b7b51ba6a6f Mon Sep 17 00:00:00 2001
+From: FormalSnake <kyaniserni@gmail.com>
+Date: Thu, 26 Nov 2026 17:10:32 +0000
+Subject: [PATCH 37/41] gpui: a read of the primary selection that resolves
+ once its owner answers
+
+---
+ crates/gpui/src/app.rs      | 7 +++++++
+ crates/gpui/src/platform.rs | 5 +++++
+ 2 files changed, 12 insertions(+)
+
+diff --git a/crates/gpui/src/app.rs b/crates/gpui/src/app.rs
+index 72107c3e5d..4762f7446e 100644
+--- a/crates/gpui/src/app.rs
++++ b/crates/gpui/src/app.rs
+@@ -1891,6 +1891,13 @@ impl App {
+         self.platform.read_from_primary()
+     }
+ 
++    /// Reads the primary selection without blocking on its owner, which can be on this thread.
++    /// Only available on Linux.
++    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
++    pub fn read_from_primary_async(&self) -> Task<Option<ClipboardItem>> {
++        self.platform.read_from_primary_async()
++    }
++
+     /// Writes data to the primary selection buffer.
+     /// Only available on Linux.
+     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
+index 2397ebb204..9275ffe96d 100644
+--- a/crates/gpui/src/platform.rs
++++ b/crates/gpui/src/platform.rs
+@@ -600,6 +600,11 @@ pub trait Platform: 'static {
+ 
+     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+     fn read_from_primary(&self) -> Option<ClipboardItem>;
++    /// Reads the primary selection, resolving once its owner has answered.
++    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
++    fn read_from_primary_async(&self) -> Task<Option<ClipboardItem>> {
++        Task::ready(self.read_from_primary())
++    }
+     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+     fn write_to_primary(&self, item: ClipboardItem);
+ 
+-- 
+2.56.0
+

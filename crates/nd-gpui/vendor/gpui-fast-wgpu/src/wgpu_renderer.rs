@@ -589,7 +589,7 @@ impl WgpuRenderer {
         let surface_configured = ctx_ref.is_none();
         let (context, surface) = match ctx_ref.as_mut() {
             Some(context) => {
-                let surface = create_surface(&context.instance, display_handle, window_handle.as_raw())
+                let surface = create_surface_on(&context.instance, display_handle, window_handle.as_raw())
                     .map_err(|e| anyhow::anyhow!("Failed to create surface: {e}"))?;
                 context.check_compatible_with_surface(&surface)?;
                 (context, surface)
@@ -597,7 +597,7 @@ impl WgpuRenderer {
             None => {
                 let (context, surface) = WgpuContext::new_with_surface(
                     || Box::new(window.clone()),
-                    |instance| create_surface(instance, display_handle, window_handle.as_raw()),
+                    |instance| create_surface_on(instance, display_handle, window_handle.as_raw()),
                     &config,
                     compositor_gpu,
                     false,
@@ -2595,7 +2595,7 @@ impl WgpuRenderer {
             .window_handle()
             .map_err(|e| anyhow::anyhow!("Failed to get window handle: {e}"))?;
 
-        let surface = create_surface(instance, None, window_handle.as_raw())?;
+        let surface = create_surface(instance, window_handle.as_raw())?;
 
         let width = (config.size.width.0 as u32).max(1);
         let height = (config.size.height.0 as u32).max(1);
@@ -2700,7 +2700,7 @@ impl WgpuRenderer {
 
             let (new_context, surface) = WgpuContext::new_with_surface(
                 || Box::new(window.clone()),
-                |instance| create_surface(instance, display_handle, window_handle.as_raw()),
+                |instance| create_surface_on(instance, display_handle, window_handle.as_raw()),
                 &config,
                 self.compositor_gpu,
                 true,
@@ -2710,7 +2710,7 @@ impl WgpuRenderer {
         } else {
             let ctx_ref = gpu_context.borrow();
             let instance = &ctx_ref.as_ref().unwrap().instance;
-            create_surface(instance, display_handle, window_handle.as_raw())?
+            create_surface_on(instance, display_handle, window_handle.as_raw())?
         };
 
         let gpu_context = Rc::clone(gpu_context);
@@ -3029,6 +3029,14 @@ fn instance_range(range: Range<usize>) -> Range<u32> {
 
 #[cfg(not(target_family = "wasm"))]
 pub(crate) fn create_surface(
+    instance: &wgpu::Instance,
+    raw_window_handle: raw_window_handle::RawWindowHandle,
+) -> anyhow::Result<wgpu::Surface<'static>> {
+    create_surface_on(instance, None, raw_window_handle)
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn create_surface_on(
     instance: &wgpu::Instance,
     raw_display_handle: Option<raw_window_handle::RawDisplayHandle>,
     raw_window_handle: raw_window_handle::RawWindowHandle,

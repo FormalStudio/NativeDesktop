@@ -1075,6 +1075,13 @@ impl Clipboard {
     pub fn is_owner(&self, selection: ClipboardKind) -> bool {
         self.inner.is_owner(selection).unwrap_or(false)
     }
+
+    /// Another handle to the process's clipboard, for a read on another thread.
+    pub(crate) fn share(&self) -> Self {
+        Self {
+            inner: Arc::clone(&self.inner),
+        }
+    }
 }
 
 impl Drop for Clipboard {

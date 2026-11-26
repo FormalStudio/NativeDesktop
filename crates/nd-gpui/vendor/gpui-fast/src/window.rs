@@ -4226,6 +4226,17 @@ impl Window {
 
             let mut tooltip_bounds =
                 Bounds::new(mouse_position + point(px(1.), px(1.)), tooltip_size);
+            // Windows centres a pointer's tooltip on it, 20 px above or, without the room,
+            // 20 px below, measured in the WinUI 3 Gallery.
+            #[cfg(target_os = "windows")]
+            {
+                let gap = px(20.);
+                let above = mouse_position.y - gap - tooltip_size.height;
+                tooltip_bounds.origin = point(
+                    cmp::max(Pixels::ZERO, mouse_position.x - tooltip_size.width / 2.),
+                    if above >= Pixels::ZERO { above } else { mouse_position.y + gap },
+                );
+            }
             let window_bounds = Bounds {
                 origin: Point::default(),
                 size: self.viewport_size(),

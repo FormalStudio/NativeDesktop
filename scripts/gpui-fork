@@ -92,14 +92,19 @@ scratch_fork() {
 # unpatched, as gpui-fast-windows 0.1.13 does with the vsync loop 0006 changes; its directory is
 # listed in <dir>/unpatched. nd-gpui/fast is opt-in and no app ships it.
 fast_fork() {
-  local version=$1 rev tmp patch dirs dir pkg src
+  local version=$1 rev tmp patch tree dirs dir pkg src
   rev=$(get zed_rev)
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/nd-gpui-fast.XXXXXX")
   : >"$tmp/unpatched"
   git clone -q --shared --no-checkout "$zed" "$tmp/zed"
   git -C "$tmp/zed" checkout -q --detach "$rev"
   while read -r patch; do
-    git -C "$tmp/zed" apply --index --3way "$fork_dir/patches/$patch" >/dev/null 2>&1 || continue
+    # A failed 3-way apply leaves unmerged entries that would block every later patch on those files.
+    tree=$(git -C "$tmp/zed" write-tree)
+    if ! git -C "$tmp/zed" apply --index --3way "$fork_dir/patches/$patch" >/dev/null 2>&1; then
+      git -C "$tmp/zed" read-tree --reset -u "$tree"
+      continue
+    fi
     dirs=$(sed -n 's#^diff --git a/crates/\([^/]*\)/.*#\1#p' "$fork_dir/patches/$patch" | sort -u)
     for dir in $dirs; do
       pkg=$(fast_package_for "$dir")

@@ -1,0 +1,35 @@
+From e4bcb5520270d2eac52f13cc23925a858200c6d0 Mon Sep 17 00:00:00 2001
+From: FormalSnake <kyaniserni@gmail.com>
+Date: Thu, 26 Nov 2026 17:07:39 +0000
+Subject: [PATCH 40/41] gpui: windows tooltips centre on the pointer 20 px
+ above or below it, as winui
+
+---
+ crates/gpui/src/window.rs | 11 +++++++++++
+ 1 file changed, 11 insertions(+)
+
+diff --git a/crates/gpui/src/window.rs b/crates/gpui/src/window.rs
+index 730ed1e4a6..276c906643 100644
+--- a/crates/gpui/src/window.rs
++++ b/crates/gpui/src/window.rs
+@@ -4181,6 +4181,17 @@ impl Window {
+ 
+             let mut tooltip_bounds =
+                 Bounds::new(mouse_position + point(px(1.), px(1.)), tooltip_size);
++            // Windows centres a pointer's tooltip on it, 20 px above or, without the room,
++            // 20 px below, measured in the WinUI 3 Gallery.
++            #[cfg(target_os = "windows")]
++            {
++                let gap = px(20.);
++                let above = mouse_position.y - gap - tooltip_size.height;
++                tooltip_bounds.origin = point(
++                    cmp::max(Pixels::ZERO, mouse_position.x - tooltip_size.width / 2.),
++                    if above >= Pixels::ZERO { above } else { mouse_position.y + gap },
++                );
++            }
+             let window_bounds = Bounds {
+                 origin: Point::default(),
+                 size: self.viewport_size(),
+-- 
+2.56.0
+

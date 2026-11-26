@@ -1,0 +1,124 @@
+From 3a107006e1e40c7e8dc18b44491062cc161bb210 Mon Sep 17 00:00:00 2001
+From: FormalSnake <kyaniserni@gmail.com>
+Date: Thu, 26 Nov 2026 17:10:32 +0000
+Subject: [PATCH 38/41] gpui_linux: x11 selection reads run off the main
+ thread, so an in-process page can answer them
+
+---
+ .../src/linux/display_connection.rs           | 14 ++++++++++
+ crates/gpui_linux/src/linux/platform.rs       | 16 +++++++++++
+ crates/gpui_linux/src/linux/x11/client.rs     | 27 +++++++++++++++++++
+ crates/gpui_linux/src/linux/x11/clipboard.rs  |  7 +++++
+ 4 files changed, 64 insertions(+)
+
+diff --git a/crates/gpui_linux/src/linux/display_connection.rs b/crates/gpui_linux/src/linux/display_connection.rs
+index d7849d0c4a..15cb320cda 100644
+--- a/crates/gpui_linux/src/linux/display_connection.rs
++++ b/crates/gpui_linux/src/linux/display_connection.rs
+@@ -190,6 +190,20 @@ impl DisplayConnection {
+         dispatch!(self, connection => connection.read_from_clipboard(), headless => None)
+     }
+ 
++    /// Reads the primary selection, or the clipboard, without blocking this thread on its owner.
++    pub(crate) fn read_selection_async(
++        &self,
++        primary: bool,
++        executor: &gpui::BackgroundExecutor,
++    ) -> gpui::Task<Option<ClipboardItem>> {
++        match self {
++            #[cfg(feature = "x11")]
++            DisplayConnection::X11(connection) => connection.read_selection_async(primary, executor),
++            _ if primary => gpui::Task::ready(self.read_from_primary()),
++            _ => gpui::Task::ready(self.read_from_clipboard()),
++        }
++    }
++
+     #[cfg(any(feature = "wayland", feature = "x11"))]
+     pub(crate) fn window_identifier(
+         &self,
+diff --git a/crates/gpui_linux/src/linux/platform.rs b/crates/gpui_linux/src/linux/platform.rs
+index b24300bbc2..2742175bf1 100644
+--- a/crates/gpui_linux/src/linux/platform.rs
++++ b/crates/gpui_linux/src/linux/platform.rs
+@@ -1173,6 +1173,22 @@ impl Platform for LinuxPlatform {
+         self.connection.borrow().read_from_clipboard()
+     }
+ 
++    fn read_from_clipboard_async(
++        &self,
++    ) -> Task<Result<Option<ClipboardItem>, gpui::ClipboardReadError>> {
++        let read = self
++            .connection
++            .borrow()
++            .read_selection_async(false, &self.background_executor());
++        self.foreground_executor().spawn(async move { Ok(read.await) })
++    }
++
++    fn read_from_primary_async(&self) -> Task<Option<ClipboardItem>> {
++        self.connection
++            .borrow()
++            .read_selection_async(true, &self.background_executor())
++    }
++
+     fn add_recent_document(&self, _path: &Path) {}
+ }
+ 
+diff --git a/crates/gpui_linux/src/linux/x11/client.rs b/crates/gpui_linux/src/linux/x11/client.rs
+index 9dcb81c59f..9ce8964ea2 100644
+--- a/crates/gpui_linux/src/linux/x11/client.rs
++++ b/crates/gpui_linux/src/linux/x11/client.rs
+@@ -1885,6 +1885,33 @@ impl X11Client {
+             .log_with_level(log::Level::Debug)
+     }
+ 
++    /// Reads a selection on `executor`'s threads. Its owner can live on this thread (a browser
++    /// engine run in-process and pumped from here), and a read that blocks this thread starves it.
++    pub(crate) fn read_selection_async(
++        &self,
++        primary: bool,
++        executor: &gpui::BackgroundExecutor,
++    ) -> gpui::Task<Option<gpui::ClipboardItem>> {
++        let state = self.0.borrow();
++        let kind = if primary {
++            clipboard::ClipboardKind::Primary
++        } else {
++            clipboard::ClipboardKind::Clipboard
++        };
++        // Our own copy carries metadata the X selection doesn't.
++        if !primary && state.clipboard.is_owner(kind) {
++            return gpui::Task::ready(state.clipboard_item.clone());
++        }
++        let clipboard = state.clipboard.share();
++        drop(state);
++        executor.spawn(async move {
++            clipboard
++                .get_any(kind)
++                .context("X11: Failed to read a selection")
++                .log_with_level(log::Level::Debug)
++        })
++    }
++
+     pub(crate) fn active_window(&self) -> Option<AnyWindowHandle> {
+         let state = self.0.borrow();
+         state.keyboard_focused_window.and_then(|focused_window| {
+diff --git a/crates/gpui_linux/src/linux/x11/clipboard.rs b/crates/gpui_linux/src/linux/x11/clipboard.rs
+index 9835786efe..7e95de036c 100644
+--- a/crates/gpui_linux/src/linux/x11/clipboard.rs
++++ b/crates/gpui_linux/src/linux/x11/clipboard.rs
+@@ -1075,6 +1075,13 @@ impl Clipboard {
+     pub fn is_owner(&self, selection: ClipboardKind) -> bool {
+         self.inner.is_owner(selection).unwrap_or(false)
+     }
++
++    /// Another handle to the process's clipboard, for a read on another thread.
++    pub(crate) fn share(&self) -> Self {
++        Self {
++            inner: Arc::clone(&self.inner),
++        }
++    }
+ }
+ 
+ impl Drop for Clipboard {
+-- 
+2.56.0
+

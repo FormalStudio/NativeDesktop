@@ -1,0 +1,27 @@
+From 32274ccdeeedaa910f14f6ce0a2b531cb4ef6e10 Mon Sep 17 00:00:00 2001
+From: FormalSnake <kyaniserni@gmail.com>
+Date: Thu, 26 Nov 2026 17:07:39 +0000
+Subject: [PATCH 41/41] gpui: document the fullscreen field of a configure
+
+---
+ crates/gpui/src/platform.rs | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/crates/gpui/src/platform.rs b/crates/gpui/src/platform.rs
+index 9275ffe96d..d4048f11ab 100644
+--- a/crates/gpui/src/platform.rs
++++ b/crates/gpui/src/platform.rs
+@@ -866,8 +866,9 @@ pub struct Configure {
+     pub surface: Size<Pixels>,
+     /// The decorations in force for this configure, tiling included.
+     pub decorations: Decorations,
+-    /// Whether this configure leaves the window maximized, or fullscreen.
++    /// Whether this configure leaves the window maximized.
+     pub maximized: bool,
++    /// Whether this configure leaves the window fullscreen.
+     pub fullscreen: bool,
+ }
+ 
+-- 
+2.56.0
+

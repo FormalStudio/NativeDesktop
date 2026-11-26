@@ -35,3 +35,10 @@
 0033-gpui-report-the-tiled-sides-under-server-side-decorat.patch
 0034-gpui-default-a-window-s-tiling-to-what-its-client-sid.patch
 0035-gpui_wgpu-keep-the-adopted-device-off-the-web-where-.patch
+0036-gpui_linux-an-x11-key-types-in-the-layout-it-was-pre.patch
+0037-gpui-a-read-of-the-primary-selection-that-resolves-o.patch
+0038-gpui_linux-x11-selection-reads-run-off-the-main-thre.patch
+0039-gpui_windows-a-window-without-a-title-bar-opens-wher.patch
+0040-gpui-windows-tooltips-centre-on-the-pointer-20-px-ab.patch
+0041-gpui-document-the-fullscreen-field-of-a-configure.patch
+0042-gpui_wgpu-keep-the-two-argument-create_surface-that-.patch

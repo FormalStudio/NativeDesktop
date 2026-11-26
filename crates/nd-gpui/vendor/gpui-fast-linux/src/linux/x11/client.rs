@@ -1922,6 +1922,33 @@ impl X11Client {
             .log_with_level(log::Level::Debug)
     }
 
+    /// Reads a selection on `executor`'s threads. Its owner can live on this thread (a browser
+    /// engine run in-process and pumped from here), and a read that blocks this thread starves it.
+    pub(crate) fn read_selection_async(
+        &self,
+        primary: bool,
+        executor: &gpui::BackgroundExecutor,
+    ) -> gpui::Task<Option<gpui::ClipboardItem>> {
+        let state = self.0.borrow();
+        let kind = if primary {
+            clipboard::ClipboardKind::Primary
+        } else {
+            clipboard::ClipboardKind::Clipboard
+        };
+        // Our own copy carries metadata the X selection doesn't.
+        if !primary && state.clipboard.is_owner(kind) {
+            return gpui::Task::ready(state.clipboard_item.clone());
+        }
+        let clipboard = state.clipboard.share();
+        drop(state);
+        executor.spawn(async move {
+            clipboard
+                .get_any(kind)
+                .context("X11: Failed to read a selection")
+                .log_with_level(log::Level::Debug)
+        })
+    }
+
     pub(crate) fn active_window(&self) -> Option<AnyWindowHandle> {
         let state = self.0.borrow();
         state.keyboard_focused_window.and_then(|focused_window| {
