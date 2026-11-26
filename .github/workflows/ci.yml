@@ -5,9 +5,10 @@ on:
   push:
     branches: [main]
 
+# A push to main queues behind the running main run instead of cancelling it; a newer push replaces one still queued.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   # .cargo/config.toml points build-dir at the macbook's external drive; runners build locally.
