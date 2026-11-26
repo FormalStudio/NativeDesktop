@@ -115,6 +115,15 @@ pub struct VirtualInput {
     started: Instant,
 }
 
+impl std::fmt::Debug for VirtualInput {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VirtualInput")
+            .field("position", &self.position)
+            .field("held", &self.held)
+            .finish_non_exhaustive()
+    }
+}
+
 impl VirtualInput {
     pub fn connect(hyprland: &Hyprland) -> Result<Self, String> {
         Self::connect_to(connect(hyprland)?, (hyprland.options.width, hyprland.options.height))

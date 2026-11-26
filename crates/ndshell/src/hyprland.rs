@@ -78,6 +78,11 @@ pub struct Hyprland {
     signature: String,
     wayland_display: String,
     x11_display: Option<String>,
+    /// A pointer and keyboard on the seat from the start, as a real session has. Without them
+    /// the seat has no pointer until a test makes its own: an app started before then binds its
+    /// `wl_pointer` as that test's first motion lands, gets `wl_pointer.enter` at a stale spot
+    /// with no motion after it, and takes the first press as outside its window.
+    seat: Option<crate::wayland::VirtualInput>,
     pub options: Options,
 }
 
@@ -137,12 +142,14 @@ impl Hyprland {
             signature: String::new(),
             wayland_display: String::new(),
             x11_display: None,
+            seat: None,
             options,
         };
         this.wait_ready()?;
         if this.options.xwayland {
             this.x11_display = Some(this.find_x11_display(Duration::from_secs(10))?);
         }
+        this.seat = Some(crate::wayland::VirtualInput::connect(&this)?);
         Ok(this)
     }
 
