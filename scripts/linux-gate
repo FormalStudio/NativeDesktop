@@ -14,11 +14,12 @@
 # The host is `ssh g815` ($ND_LINUX_HOST). The checkout lands in ~/Developer/nativedesktop-<branch>
 # there, never in another checkout. Each lane builds into its own target dir
 # ($ND_LINUX_BUILD_ROOT/targets/<branch>, or $ND_LINUX_TARGET; the root defaults to
-# /mnt/steamlib/nd-build, off the small root disk) and builds quietly: nice, idle IO class,
+# ~/build/nd-build on the host's own Linux filesystem, since builds on the NTFS game disks failed
+# with I/O errors mid-write) and builds quietly: nice, idle IO class,
 # two jobs, two test threads. A shared target is unsafe: cargo's metadata hash for path crates
 # ignores the checkout path and rsync keeps the macbook's older mtimes, so one lane reused another
 # lane's stale nd crates. While all lane targets pass $ND_LINUX_TARGET_CAP_GB (default 80) or the build
-# root's disk has less than $ND_LINUX_FREE_FLOOR_GB free (default 30, so Steam is not squeezed), the
+# root's disk has less than $ND_LINUX_FREE_FLOOR_GB free (default 30), the
 # least recently used ones are dropped, under the build lock so no running build loses its target.
 # Lanes compile through one sccache ($ND_LINUX_BUILD_ROOT/sccache, $ND_LINUX_CACHE_GB, default 20).
 # Its Rust keys hold the target path, so it does not share crates between lanes, but an evicted lane
@@ -40,7 +41,7 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 host=${ND_LINUX_HOST:-g815}
 branch=$(git -C "$root" rev-parse --abbrev-ref HEAD)
 dir="Developer/nativedesktop-$branch"
-buildroot=${ND_LINUX_BUILD_ROOT:-/mnt/steamlib/nd-build}
+buildroot=${ND_LINUX_BUILD_ROOT:-$(ssh "$host" 'echo $HOME' 2>/dev/null)/build/nd-build}
 targets="$buildroot/targets"
 target=${ND_LINUX_TARGET:-"$targets/${branch//\//-}"}
 # The dev shell's cargo is rustup's proxy, which reads rust-toolchain.toml from the working
