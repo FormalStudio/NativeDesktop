@@ -687,7 +687,15 @@ impl gpui::Element for VirtualList {
             let extend = Extend::from(crate::gestures::key_modifiers(&event.modifiers));
             let hit = row_at(&all, at).map(|(r, _)| r);
             match (event.button, hit) {
-                (MouseButton::Left, Some(row)) if pick.unselectable.contains(&row) => {}
+                // It still drags when the app lets it (a separator between tabs), without selecting.
+                (MouseButton::Left, Some(row)) if pick.unselectable.contains(&row) => {
+                    if drags
+                        && pressed_ids.contains_key(&row)
+                        && let Some((_, b)) = all.iter().find(|(r, _)| *r == row)
+                    {
+                        pick.with(|p| p.press = Some((row, at, *b)));
+                    }
+                }
                 (MouseButton::Left, Some(row)) if event.click_count >= 2 => {
                     emit.emit(RowActivated(row));
                     wake(cx);
