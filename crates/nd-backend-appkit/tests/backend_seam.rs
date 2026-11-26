@@ -79,7 +79,7 @@ mod seam {
         let root = content_root(&window.contentView().unwrap());
         let column = root.subviews().iter().next().expect("the view's column");
         let kinds = subviews(&column);
-        let expected = ["NdTextView", "NdTextView", "NSButton", "NdLayerView"];
+        let expected = ["NdTextView", "NdTextView", "NdButton", "NdLayerView"];
         c.check(
             kinds.len() == expected.len() && kinds.iter().zip(expected).all(|(k, e)| k.contains(e)),
             &format!("the tree mounts as AppKit views in order ({kinds:?})"),
