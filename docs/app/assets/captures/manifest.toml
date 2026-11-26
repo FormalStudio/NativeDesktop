@@ -1,9 +1,9 @@
 # Written by `nd docs capture`; do not edit by hand.
 
 [browser.macos]
-hash = "732ef183506f2b8a"
+hash = "83d15302b899205b"
 captured_on = "macOS 27.0"
-date = "2026-10-22"
+date = "2026-11-26"
 light = "macos-light.png"
 dark = "macos-dark.png"
 
@@ -43,9 +43,9 @@ light = "windows-light.png"
 dark = "windows-dark.png"
 
 [gallery.macos]
-hash = "dad3a4c4367dd490"
+hash = "850f8caef6afdcae"
 captured_on = "macOS 27.0"
-date = "2026-10-22"
+date = "2026-11-26"
 light = "macos-light.png"
 dark = "macos-dark.png"
 
@@ -85,9 +85,9 @@ light = "windows-light.png"
 dark = "windows-dark.png"
 
 [native-widget.macos]
-hash = "7586d6e61679bc44"
+hash = "d3571d614f1e3185"
 captured_on = "macOS 27.0"
-date = "2026-10-22"
+date = "2026-11-26"
 light = "macos-light.png"
 dark = "macos-dark.png"
 
@@ -106,9 +106,9 @@ light = "windows-light.png"
 dark = "windows-dark.png"
 
 [notes.macos]
-hash = "a6600ac061ae0b3f"
+hash = "c1cfff97a98f825f"
 captured_on = "macOS 27.0"
-date = "2026-10-22"
+date = "2026-11-26"
 light = "macos-light.png"
 dark = "macos-dark.png"
 
