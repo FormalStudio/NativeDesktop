@@ -15,7 +15,7 @@ use nd_core::{Size, WindowId};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{DefinedClass, MainThreadOnly, define_class, msg_send, sel};
-use objc2_app_kit::{NSColor, NSScreen, NSViewFrameDidChangeNotification, NSWindow, NSWindowDelegate};
+use objc2_app_kit::{NSApplication, NSColor, NSScreen, NSViewFrameDidChangeNotification, NSWindow, NSWindowDelegate};
 use objc2_foundation::{MainThreadMarker, NSNotification, NSNotificationCenter, NSObject, NSObjectProtocol};
 
 use crate::NdWindow;
@@ -182,6 +182,12 @@ define_class!(
         fn did_enter_full_screen(&self, _n: &NSNotification) {
             self.with(|h| {
                 entering(&h.window, false);
+                // A window that takes key during the move to the new Space (a Chrome-style page's
+                // anchor coming up) gives it back while AppKit still refuses this one, leaving none.
+                let app = NSApplication::sharedApplication(h.window.mtm());
+                if app.isActive() && app.keyWindow().is_none() {
+                    h.window.makeKeyWindow();
+                }
                 h.diag("full screen enter");
             });
         }
