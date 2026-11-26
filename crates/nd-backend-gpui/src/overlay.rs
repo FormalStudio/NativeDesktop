@@ -21,13 +21,14 @@
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use nd_components::services::{AlertCallback, ChromeServices, OpenCallback, SaveCallback};
 use nd_components::{
     AboutPanel, Alert, ContextMenu, ImageFit, ImagePipeline, ImageProps, Menu, MenuItem, OpenDialog, SaveDialog,
 };
 use nd_core::semantic::{Role, SemanticNode};
+use nd_core::time::Instant;
 use nd_core::{NodeId, Point, Rect, WindowId};
 use nd_gpui::gpui::{
     self, Anchor, AnyElement, Bounds, DispatchPhase, ElementId, HitboxBehavior, InteractiveElement, IntoElement,

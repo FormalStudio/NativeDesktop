@@ -675,7 +675,7 @@ impl Build<'_> {
         cx: &mut gpui::App,
     ) -> AnyElement {
         use crate::reveal::{INSET, RADIUS};
-        let now = std::time::Instant::now();
+        let now = nd_core::time::Instant::now();
         let emit = self.backend.state.borrow().events.emitter(id);
         let wake = self.wake.clone();
         let (progress, moving, shown) = {
@@ -700,7 +700,7 @@ impl Build<'_> {
             .h_full()
             .w(px(REVEAL_EDGE))
             .on_hover(move |inside: &bool, window, cx| {
-                let now = std::time::Instant::now();
+                let now = nd_core::time::Instant::now();
                 let mut reveals = reveals.borrow_mut();
                 let reveal = reveals.entry(id).or_default();
                 // Off the strip without reaching the panel hides it as leaving the panel does.
@@ -744,7 +744,7 @@ impl Build<'_> {
                 .opacity(if reduce { progress } else { 1. })
                 .occlude()
                 .on_hover(move |inside: &bool, window, _| {
-                    let left = (!*inside).then(std::time::Instant::now);
+                    let left = (!*inside).then(nd_core::time::Instant::now);
                     reveals.borrow_mut().entry(id).or_default().pointer_left(left);
                     window.refresh();
                 })

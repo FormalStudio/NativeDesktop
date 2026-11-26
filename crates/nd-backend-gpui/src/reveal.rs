@@ -4,8 +4,9 @@
 //! reduce motion). The content pane keeps its size, so a page under the panel does not relayout.
 //! The same timing as AppKit's (`nd-backend-appkit/src/reveal.rs`).
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
+use nd_core::time::Instant;
 use nd_ui::Curve;
 
 /// The panel's gap to the window edges.

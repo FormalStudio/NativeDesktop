@@ -137,7 +137,9 @@ const BACKEND_ATTEMPTS: [(wgpu::Backends, bool); 2] = [
 
 /// A device the embedding application opened, which windows render with instead of opening
 /// their own, so textures the application renders on it can be painted as surfaces
-/// (`Window::paint_surface_texture`).
+/// (`Window::paint_surface_texture`). Native only: wgpu's handles are not `Send` on the web, so no
+/// static can hold them.
+#[cfg(not(target_family = "wasm"))]
 #[derive(Clone)]
 pub struct AdoptedDevice {
     pub instance: wgpu::Instance,
@@ -146,11 +148,13 @@ pub struct AdoptedDevice {
     pub queue: wgpu::Queue,
 }
 
+#[cfg(not(target_family = "wasm"))]
 static ADOPTED: Mutex<Option<AdoptedDevice>> = Mutex::new(None);
 static OWN_DEVICE: AtomicBool = AtomicBool::new(false);
 
 /// Render every window created after this call with `device`, when it can present to the
 /// window's surface. A device it cannot present with is passed over for the usual selection.
+#[cfg(not(target_family = "wasm"))]
 pub fn adopt_device(device: AdoptedDevice) {
     *ADOPTED.lock() = Some(device);
 }
@@ -163,6 +167,7 @@ pub fn renders_with_own_device() -> bool {
 
 /// Stop offering the adopted device to new windows. A lost device stays lost, so recovery
 /// that picked it again would lose it again.
+#[cfg(not(target_family = "wasm"))]
 pub(crate) fn forget_adopted_device() {
     ADOPTED.lock().take();
 }
