@@ -115,6 +115,21 @@ pub fn release(at: (f64, f64)) {
     std::thread::sleep(Duration::from_millis(150));
 }
 
+/// Moves to `at` and presses and releases the middle button there: a middle click that
+/// closes a tab.
+pub fn middle_click(at: (f64, f64)) {
+    move_to(at);
+    std::thread::sleep(Duration::from_millis(80));
+    for kind in [CGEventType::OtherMouseDown, CGEventType::OtherMouseUp] {
+        let event = CGEvent::new_mouse_event(None, kind, CGPoint { x: at.0, y: at.1 }, CGMouseButton::Center);
+        CGEvent::set_flags(event.as_deref(), CGEventFlags::empty());
+        CGEvent::set_integer_value_field(event.as_deref(), CGEventField::MouseEventClickState, 1);
+        post(event);
+        std::thread::sleep(Duration::from_millis(40));
+    }
+    std::thread::sleep(Duration::from_millis(150));
+}
+
 /// Moves to `at`, then presses and releases the right button there.
 pub fn right_click(at: (f64, f64)) {
     move_to(at);
