@@ -155,6 +155,27 @@ pub enum BrowserCommand {
     Quit,
 }
 
+/// A copy Chrome confirms with a toast, which nd's pages never show: Chromium drops every toast
+/// without a button or menu, and the app shows its own confirmation.
+// shortcut: a toast Chromium adds later is hidden but not reported, revisit when CEF exposes ToastController
+#[derive(Clone, Debug, PartialEq)]
+pub struct ChromeToast {
+    pub toast: Toast,
+}
+
+/// The toasts a Chrome-style page can raise, each from its context menu item.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Toast {
+    /// Copy Link Address.
+    LinkCopied,
+    /// Copy Image.
+    ImageCopied,
+    /// Copy Link to Highlight.
+    LinkToHighlightCopied,
+    /// Copy Video Frame.
+    VideoFrameCopied,
+}
+
 /// The page closed its own window (`window.close()` in a window a script opened). The app
 /// closes the tab or window that shows it.
 #[derive(Clone, Debug, PartialEq)]

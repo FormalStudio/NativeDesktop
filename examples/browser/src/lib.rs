@@ -23,8 +23,9 @@
 //! `ND_FRAMES_OK`), `keys` (a text field whose first keystroke mounts a Chrome-style page),
 //! `parity` (every event
 //! and command against a local test page, printing `ND_WEBVIEW_PARITY_OK`), `tabdrag` (two windows
-//! of tabs that drag between them, carrying live pages) or `reveal` (a hidden sidebar that slides
-//! in from the leading edge).
+//! of tabs that drag between them, carrying live pages), `reveal` (a hidden sidebar that slides
+//! in from the leading edge) or `toast` (an image to copy from the page's native context menu,
+//! printing `ND_TOAST` and the toast Chrome would have shown).
 
 mod adblock;
 mod extensions;
@@ -37,6 +38,7 @@ mod private;
 mod scenes;
 mod server;
 mod tabdrag;
+mod toast;
 mod webstore;
 
 use nd::prelude::*;
@@ -501,6 +503,7 @@ pub fn init(cx: &mut App) {
         Ok("tabdrag") => tabdrag::tabdrag(cx),
         Ok("reveal") => tabdrag::reveal(cx),
         Ok("webstore") => webstore::open(cx),
+        Ok("toast") => toast::open(cx),
         _ => {
             bind_keys(cx);
             let url = std::env::var("BROWSER_URL").unwrap_or_else(|_| HOME.into());

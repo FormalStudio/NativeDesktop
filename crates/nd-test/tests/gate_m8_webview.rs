@@ -21,6 +21,9 @@
 //!   playing video into Chromium's picture-in-picture window and back.
 //! - `real_keys_survive_a_new_page_cef_chrome`: keys typed into a native field while a
 //!   Chrome-style page is created, and Chromium activates its window, all reach the field.
+//! - `real_copy_image_toast_cef_chrome`: Copy Image from the page's native context menu, chosen
+//!   with real input, reports `ChromeToast` `ImageCopied`, and no window of Chromium's own toast
+//!   appears.
 //! - `real_print_*`: `print_to_pdf` writes a PDF, and `print` opens the system print panel
 //!   (WebKit and Chrome style; an off-screen page has no window for the panel).
 //!
@@ -459,5 +462,48 @@ mod gate_m8_webview {
         }
         let page = node("web").map(|n| n.name).unwrap_or_default();
         assert_eq!(field(), typed, "keys typed while the page came up went elsewhere; the page's title {page:?}");
+    }
+
+    /// The image's menu opens on a right click, type-select picks Copy Image, Return runs it.
+    #[test]
+    fn real_copy_image_toast_cef_chrome() {
+        const RETURN: u16 = 0x24;
+        if !real_allowed("real_copy_image_toast_cef_chrome") {
+            return;
+        }
+        if let Err(e) = ndshell::preflight::real_input() {
+            panic!("{e}");
+        }
+        let mut options = browser("cef-chrome", "toast");
+        options.ready_timeout = Duration::from_secs(60);
+        let app = launch_app(options).expect("launch browser");
+        let sc = Scene { app: &app };
+        sc.wait("the image to load", |sc| sc.status().contains("title=image"));
+        input::activate(app.pid());
+        sc.wait("the window to be key", |sc| sc.window().key);
+        let windows = || ndshell::window_list::every_layer_of_pid(app.pid());
+        let before: Vec<u32> = windows().iter().map(|w| w.number).collect();
+        let web = sc.area("web").expect("web bounds");
+        input::right_click(web.at(0.5, 0.5));
+        std::thread::sleep(Duration::from_millis(800));
+        input::type_text("Copy Image");
+        std::thread::sleep(Duration::from_millis(300));
+        input::key(RETURN, &[]);
+        let tail = |app: &AppHandle| app.stderr_tail(40).join("\n");
+        let line = app
+            .wait_for_stderr("ND_TOAST ", Duration::from_secs(15))
+            .unwrap_or_else(|e| panic!("no toast reported: {e}\n{}", tail(&app)));
+        assert!(line.contains("ND_TOAST ImageCopied"), "{line}");
+        sc.status_has("toast=ImageCopied");
+        // Chromium shows a toast for 8 s, right after the command; the menu's own window fades
+        // out first.
+        std::thread::sleep(Duration::from_millis(500));
+        let end = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < end {
+            let new: Vec<_> = windows().into_iter().filter(|w| !before.contains(&w.number)).collect();
+            assert!(new.is_empty(), "a window opened after Copy Image over the page at {web:?}: {new:?}");
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        println!("{line}; ND_M8_COPY_IMAGE_TOAST_CEF_CHROME_OK");
     }
 }

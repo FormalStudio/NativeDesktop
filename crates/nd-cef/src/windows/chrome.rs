@@ -10,6 +10,10 @@
 //! window exists before the page is in any window, and move into the GPUI window with
 //! `SetParent`, also when the page moves to another window. Chromium's window goes back to the
 //! parking window when the page closes, where Chromium closes it.
+//!
+//! Chrome's toasts hang half over the hidden toolbar's bottom edge, the page's top. Those without
+//! a button never show (`runtime::quiet_toasts`); any other owned popup of this thread that
+//! straddles a page's top edge is moved down to it ([`under_top`]).
 
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
@@ -30,13 +34,13 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{GetFocus, SetFocus};
-use windows::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
+use windows::Win32::UI::Shell::{DefSubclassProc, GetWindowSubclass, RemoveWindowSubclass, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, EnumChildWindows, EnumThreadWindows, GWL_STYLE, GetClassNameW,
-    GetParent, GetWindowLongPtrW, GetWindowRect, HWND_TOP, IsChild, IsWindowVisible, PW_RENDERFULLCONTENT,
+    CBT_CREATEWNDW, CallNextHookEx, CreateWindowExW, DefWindowProcW, DestroyWindow, EnumChildWindows, EnumThreadWindows, GWL_STYLE, GetClassNameW,
+    GetParent, GetWindowLongPtrW, GetWindowRect, HCBT_CREATEWND, HHOOK, HWND_TOP, IsChild, IsWindowVisible, PW_RENDERFULLCONTENT,
     RegisterClassW, SW_HIDE, SW_SHOWNA, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetParent,
-    SetWindowLongPtrW, SetWindowPos, ShowWindow, WINDOWPOS, WM_DESTROY, WM_NCDESTROY, WM_WINDOWPOSCHANGING, WNDCLASSW,
-    WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOPARENTNOTIFY, WS_EX_TOOLWINDOW, WS_MAXIMIZEBOX,
+    SetWindowLongPtrW, SetWindowPos, SetWindowsHookExW, ShowWindow, WINDOWPOS, WM_DESTROY, WM_NCDESTROY, WM_WINDOWPOSCHANGING, WNDCLASSW,
+    WH_CBT, WS_CAPTION, WS_CHILD, WS_CLIPCHILDREN, WS_CLIPSIBLINGS, WS_EX_NOPARENTNOTIFY, WS_EX_TOOLWINDOW, WS_MAXIMIZEBOX,
     WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME,
 };
 use windows::core::{BOOL, w};
@@ -49,6 +53,7 @@ const POPUP_POLL: Duration = Duration::from_millis(8);
 /// The subclass id of a popup pinned under its anchor.
 const PIN: usize = 1;
 const KEEP: usize = 2;
+const UNDER_TOP: usize = 3;
 
 /// Every style is hosted here.
 pub(crate) fn supported(style: nd_webview::CefStyle) -> nd_webview::CefStyle {
@@ -89,6 +94,10 @@ thread_local! {
     /// Chromium builds them (`get_delegate_for_popup_browser_view`, then
     /// `on_popup_browser_view_created`).
     static PENDING_POPUPS: RefCell<VecDeque<u64>> = RefCell::default();
+    /// The containers of open pages, whose top edges [`under_top`] keeps popups under.
+    static CONTAINERS: RefCell<Vec<isize>> = RefCell::default();
+    /// Subclasses each owned popup of this thread as it is created ([`created`]).
+    static CREATE_HOOK: Cell<Option<HHOOK>> = const { Cell::new(None) };
 }
 
 /// The class of containers and of the parking window: nothing but `DefWindowProc`.
@@ -192,6 +201,12 @@ impl Chrome {
             )
         }
         .map_err(|e| format!("the page's container window: {e}"))?;
+        CONTAINERS.with(|c| c.borrow_mut().push(container.0 as isize));
+        if CREATE_HOOK.with(Cell::get).is_none() {
+            // SAFETY: a hook on this thread only, for the process's life.
+            let hook = unsafe { SetWindowsHookExW(WH_CBT, Some(created), None, GetCurrentThreadId()) };
+            CREATE_HOOK.with(|h| h.set(hook.inspect_err(|e| tracing::warn!("nd-cef: popup hook: {e}")).ok()));
+        }
         Ok(Rc::new(Self {
             page,
             container,
@@ -441,6 +456,7 @@ impl Chrome {
             st.views
         };
         self.untrack_popup();
+        CONTAINERS.with(|c| c.borrow_mut().retain(|w| *w != self.container.0 as isize));
         // SAFETY: windows of this thread; the container has no child left when it goes.
         unsafe {
             if let (Some(views), Ok(parking)) = (views, parking()) {
@@ -716,6 +732,67 @@ unsafe extern "system" fn pin(
     if msg == WM_NCDESTROY {
         // SAFETY: removes this subclass from the window being destroyed.
         let _ = unsafe { RemoveWindowSubclass(hwnd, Some(pin), PIN) };
+    }
+    // SAFETY: the arguments are the ones Windows passed this subclass.
+    unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
+}
+
+/// Subclasses every owned popup of this thread with [`under_top`] as it is created, before
+/// Chromium first places it.
+unsafe extern "system" fn created(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if code == HCBT_CREATEWND as i32 && lparam.0 != 0 {
+        // SAFETY: HCBT_CREATEWND's lParam is the CBT_CREATEWNDW of the window being created.
+        let create = unsafe { &*(*(lparam.0 as *const CBT_CREATEWNDW)).lpcs };
+        if create.style & WS_POPUP.0 as i32 != 0 && !create.hwndParent.is_invalid() {
+            // SAFETY: subclasses a window of this thread; `under_top` removes itself on WM_NCDESTROY.
+            let _ = unsafe { SetWindowSubclass(HWND(wparam.0 as *mut c_void), Some(under_top), UNDER_TOP, 0) };
+        }
+    }
+    // SAFETY: passes the hook's own arguments on.
+    unsafe { CallNextHookEx(None, code, wparam, lparam) }
+}
+
+/// An owned popup's window procedure: a move or resize that would leave it straddling the top
+/// edge of an open page, over that page, lands it on that edge instead. Chromium's other popups
+/// hang below what they point at; an extension popup is pinned under its anchor ([`pin`]).
+unsafe extern "system" fn under_top(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    _id: usize,
+    _data: usize,
+) -> LRESULT {
+    // SAFETY: asks whether a window of this thread carries `pin`.
+    let pinned = unsafe { GetWindowSubclass(hwnd, Some(pin), PIN, None) }.as_bool();
+    if msg == WM_WINDOWPOSCHANGING && lparam.0 != 0 && !pinned {
+        // SAFETY: WM_WINDOWPOSCHANGING's lParam is the WINDOWPOS about to be applied.
+        let pos = unsafe { &mut *(lparam.0 as *mut WINDOWPOS) };
+        let mut rect = RECT::default();
+        // SAFETY: reads the rectangle of the window being positioned.
+        let _ = unsafe { GetWindowRect(hwnd, &mut rect) };
+        let (x, y) = if pos.flags.contains(SWP_NOMOVE) { (rect.left, rect.top) } else { (pos.x, pos.y) };
+        let (w, h) =
+            if pos.flags.contains(SWP_NOSIZE) { (rect.right - rect.left, rect.bottom - rect.top) } else { (pos.cx, pos.cy) };
+        let containers = CONTAINERS.with(|c| c.borrow().clone());
+        for container in containers {
+            let container = HWND(container as *mut c_void);
+            let mut page = RECT::default();
+            // SAFETY: reads geometry of a window of this thread.
+            if !unsafe { IsWindowVisible(container) }.as_bool() || unsafe { GetWindowRect(container, &mut page) }.is_err() {
+                continue;
+            }
+            if y < page.top && y + h > page.top && x < page.right && x + w > page.left {
+                pos.x = x;
+                pos.y = page.top;
+                pos.flags &= !SWP_NOMOVE;
+                break;
+            }
+        }
+    }
+    if msg == WM_NCDESTROY {
+        // SAFETY: removes this subclass from the window being destroyed.
+        let _ = unsafe { RemoveWindowSubclass(hwnd, Some(under_top), UNDER_TOP) };
     }
     // SAFETY: the arguments are the ones Windows passed this subclass.
     unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }

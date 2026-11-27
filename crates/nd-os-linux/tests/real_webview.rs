@@ -45,6 +45,11 @@
 //!   `execute_javascript` lifts the playing video into Chromium's picture-in-picture window and
 //!   back. Chrome style only: an off-screen page has no picture-in-picture window.
 //!
+//! - `real_copy_image_toast_cef_chrome`: `BROWSER_SCENE=toast`: Copy Image from the page's
+//!   native context menu, chosen with the compositor's pointer and keyboard, reports
+//!   `ChromeToast` `ImageCopied`, and nothing draws over the page's top edge where Chromium's
+//!   own toast would.
+//!
 //! - `real_print_cef`: `BROWSER_SCENE=print` with the run's private bus and a fake print portal
 //!   on it: `print_to_pdf` writes a PDF, and `print` shows the portal's dialog and hands it the
 //!   page as a PDF with the dialog's token.
@@ -828,5 +833,61 @@ mod gate_m8_webview {
         drop(probe);
         let _ = std::fs::remove_dir_all(&dir);
         println!("{}", run.marker("RESIZE"));
+    }
+
+    /// The image's menu opens on a right click, type-select picks Copy Image, Return runs it.
+    /// Chromium would centre its toast on the page's top edge, so the screen around the top
+    /// centre stays as it was before the copy.
+    #[test]
+    fn real_copy_image_toast_cef_chrome() {
+        let run = Run::start("chrome");
+        let dir = std::env::temp_dir().join(format!("nd-webview-toast-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let app = launch(&run, "toast", &dir);
+        assert_chrome_style(&run, &app.probe);
+        app.status_has("title=image");
+        let (cx, top) = app.at("web", 0.5, 0.).unwrap();
+        let around_top = |shot: &ndshell::wayland::CapturedFrame| -> Vec<[u8; 3]> {
+            let ys = (top as i32 - 40..top as i32 + 60).step_by(2);
+            ys.flat_map(|y| (cx as i32 - 100..cx as i32 + 100).step_by(4).map(move |x| (x, y)))
+                .map(|(x, y)| shot.rgb(x as u32, y as u32))
+                .collect()
+        };
+        let shot = || ndshell::wayland::screenshot(&run.hyprland).unwrap();
+        let image = app.at("web", 0.5, 0.5).unwrap();
+        // The title arrives before Chromium's first frame is on screen: the image's red border is.
+        let painted = Instant::now() + Duration::from_secs(10);
+        while !near(shot().rgb(image.0 as u32 - 100, image.1 as u32), [0xd0, 0x40, 0x30]) {
+            assert!(Instant::now() < painted, "the page never painted its image");
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        let before = around_top(&shot());
+        let mut input = VirtualInput::connect(&run.hyprland).unwrap();
+        wiggle(&mut input, image);
+        input.right_click(image.0, image.1).unwrap();
+        std::thread::sleep(Duration::from_millis(500));
+        for key in [keys::C, keys::O, keys::P, keys::Y, keys::SPACE, keys::I] {
+            input.key(key, &[]).unwrap();
+        }
+        input.key(keys::ENTER, &[]).unwrap();
+        app.status_has("toast=ImageCopied");
+        assert!(app.probe.log().contains("ND_TOAST ImageCopied"), "{}", app.probe.log());
+        // Chromium shows a toast for 8 s, right after the command.
+        let end = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < end {
+            let frame = shot();
+            let changed = around_top(&frame).iter().zip(&before).filter(|(a, b)| !near(**a, **b)).count();
+            if changed > 0 {
+                // The toast fades in: the frame kept is the one after it settles.
+                std::thread::sleep(Duration::from_millis(800));
+                let path = dir.with_extension("bmp");
+                let _ = shot().write_bmp(&path);
+                panic!("{changed} points around the page's top changed after Copy Image; frame at {path:?}");
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        drop(app);
+        let _ = std::fs::remove_dir_all(&dir);
+        println!("{}", run.marker("COPY_IMAGE_TOAST"));
     }
 }

@@ -10,7 +10,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::ffi::CString;
 
-use nd_webview::BrowserCommand;
+use nd_webview::{BrowserCommand, Toast};
 
 /// What a page does with a command.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -89,6 +89,15 @@ fn routed() -> Vec<(&'static str, Route)> {
     ]
 }
 
+/// The context menu commands Chrome confirms with a toast, which nd's pages never show
+/// (`runtime::quiet_toasts`).
+const TOASTS: [(&str, Toast); 4] = [
+    ("IDC_CONTENT_CONTEXT_COPYLINKLOCATION", Toast::LinkCopied),
+    ("IDC_CONTENT_CONTEXT_COPYIMAGE", Toast::ImageCopied),
+    ("IDC_CONTENT_CONTEXT_COPYLINKTOTEXT", Toast::LinkToHighlightCopied),
+    ("IDC_CONTENT_CONTEXT_COPYVIDEOFRAME", Toast::VideoFrameCopied),
+];
+
 thread_local! {
     static TABLE: RefCell<Option<HashMap<i32, Route>>> = const { RefCell::new(None) };
     /// The command of the context menu item being run: Chromium hands it to `OnChromeCommand`
@@ -131,6 +140,11 @@ pub(crate) fn running_menu_command(id: i32, f: impl FnOnce()) {
     let outer = MENU_COMMAND.with(|m| m.replace(Some(id)));
     f();
     MENU_COMMAND.with(|m| m.set(outer));
+}
+
+/// The toast Chrome would raise for context menu command `id`.
+pub(crate) fn toast(id: i32) -> Option<Toast> {
+    TOASTS.iter().find(|(name, _)| id_for(name) == Some(id)).map(|(_, toast)| *toast)
 }
 
 #[cfg(test)]

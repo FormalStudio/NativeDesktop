@@ -81,6 +81,7 @@ pub(crate) fn start() -> Result<(), String> {
     let root = root_cache();
     forget_windows(&root.join("Default"));
     quiet_profile(&root.join("Default"));
+    quiet_toasts(&root);
     crate::native_messaging::link_hosts(&root);
     let s = |p: &std::path::Path| CefString::from(p.to_string_lossy().as_ref());
     let settings = Settings {
@@ -260,10 +261,26 @@ const QUIET: [&str; 6] = [
 
 /// Turns the bubbles' preferences off in a profile's Preferences before Chromium loads it. The
 /// global context refuses them through `set_preference` (it returns false with no error), so a
-/// persistent profile gets them on disk. A file Chromium could not read either is left alone.
+/// persistent profile gets them on disk.
 fn quiet_profile(profile: &std::path::Path) {
-    let path = profile.join("Preferences");
-    let mut prefs = match std::fs::read(&path) {
+    let prefs: Vec<_> = QUIET.iter().map(|name| (*name, serde_json::Value::Bool(false))).collect();
+    write_prefs(&profile.join("Preferences"), &prefs);
+}
+
+/// Chrome anchors its toasts to the hidden toolbar's bottom edge, the page's top, so they would
+/// hang half above the page. Its "actionable only" alert level (`toasts::ToastAlertLevel`) drops
+/// every toast without a button or menu before it is built; the copies among them reach the app
+/// as [`nd_webview::ChromeToast`]. The level lives in local state, which refuses
+/// `set_preference` as the global context does.
+fn quiet_toasts(root: &std::path::Path) {
+    const ACTIONABLE: i32 = 1;
+    write_prefs(&root.join("Local State"), &[("settings.toast.alert_level", ACTIONABLE.into())]);
+}
+
+/// Sets dotted preference `names` in the JSON file Chromium keeps them in. A file Chromium
+/// could not read either is left alone.
+fn write_prefs(path: &std::path::Path, names: &[(&str, serde_json::Value)]) {
+    let mut prefs = match std::fs::read(path) {
         Ok(bytes) => match serde_json::from_slice::<serde_json::Value>(&bytes) {
             Ok(prefs) if prefs.is_object() => prefs,
             _ => return,
@@ -272,14 +289,14 @@ fn quiet_profile(profile: &std::path::Path) {
         Err(e) => return tracing::debug!("nd-cef: {}: {e}", path.display()),
     };
     let mut changed = false;
-    for name in QUIET {
+    for (name, value) in names {
         let mut at = &mut prefs;
         let mut keys = name.split('.').peekable();
         while let Some(key) = keys.next() {
             let Some(object) = at.as_object_mut() else { break };
             if keys.peek().is_none() {
-                if object.get(key) != Some(&serde_json::Value::Bool(false)) {
-                    object.insert(key.to_owned(), serde_json::Value::Bool(false));
+                if object.get(key) != Some(value) {
+                    object.insert(key.to_owned(), value.clone());
                     changed = true;
                 }
                 break;
@@ -287,12 +304,11 @@ fn quiet_profile(profile: &std::path::Path) {
             at = object.entry(key).or_insert_with(|| serde_json::json!({}));
         }
     }
-    if !changed {
-        return;
-    }
-    let written = std::fs::create_dir_all(profile)
-        .and_then(|()| std::fs::write(profile.join("Preferences.nd"), prefs.to_string()))
-        .and_then(|()| std::fs::rename(profile.join("Preferences.nd"), &path));
+    let (Some(dir), true) = (path.parent(), changed) else { return };
+    let staged = path.with_extension("nd");
+    let written = std::fs::create_dir_all(dir)
+        .and_then(|()| std::fs::write(&staged, prefs.to_string()))
+        .and_then(|()| std::fs::rename(&staged, path));
     if let Err(e) = written {
         tracing::debug!("nd-cef: {}: {e}", path.display());
     }

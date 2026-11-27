@@ -649,7 +649,10 @@ impl CefPage {
                 };
                 match chosen {
                     Some(Choice::Chromium(command)) => {
-                        commands::running_menu_command(command, || callback.cont(command, EventFlags::default()))
+                        commands::running_menu_command(command, || callback.cont(command, EventFlags::default()));
+                        if let Some(toast) = commands::toast(command) {
+                            page.page.emit(ChromeToast { toast });
+                        }
                     }
                     Some(Choice::App(item)) => {
                         callback.cancel();

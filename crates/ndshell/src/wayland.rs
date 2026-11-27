@@ -33,11 +33,16 @@ use crate::hyprland::Hyprland;
 pub mod keys {
     pub const ESC: u32 = 1;
     pub const TAB: u32 = 15;
+    pub const Y: u32 = 21;
+    pub const I: u32 = 23;
+    pub const O: u32 = 24;
+    pub const P: u32 = 25;
     pub const ENTER: u32 = 28;
     pub const LEFTCTRL: u32 = 29;
     pub const A: u32 = 30;
     pub const S: u32 = 31;
     pub const LEFTSHIFT: u32 = 42;
+    pub const C: u32 = 46;
     pub const LEFTALT: u32 = 56;
     pub const SPACE: u32 = 57;
     pub const LEFTMETA: u32 = 125;

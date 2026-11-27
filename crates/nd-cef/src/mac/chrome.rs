@@ -12,6 +12,10 @@
 //! popups, autofill, permission and extension bubbles) against the widget's screen bounds, and
 //! those come from the anchor; and Chromium only produces frames for a widget it believes is
 //! shown.
+//!
+//! Chrome's toasts hang half over the hidden toolbar's bottom edge, the page's top. Those without
+//! a button never show (`runtime::quiet_toasts`); any other child window of the anchor that
+//! straddles the page's top edge is moved down to it ([`Chrome::hold_under_top`]).
 
 use std::cell::{Cell, RefCell};
 use std::ptr::NonNull;
@@ -24,7 +28,7 @@ use objc2::runtime::{AnyObject, NSObjectProtocol, ProtocolObject};
 use objc2::{MainThreadOnly, Message, msg_send};
 use objc2_app_kit::{
     NSApplication, NSEvent, NSEventMask, NSView, NSWindow, NSWindowAnimationBehavior, NSWindowCollectionBehavior,
-    NSWindowDidBecomeKeyNotification, NSWindowDidChangeScreenNotification, NSWindowDidDeminiaturizeNotification,
+    NSWindowDidBecomeKeyNotification, NSWindowDidChangeOcclusionStateNotification, NSWindowDidChangeScreenNotification, NSWindowDidDeminiaturizeNotification,
     NSWindowDidEndLiveResizeNotification, NSWindowDidEnterFullScreenNotification,
     NSWindowDidExitFullScreenNotification, NSWindowDidMoveNotification, NSWindowDidResizeNotification,
     NSWindowOrderingMode,
@@ -65,6 +69,8 @@ pub(crate) struct Chrome {
     /// inset in the Views window.
     inset: Cell<Option<(f64, f64)>>,
     popup: RefCell<Option<PopupTrack>>,
+    /// Watches every window's moves for [`Chrome::hold_under_top`].
+    under_top: RefCell<Vec<Observer>>,
 }
 
 /// An extension popup on its way or on screen. Chromium anchors it to the hidden toolbar, so it
@@ -113,6 +119,7 @@ impl Chrome {
             closed: Cell::new(false),
             inset: Cell::new(None),
             popup: RefCell::default(),
+            under_top: RefCell::default(),
         })
     }
 
@@ -176,6 +183,7 @@ impl Chrome {
         };
         imperceptible(&anchor);
         *self.key_back.borrow_mut() = Some(key_back(&anchor, self.page));
+        *self.under_top.borrow_mut() = under_top(self.page);
         *self.anchor.borrow_mut() = Some(anchor);
         let host_was_key = self.view().and_then(|v| v.window()).is_some_and(|w| w.isKeyWindow());
         window.show();
@@ -588,6 +596,30 @@ impl Chrome {
         }
     }
 
+    /// Moves `window` down to the page's top edge when it is a child of the anchor that
+    /// straddles that edge over the page: the extension popup excepted, it can only be a toast.
+    fn hold_under_top(&self, window: &NSWindow) {
+        let Some(anchor) = self.anchor.borrow().clone() else { return };
+        if !window.parentWindow().is_some_and(|p| std::ptr::eq(&*p, &*anchor)) {
+            return;
+        }
+        // Borrowed while `place_popup` moves the popup: the window is the popup.
+        let Ok(popup) = self.popup.try_borrow() else { return };
+        if popup.as_ref().and_then(|t| t.window.as_deref()).is_some_and(|p| std::ptr::eq(p, window)) {
+            return;
+        }
+        drop(popup);
+        let Some(page) = self.anchor_frame() else { return };
+        let (left, inset) = self.inset.get().unwrap_or_default();
+        let top = page.origin.y + page.size.height - inset;
+        let (x0, x1) = (page.origin.x + left, page.origin.x + page.size.width);
+        let frame = window.frame();
+        let straddles = frame.origin.y + frame.size.height > top && frame.origin.y < top;
+        if straddles && frame.origin.x < x1 && frame.origin.x + frame.size.width > x0 {
+            window.setFrameOrigin(NSPoint::new(frame.origin.x, top - frame.size.height));
+        }
+    }
+
     /// The subtree goes home before the browser closes: closing it while it lives in another
     /// window takes Chromium's teardown through a hierarchy that no longer exists. The anchor
     /// leaves the screen first, or AppKit can make it key while the app's windows close, after
@@ -601,7 +633,8 @@ impl Chrome {
         }
         self.untrack_popup();
         let center = NSNotificationCenter::defaultCenter();
-        for observer in self.observers.borrow_mut().drain(..).chain(self.key_back.borrow_mut().take()) {
+        let observers = self.observers.borrow_mut().drain(..).chain(self.key_back.borrow_mut().take()).collect::<Vec<_>>();
+        for observer in observers.into_iter().chain(self.under_top.borrow_mut().drain(..)) {
             unsafe { center.removeObserver(observer.as_ref()) };
         }
         let anchor = self.anchor.borrow_mut().take();
@@ -625,6 +658,27 @@ impl Chrome {
             window.close();
         }
     }
+}
+
+/// Runs [`Chrome::hold_under_top`] for page `id` on every window that moves, resizes or comes
+/// on screen: Chromium places a toast before it shows it, and moves it again while it animates in.
+fn under_top(id: u64) -> Vec<Observer> {
+    let center = NSNotificationCenter::defaultCenter();
+    let block = RcBlock::new(move |note: NonNull<NSNotification>| {
+        // SAFETY: AppKit hands a valid notification for the block's duration.
+        let note = unsafe { note.as_ref() };
+        let Some(window) = note.object().and_then(|o| o.downcast::<NSWindow>().ok()) else { return };
+        if let Some(chrome) = page::get(id).and_then(|p| p.view.chrome()) {
+            chrome.hold_under_top(&window);
+        }
+    });
+    let names = unsafe {
+        [NSWindowDidMoveNotification, NSWindowDidResizeNotification, NSWindowDidChangeOcclusionStateNotification]
+    };
+    names
+        .into_iter()
+        .map(|name| unsafe { center.addObserverForName_object_queue_usingBlock(Some(name), None, None, &block) })
+        .collect()
 }
 
 /// Hands key back whenever Chromium activates `anchor`: the anchor is invisible, and key on it
