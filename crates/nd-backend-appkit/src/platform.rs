@@ -30,6 +30,15 @@ define_class!(
             QUIT_WHEN_WINDOWS_CLOSE.load(std::sync::atomic::Ordering::Relaxed)
         }
 
+        // A Dock click on an app that kept running with no window open.
+        #[unsafe(method(applicationShouldHandleReopen:hasVisibleWindows:))]
+        fn should_handle_reopen(&self, _app: &NSApplication, visible: bool) -> bool {
+            if !visible {
+                crate::defer_with_app(|app| app.reopen());
+            }
+            true
+        }
+
         // Synchronous: the process exits when this returns, so there is no later turn to defer to.
         #[unsafe(method(applicationWillTerminate:))]
         fn will_terminate(&self, _notification: &objc2_foundation::NSNotification) {

@@ -53,10 +53,14 @@ define_class!(
         fn fire(&self, sender: &NSMenuItem) {
             let Ok(index) = usize::try_from(sender.tag()) else { return };
             let Some(action) = self.ivars().actions.borrow().get(index).map(|(a, _)| a.boxed_clone()) else { return };
-            let Some(window) = self.ivars().window.get().or_else(key_window) else { return };
-            defer_with_app(move |app| {
-                app.dispatch_action(window, &*action);
-            });
+            match self.ivars().window.get().or_else(key_window) {
+                Some(window) => defer_with_app(move |app| {
+                    app.dispatch_action(window, &*action);
+                }),
+                None => defer_with_app(move |app| {
+                    app.dispatch_windowless_action(&*action);
+                }),
+            }
         }
 
         /// Asked only in menus that autoenable, where a role item sits beside the app's own.

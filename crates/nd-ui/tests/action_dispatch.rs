@@ -134,3 +134,17 @@ fn quit_handlers_run_once_in_order() {
     cx.app_will_quit();
     assert_eq!(*ran.borrow(), [1, 2]);
 }
+
+#[test]
+fn a_windowless_action_and_a_reopen_reach_the_app() {
+    let mut cx = TestApp::new();
+    assert!(!cx.dispatch_windowless_action(&Go), "an app with no handler takes none");
+    let got = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = got.clone();
+    cx.on_windowless_action(move |a, _| seen.borrow_mut().push(a.name().to_owned()));
+    let seen = got.clone();
+    cx.on_reopen(move |_| seen.borrow_mut().push("reopen".into()));
+    assert!(cx.dispatch_windowless_action(&Go));
+    cx.reopen();
+    assert_eq!(*got.borrow(), [Go.name(), "reopen"]);
+}

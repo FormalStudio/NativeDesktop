@@ -232,6 +232,8 @@ pub struct App {
     retitled: HashMap<WindowId, SharedString>,
     active_window: Option<WindowId>,
     quitting: Vec<QuitHandler>,
+    reopen: Option<ReopenHandler>,
+    windowless: Option<WindowlessHandler>,
     /// The user asked for less motion: element animations jump instead of moving.
     pub(crate) reduce_motion: bool,
     /// The platform's timings, which themed animations resolve through.
@@ -241,6 +243,8 @@ pub struct App {
 }
 
 type QuitHandler = Box<dyn FnOnce(&mut App)>;
+type ReopenHandler = Rc<dyn Fn(&mut App)>;
+type WindowlessHandler = Rc<dyn Fn(&dyn Action, &mut App)>;
 
 impl App {
     pub fn with_backend(mut backend: Box<dyn Backend>) -> Self {
@@ -273,6 +277,8 @@ impl App {
             retitled: HashMap::new(),
             active_window: None,
             quitting: Vec::new(),
+            reopen: None,
+            windowless: None,
             reduce_motion: false,
             motion: crate::animation::MotionTokens::default(),
             drag: None,
@@ -762,6 +768,33 @@ impl App {
         for f in std::mem::take(&mut self.quitting) {
             f(self);
         }
+    }
+
+    /// Runs `f` when the user asks for the app while it shows no window: a click on its Dock
+    /// icon on macOS. Only an app that outlives its windows sees it.
+    pub fn on_reopen(&mut self, f: impl Fn(&mut App) + 'static) {
+        self.reopen = Some(Rc::new(f));
+    }
+
+    /// The user asked for the app with no window open; hosts call it.
+    pub fn reopen(&mut self) {
+        if let Some(f) = self.reopen.clone() {
+            f(self);
+        }
+    }
+
+    /// Runs `f` for a menu bar action picked while no window is open to take it, as New Window
+    /// is after the last window closed on macOS.
+    pub fn on_windowless_action(&mut self, f: impl Fn(&dyn Action, &mut App) + 'static) {
+        self.windowless = Some(Rc::new(f));
+    }
+
+    /// A menu bar action with no window to dispatch to; hosts call it. Returns whether the app
+    /// takes windowless actions.
+    pub fn dispatch_windowless_action(&mut self, action: &dyn Action) -> bool {
+        let Some(f) = self.windowless.clone() else { return false };
+        f(action, self);
+        true
     }
 
     /// Ends the app as the OS's Quit does: the way out of an app that outlives its windows.
