@@ -776,6 +776,8 @@ impl Build<'_> {
                     .size_full(),
                 );
             slot = slot.child(gpui::deferred(panel).with_priority(1));
+        } else {
+            self.forget_bounds(node);
         }
         slot.into_any_element()
     }

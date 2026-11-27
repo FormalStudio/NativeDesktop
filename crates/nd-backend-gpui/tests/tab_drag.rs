@@ -188,6 +188,13 @@ pub fn gpui_a_hidden_sidebar_reveals_from_the_edge() {
     std::thread::sleep(Duration::from_millis(300));
     settle(&mut r.cx, &r.host);
     assert_eq!(*log.borrow(), ["revealed true", "revealed false"], "250 ms after the pointer left");
+    std::thread::sleep(Duration::from_millis(200));
+    settle(&mut r.cx, &r.host);
+    let hidden = r.host.read(|app| {
+        let tree = app.semantic_window(r.window)?;
+        tree.root.iter().find(|n| n.test_id.as_deref() == Some("in-sidebar")).map(|n| n.visible)
+    });
+    assert_eq!(hidden, Some(false), "gone, the panel's content keeps no bounds from when it showed");
 }
 
 fn main() {
