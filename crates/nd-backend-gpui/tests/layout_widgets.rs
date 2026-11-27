@@ -90,6 +90,8 @@ struct Log {
     widths: Vec<(&'static str, f32)>,
     /// What the scaffold's content reported to `.on_resize`.
     content_sizes: Vec<(f32, f32)>,
+    /// What the sidebar reported to `.on_collapse_change`.
+    collapsed: Vec<bool>,
 }
 
 struct Scene {
@@ -271,7 +273,9 @@ impl Render for Scene {
                     .toolbar(
                         toolbar().title("Notes").sidebar_toggle().flexible_space().item(button("search", "Search")),
                     )
-                    .sidebar(sidebar().min_w(px(220.)).child(folders))
+                    .sidebar(sidebar().min_w(px(220.)).child(folders).on_collapse_change(
+                        cx.listener(|this, e: &PaneCollapsed, _, _| this.log.borrow_mut().collapsed.push(e.collapsed)),
+                    ))
                     .content(text("Body"))
                     .into_any_element();
             }
@@ -1168,6 +1172,7 @@ mod gate_m6 {
         let content = o.node("nd-content").bounds.expect("content laid out");
         assert_eq!((content.origin.x, content.size.width), (0., 520.), "the content takes the whole width");
         assert!(!o.node("folders").visible, "the folded sidebar shows nothing");
+        assert_eq!(o.log.borrow().collapsed, [true], "the fold reports the sidebar collapsed");
         o.toggle_sidebar();
         let folders = o.node("folders");
         assert!(folders.visible, "the toggle lays the sidebar over the content");

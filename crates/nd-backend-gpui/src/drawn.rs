@@ -11,7 +11,7 @@ use nd_components::{
     TitlebarInset, TitlebarProps, Toolbar, ToolbarItem, ToolbarItemProps, ToolbarProps, ToolbarSystemItem, ToolbarTab,
     ToolbarTabProps,
 };
-use nd_components::{PANE_MIN_WIDTH, REVEAL_EDGE, SidebarRevealed};
+use nd_components::{PANE_MIN_WIDTH, PaneCollapsed, REVEAL_EDGE, SidebarRevealed};
 use nd_core::NodeId;
 use nd_gpui::gpui::prelude::FluentBuilder as _;
 use nd_gpui::gpui::{
@@ -118,7 +118,7 @@ impl Build<'_> {
             // Toolbar first as the title row, then the panes side by side.
             let (bars, panes): (Vec<NodeId>, Vec<NodeId>) =
                 node.children.iter().partition(|c| self.nodes.get(c).is_some_and(is_kind::<Toolbar>));
-            self.fold_narrow_sidebar(id, &panes, window);
+            self.fold_narrow_sidebar(id, &panes, window, cx);
             let split = self.split_headers(id, node, &bars);
             let outer = self.split.replace(split);
             let bars: Vec<AnyElement> = bars.iter().map(|c| self.node(*c, window, cx)).collect();
@@ -572,7 +572,7 @@ impl Build<'_> {
     /// Marks `scaffold` narrow while its window leaves the content less than [`NARROW_CONTENT`]
     /// beside the sidebar among `panes` at its narrowest. Folding and unfolding is immediate, as at a libadwaita
     /// breakpoint; widening past it drops an overlaid sidebar back into the row.
-    fn fold_narrow_sidebar(&self, scaffold: NodeId, panes: &[NodeId], window: &gpui::Window) {
+    fn fold_narrow_sidebar(&self, scaffold: NodeId, panes: &[NodeId], window: &gpui::Window, cx: &mut gpui::App) {
         let sidebar = panes.iter().find_map(|c| {
             let p = self.nodes.get(c).and_then(|n| props::<PaneProps>(n))?;
             (p.role == PaneRole::Sidebar).then_some((*c, p))
@@ -594,6 +594,10 @@ impl Build<'_> {
         }
         if let Some((pane, _)) = sidebar {
             self.backend.pane_slides.borrow_mut().remove(&pane);
+            // Folded out of the row is collapsed, as AppKit's split view reports a sidebar it
+            // collapses on a window resize.
+            self.backend.state.borrow().events.emitter(pane).emit(PaneCollapsed { collapsed: narrow });
+            (self.wake)(cx);
         }
     }
 
