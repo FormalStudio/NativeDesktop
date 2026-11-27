@@ -503,7 +503,11 @@ impl OsrView {
         window.with_content_mask(Some(ContentMask { bounds }), |window| {
             // Under a frame that has not caught up with a resize yet: the page's own edge colour,
             // so a flat page reads as one surface while Chromium draws the new size.
-            let under = st.frame.as_ref().map_or(gpui::Rgba { r: 1., g: 1., b: 1., a: 1. }, |f| f.edge);
+            let under = match (&st.frame, self.chrome()) {
+                (Some(f), _) => f.edge,
+                (None, Some(chrome)) => gpui::rgb(chrome.edge()),
+                (None, None) => gpui::Rgba { r: 1., g: 1., b: 1., a: 1. },
+            };
             let corners = st.radii;
             window.paint_quad(fill(bounds, under).corner_radii(corners));
             if let Some(frame) = &st.frame {

@@ -315,6 +315,13 @@ impl Chrome {
         true
     }
 
+    /// The page's background, as GPUI's colour: what shows where Chromium has not drawn yet.
+    /// shortcut: the canvas colour, not the page's own painted background as on Linux; read it
+    /// from the page when Windows gets the sidebar slide.
+    pub(crate) fn edge(&self) -> u32 {
+        crate::page::canvas(self.page) & 0xff_ffff
+    }
+
     /// The page is drawn at `frame` of GPUI window `parent` with `shape`. Returns whether the
     /// container or Chromium's window changed size, so a snapshot taken before is stale.
     pub(crate) fn place(&self, parent: HWND, frame: R, shape: Shape) -> bool {

@@ -22,8 +22,9 @@ use x11rb::protocol::Event;
 use x11rb::protocol::shape::{ConnectionExt as _, SK, SO};
 use x11rb::protocol::xinput::{self, ConnectionExt as _};
 use x11rb::protocol::xproto::{
-    AtomEnum, ClipOrdering, ConfigureWindowAux, ConnectionExt as _, CreateWindowAux, EventMask, ImageFormat,
-    InputFocus, KEY_PRESS_EVENT, KEY_RELEASE_EVENT, KeyPressEvent, PropMode, Rectangle, StackMode, Window, WindowClass,
+    AtomEnum, ChangeWindowAttributesAux, ClipOrdering, ConfigureWindowAux, ConnectionExt as _, CreateWindowAux,
+    EventMask, ImageFormat, InputFocus, KEY_PRESS_EVENT, KEY_RELEASE_EVENT, KeyPressEvent, PropMode, Rectangle,
+    StackMode, Window, WindowClass,
 };
 use x11rb::rust_connection::RustConnection;
 use x11rb::wrapper::ConnectionExt as _;
@@ -94,7 +95,6 @@ struct X {
     depth: u8,
     visual: u32,
     colormap: u32,
-    white: u32,
 }
 
 fn x() -> Result<Rc<X>, String> {
@@ -104,14 +104,8 @@ fn x() -> Result<Rc<X>, String> {
         }
         let (conn, screen) = RustConnection::connect(None).map_err(|e| format!("X11: {e}"))?;
         let s = &conn.setup().roots[screen];
-        let x = Rc::new(X {
-            root: s.root,
-            depth: s.root_depth,
-            visual: s.root_visual,
-            colormap: s.default_colormap,
-            white: s.white_pixel,
-            conn,
-        });
+        let x =
+            Rc::new(X { root: s.root, depth: s.root_depth, visual: s.root_visual, colormap: s.default_colormap, conn });
         // Raw presses on the root reach every client that selects them, where a press on
         // Chromium's window goes to Chromium alone. XI 2.1 delivers them during grabs too.
         let presses = xinput::EventMask {
@@ -215,6 +209,9 @@ struct St {
     /// The input shapes the container had since X's events were last read, by that read's
     /// count: a press is read a pump turn late, after an overlay it hit may have closed.
     inputs: Vec<(u64, Vec<R>)>,
+    /// The page's background as an X pixel (0xRRGGBB), the container's own background: X fills
+    /// what a resize exposes with it until Chromium draws there.
+    edge: u32,
 }
 
 pub(crate) struct Chrome {
@@ -234,14 +231,16 @@ impl Chrome {
         let container = x.conn.generate_id().map_err(|e| format!("X11: {e}"))?;
         // The screen's own visual, not the parent's: a GPUI window can be 32-bit ARGB, and
         // Chromium's GL surface cannot be parented under one.
+        let edge = crate::page::canvas(page) & 0xff_ffff;
         let aux =
-            CreateWindowAux::new().background_pixel(x.white).border_pixel(0).colormap(x.colormap).override_redirect(1);
+            CreateWindowAux::new().background_pixel(edge).border_pixel(0).colormap(x.colormap).override_redirect(1);
         x.conn
             .create_window(x.depth, container, x.root, 0, 0, 800, 600, 0, WindowClass::INPUT_OUTPUT, x.visual, &aux)
             .map_err(|e| format!("X11: {e}"))?;
         x.conn.sync().map_err(|e| format!("X11: {e}"))?;
         LIVE.with(|l| l.set(l.get() + 1));
-        Ok(Rc::new(Self { page, x: x.clone(), container, st: RefCell::new(St { parent: x.root, ..St::default() }) }))
+        let st = St { parent: x.root, edge, ..St::default() };
+        Ok(Rc::new(Self { page, x: x.clone(), container, st: RefCell::new(st) }))
     }
 
     /// Creates the page's browser, windowed in the container.
@@ -319,6 +318,15 @@ impl Chrome {
             st.mapped = false;
         }
         let mut resized = st.frame.w != frame.w || st.frame.h != frame.h;
+        // Read before the resize, while Chromium's window still shows the page at its old size.
+        if resized
+            && let Some(edge) = st.browser.and_then(|(window, w, h)| self.read_edge(window, w, h))
+            && edge != st.edge
+        {
+            let _ =
+                conn.change_window_attributes(self.container, &ChangeWindowAttributesAux::new().background_pixel(edge));
+            st.edge = edge;
+        }
         if st.frame != frame {
             let aux = ConfigureWindowAux::new()
                 .x(frame.x)
@@ -452,6 +460,24 @@ impl Chrome {
             true => k.borrow_mut().remove(&browser),
             false => k.borrow_mut().insert(browser, st.parent),
         });
+    }
+
+    /// The page's background, as GPUI's colour: what shows where Chromium has not drawn yet.
+    pub(crate) fn edge(&self) -> u32 {
+        self.st.borrow().edge
+    }
+
+    /// The commonest colour down a column of Chromium's `w` by `h` window, in from its right
+    /// edge past a scrollbar: the page's own background, which its canvas colour is not when
+    /// the page paints one.
+    fn read_edge(&self, window: Window, w: i32, h: i32) -> Option<u32> {
+        let (x, h) = (i16::try_from((w - 24).max(0)).ok()?, u16::try_from(h).ok().filter(|h| *h > 0)?);
+        let reply = self.x.conn.get_image(ImageFormat::Z_PIXMAP, window, x, 0, 1, h, !0).ok()?.reply().ok()?;
+        let mut counts: HashMap<u32, usize> = HashMap::new();
+        for p in reply.data.as_chunks::<4>().0 {
+            *counts.entry(u32::from_le_bytes(*p) & 0xff_ffff).or_default() += 1;
+        }
+        counts.into_iter().max_by_key(|(_, n)| *n).map(|(pixel, _)| pixel)
     }
 
     /// What the page shows now, as GPUI's BGRA, for the holes overlays cut into it.
