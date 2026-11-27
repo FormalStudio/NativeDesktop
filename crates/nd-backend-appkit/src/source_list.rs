@@ -158,6 +158,15 @@ define_class!(
             if self.request_menu(event) { None } else { unsafe { msg_send![super(self), menuForEvent: event] } }
         }
 
+        // NSView passes a right click on to the next responder when menuForEvent: gives no menu,
+        // which would open the menu of whatever GPUI draws behind the list as well.
+        #[unsafe(method(rightMouseDown:))]
+        fn right_mouse_down(&self, event: &NSEvent) {
+            if !self.request_menu(event) {
+                unsafe { msg_send![super(self), rightMouseDown: event] }
+            }
+        }
+
         #[unsafe(method(otherMouseDown:))]
         fn other_mouse_down(&self, event: &NSEvent) {
             let row = (event.buttonNumber() == 2).then(|| self.row_id(event)).flatten();
