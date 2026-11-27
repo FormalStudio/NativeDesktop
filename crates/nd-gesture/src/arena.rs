@@ -46,6 +46,12 @@ impl Arena {
     /// A press. `members` are the hit path's recognizers, innermost first. Members held from the
     /// previous press (a double tap's first tap) replace the matching fresh ones.
     pub fn down(&mut self, members: Vec<ArenaMember>, input: &PointerInput) -> Vec<(NodeId, GestureEvent)> {
+        // A press while the last one is still down: its release went to a grab elsewhere (a
+        // Wayland compositor's, after Escape ended a drag). That press is over, not a first tap.
+        let mut out = Vec::new();
+        if self.pressed {
+            out = self.pointer(&PointerInput { phase: PointerPhase::Cancel, ..*input });
+        }
         let mut held: Vec<Member> =
             std::mem::take(&mut self.members).into_iter().filter(|m| !m.rejected && !m.recognizer.finished()).collect();
         self.winner = None;
@@ -64,7 +70,8 @@ impl Arena {
                 }
             })
             .collect();
-        self.feed(input)
+        out.extend(self.feed(input));
+        out
     }
 
     /// A move, release or cancel of the current press.

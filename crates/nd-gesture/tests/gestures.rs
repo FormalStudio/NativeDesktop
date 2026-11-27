@@ -536,6 +536,34 @@ mod gate_m4 {
         assert!((last.velocity.x - 600.).abs() < 5., "fling velocity {}", last.velocity.x);
     }
 
+    /// A press whose release never arrived (a compositor grab took it) is over once the next
+    /// press comes: that press drags afresh and the lost one ends as cancelled.
+    #[test]
+    fn a_press_after_a_lost_release_drags_again() {
+        let card = NodeId(1);
+        let set = GestureSet { drag: Some(None), ..GestureSet::default() };
+        let hit = [HitEntry { node: card, gestures: &set, bounds: BOUNDS }];
+        let mut router = bouncy();
+        let drag = |router: &mut GestureRouter, t: f64| {
+            let mut out = press(router, &hit, p(50., 50.), t);
+            for i in 1..=10 {
+                out.extend(pointer(router, PointerPhase::Move, p(50. + i as f32 * 5., 50.), t + f64::from(i) / 120.));
+            }
+            out
+        };
+        let phases = |out: &[Output]| -> Vec<GesturePhase> {
+            events(out)
+                .into_iter()
+                .filter_map(|(_, e)| if let GestureEvent::Drag(d) = e { Some(d.phase) } else { None })
+                .collect()
+        };
+
+        assert_eq!(phases(&drag(&mut router, 0.)).first(), Some(&GesturePhase::Began));
+        let again = phases(&drag(&mut router, 1.));
+        assert_eq!(again.first(), Some(&GesturePhase::Cancelled), "the lost press ends first: {again:?}");
+        assert!(again.contains(&GesturePhase::Began), "the new press drags: {again:?}");
+    }
+
     #[test]
     fn nested_taps_go_to_the_innermost() {
         let (outer, inner) = (NodeId(1), NodeId(2));
