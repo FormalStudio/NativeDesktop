@@ -1402,21 +1402,33 @@ impl Inner {
                     g.pointer(id, nd_gesture::PointerPhase::Down, at, modifiers, tree)
                 });
             })
-            .capture_any_mouse_up(move |event, window, cx| {
-                let Some(inner) = up.upgrade() else { return };
-                let at = point_of(event.position);
-                let modifiers = crate::gestures::key_modifiers(&event.modifiers);
-                if let Some(button) = crate::gestures::other_button(event.button) {
-                    inner.gesture_input(id, window, cx, |g, tree| {
-                        g.button(id, button, nd_gesture::PointerPhase::Up, at, modifiers, tree)
+            // Window-wide, not on the root: GPUI's capture_any_mouse_up needs the root hovered, which
+            // a release outside the window (an X11 grab still delivers it) or over an occluding
+            // layer is not, and the press it ends would stay held.
+            .child(gpui::canvas(
+                |_, _, _| (),
+                move |_, (), window, _| {
+                    let up = up.clone();
+                    window.on_mouse_event(move |event: &gpui::MouseUpEvent, phase, window, cx| {
+                        if phase != gpui::DispatchPhase::Capture {
+                            return;
+                        }
+                        let Some(inner) = up.upgrade() else { return };
+                        let at = point_of(event.position);
+                        let modifiers = crate::gestures::key_modifiers(&event.modifiers);
+                        if let Some(button) = crate::gestures::other_button(event.button) {
+                            inner.gesture_input(id, window, cx, |g, tree| {
+                                g.button(id, button, nd_gesture::PointerPhase::Up, at, modifiers, tree)
+                            });
+                        } else if event.button == gpui::MouseButton::Left {
+                            inner.gesture_input(id, window, cx, |g, tree| {
+                                g.pointer(id, nd_gesture::PointerPhase::Up, at, modifiers, tree)
+                            });
+                            inner.backend.defer(move |app| app.drag_pointer(id, at, true));
+                        }
                     });
-                } else if event.button == gpui::MouseButton::Left {
-                    inner.gesture_input(id, window, cx, |g, tree| {
-                        g.pointer(id, nd_gesture::PointerPhase::Up, at, modifiers, tree)
-                    });
-                    inner.backend.defer(move |app| app.drag_pointer(id, at, true));
-                }
-            })
+                },
+            ))
             .on_mouse_move(move |event, window, cx| {
                 let Some(inner) = moved.upgrade() else { return };
                 if event.pressed_button == Some(gpui::MouseButton::Left) {
