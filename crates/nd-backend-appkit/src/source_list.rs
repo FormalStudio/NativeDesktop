@@ -930,6 +930,9 @@ impl SourceTreeNative {
         outline.addTableColumn(&column);
         unsafe { outline.setOutlineTableColumn(Some(&column)) };
         outline.setFloatsGroupRows(false);
+        // Outside a sidebar pane the source list style paints its own grey slab; the tree shows
+        // whatever it sits on, and a sidebar pane brings the material itself.
+        outline.setBackgroundColor(&NSColor::clearColor());
         let source = NdSourceTree::alloc(mtm).set_ivars(SourceIvars { shared });
         let source: Retained<NdSourceTree> = unsafe { msg_send![super(source), init] };
         unsafe {
@@ -940,6 +943,7 @@ impl SourceTreeNative {
         }
         let scroll = NSScrollView::new(mtm);
         scroll.setDocumentView(Some(&outline));
+        scroll.setDrawsBackground(false);
         // Finder's sidebar: an overlay scroller where the system setting asks for one, and a
         // legacy scroller (a mouse attached) only while the rows overflow.
         scroll.setAutohidesScrollers(true);
