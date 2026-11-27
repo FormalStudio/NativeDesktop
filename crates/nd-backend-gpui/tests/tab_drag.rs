@@ -197,11 +197,101 @@ pub fn gpui_a_hidden_sidebar_reveals_from_the_edge() {
     assert_eq!(hidden, Some(false), "gone, the panel's content keeps no bounds from when it showed");
 }
 
+/// A sidebar the app docks and undocks, with the edge reveal while undocked.
+struct Docking {
+    docked: bool,
+}
+
+impl Render for Docking {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        scaffold()
+            .sidebar(
+                sidebar()
+                    .width(px(240.))
+                    .collapsed(!self.docked)
+                    .edge_reveal()
+                    .child(div().id("in-sidebar").w_full().h(px(40.))),
+            )
+            .content(div().id("page").size_full())
+            .overlay(div())
+    }
+}
+
+/// The page's left edge and width on each frame for a while after `docked` is set.
+fn dock(r: &mut Rig, view: &Entity<Docking>, docked: bool) -> Vec<(f32, f32, Option<nd_ui::Rect>)> {
+    r.cx.update(|cx| r.host.update(cx, |app| view.update(app, |v, cx| (v.docked = docked, cx.notify()).1)));
+    let mut seen = Vec::new();
+    for _ in 0..60 {
+        std::thread::sleep(Duration::from_millis(16));
+        settle(&mut r.cx, &r.host);
+        let page = r.bounds("page").expect("page laid out");
+        seen.push((page.origin.x, page.size.width, r.bounds("in-sidebar")));
+    }
+    seen
+}
+
+fn open_docking() -> (Rig, Entity<Docking>) {
+    unsafe { std::env::set_var("ND_ANIMATION_SLOWDOWN", "4") };
+    let mut cx = headless();
+    let mut opened = None;
+    let host = cx.update(|cx| {
+        GpuiHost::builder().quit_when_empty(false).start(cx, |app| {
+            let options = WindowOptions::main("dock").size(gpui::size(px(800.), px(600.)));
+            let handle = app.open_window(options, |_, cx| cx.new(|_| Docking { docked: true }));
+            opened = Some((handle.id(), handle.root().clone()));
+        })
+    });
+    settle(&mut cx, &host);
+    let (window, view) = opened.expect("window");
+    (Rig { cx, host, window }, view)
+}
+
+/// An edge-reveal sidebar slides when the app docks or undocks it, the page beside it laid out
+/// at one of its two widths on every frame, and only once it is shut does the edge take over.
+pub fn gpui_an_edge_reveal_sidebar_slides_when_it_docks_and_undocks() {
+    let (mut r, view) = open_docking();
+    for (docked, x, width) in [(false, 0., 800.), (true, 240., 560.)] {
+        let seen = dock(&mut r, &view, docked);
+        assert!(seen.iter().any(|(x, ..)| *x > 1. && *x < 239.), "the page's edge follows the sidebar: {seen:?}");
+        assert!(
+            seen.iter().all(|(_, w, _)| *w == 800. || *w == 560.),
+            "the page is never laid out between its two widths: {seen:?}"
+        );
+        assert_eq!(seen.last().map(|s| (s.0, s.1)), Some((x, width)), "rests docked {docked}");
+    }
+}
+
+/// Docking from the floating panel keeps the sidebar whole where it is while the page's edge
+/// moves out to it, instead of the panel going and the sidebar sliding in from the edge.
+pub fn gpui_a_floating_sidebar_docks_where_it_is() {
+    let (mut r, view) = open_docking();
+    dock(&mut r, &view, false);
+    r.move_to(Point { x: 300., y: 300. });
+    r.move_to(Point { x: 2., y: 300. });
+    std::thread::sleep(Duration::from_millis(900));
+    settle(&mut r.cx, &r.host);
+    assert!(r.bounds("in-sidebar").is_some_and(|b| b.origin.x > 0.), "the floating panel is in");
+    let seen = dock(&mut r, &view, true);
+    assert!(seen.iter().any(|(x, ..)| *x > 1. && *x < 239.), "the page's edge moves out: {seen:?}");
+    for (x, _, sidebar) in &seen {
+        let sidebar = sidebar.expect("the sidebar shows throughout");
+        assert!(sidebar.size.width >= 230., "whole, never clipped to a share: {seen:?}");
+        assert!(sidebar.origin.x >= 0. && sidebar.origin.x <= 9., "where the panel was: {seen:?}");
+        assert!(*x <= 240.);
+    }
+    assert_eq!(seen.last().map(|s| (s.0, s.1)), Some((240., 560.)), "docked beside the page");
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let tests: Vec<(&str, fn())> = vec![
         ("gpui_rows_drag_to_a_slot", gpui_rows_drag_to_a_slot),
         ("gpui_a_hidden_sidebar_reveals_from_the_edge", gpui_a_hidden_sidebar_reveals_from_the_edge),
+        (
+            "gpui_an_edge_reveal_sidebar_slides_when_it_docks_and_undocks",
+            gpui_an_edge_reveal_sidebar_slides_when_it_docks_and_undocks,
+        ),
+        ("gpui_a_floating_sidebar_docks_where_it_is", gpui_a_floating_sidebar_docks_where_it_is),
     ];
     let has = |flag: &str| args.iter().any(|a| a == flag);
     if has("--list") {

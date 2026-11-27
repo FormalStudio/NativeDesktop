@@ -75,6 +75,12 @@ pub(crate) struct PaneSlide {
     since: nd_core::time::Instant,
     /// Its width when last drawn open, which it slides at.
     width: Option<f32>,
+    /// The whole points of it shown this frame while it slides, which content beside it
+    /// overhangs by ([`Build::overhang`]).
+    drawn: Option<f32>,
+    /// It docks from the edge reveal's floating panel: it stays whole over the content while
+    /// the content's edge moves out to it.
+    floated: bool,
 }
 
 impl PaneSlide {
@@ -127,12 +133,20 @@ impl Build<'_> {
             self.split.replace(outer);
             // The grab areas come last, over the panes' content on both sides of each edge.
             let row = div().flex().flex_row().flex_1().min_h_0().children(panes);
+            // Content held wide while a sidebar slides runs past the row's far edge.
+            let row = if self.overhangs(&node.children) { row.overflow_hidden() } else { row };
             let row = if grabs.is_empty() { row } else { row.relative().children(grabs) };
             div().size_full().flex().flex_col().children(bars).child(row).into_any_element()
         } else if is::<Pane>(kind) {
             let p = props::<PaneProps>(node)?;
             let fluent = theme.preset == nd_theme::Preset::Fluent;
-            if p.role == PaneRole::Sidebar && p.collapsed && p.edge_reveal {
+            // Once it has slid shut: hiding it slides it away as any sidebar, and only then does
+            // the leading edge take over.
+            if p.role == PaneRole::Sidebar
+                && p.collapsed
+                && p.edge_reveal
+                && self.pane_slide(id, false, &theme).is_none()
+            {
                 return Some(self.revealed_sidebar(id, node, p, window, cx));
             }
             if p.role == PaneRole::Sidebar
@@ -145,6 +159,9 @@ impl Build<'_> {
             // elsewhere the sidebar goes.
             let rail = p.role == PaneRole::Sidebar && self.sidebar_hidden(node);
             let gone = p.role != PaneRole::Content && (p.collapsed || (rail && !fluent));
+            if p.role == PaneRole::Sidebar && !p.collapsed && p.edge_reveal {
+                self.dock_floated(id);
+            }
             let slide = (p.role != PaneRole::Content).then(|| self.pane_slide(id, !gone, &theme)).flatten();
             if gone && slide.is_none() {
                 // Its subtree stays in the tree, undrawn: bounds from when it showed would make
@@ -191,6 +208,13 @@ impl Build<'_> {
                 PaneRole::Content if p.sidebar_ground => (pane.bg(sidebar), Some(sidebar), None),
                 PaneRole::Content | PaneRole::Overlay => (pane, None, None),
             };
+            let pane = match (p.role == PaneRole::Content).then(|| self.overhang(id, node)).flatten() {
+                Some(overhang) => {
+                    window.request_animation_frame();
+                    pane.mr(px(-overhang))
+                }
+                None => pane,
+            };
             let header = self.take_pane_header(node, p.role);
             let pane = self.painted(id, fill, None, "pane", || match header {
                 // The pane's own header bar over its body, as in libadwaita's split views; the
@@ -204,7 +228,20 @@ impl Build<'_> {
                     .into_any_element(),
                 None => pane.children(children(window, cx)).children(edge).into_any_element(),
             });
+            let floated = self.backend.pane_slides.borrow().get(&id).is_some_and(|s| s.floated);
             match slide {
+                // Whole, over the content, while the slot under it opens.
+                Some((shown, width)) if floated => {
+                    window.request_animation_frame();
+                    let panel = div().absolute().top_0().left_0().h_full().w(px(width)).flex().occlude().child(pane);
+                    div()
+                        .relative()
+                        .flex_none()
+                        .h_full()
+                        .w(px((width * shown).round()))
+                        .child(gpui::deferred(panel).with_priority(1))
+                        .into_any_element()
+                }
                 // Clipped to the share of its width shown, the pane held at full width against
                 // the edge that meets the content, so it slides in from the window's edge.
                 Some((shown, width)) => {
@@ -213,7 +250,7 @@ impl Build<'_> {
                     div()
                         .flex_none()
                         .h_full()
-                        .w(px(width * shown))
+                        .w(px((width * shown).round()))
                         .overflow_hidden()
                         .flex()
                         .when(p.role == PaneRole::Sidebar, |d| d.justify_end())
@@ -720,6 +757,8 @@ impl Build<'_> {
                 }
                 window.refresh();
             });
+        // A grab, so a page's native surface under the strip gives it the pointer.
+        let edge = crate::occlusion::Occluding::grab(edge);
         let mut slot = div().relative().flex_none().w(px(0.)).h_full().child(gpui::deferred(edge));
         if progress > 0. || shown {
             let width = p.width.unwrap_or(240.).max(p.min_width.unwrap_or(0.));
@@ -835,18 +874,25 @@ impl Build<'_> {
     fn pane_slide(&self, id: NodeId, open: bool, theme: &nd_theme::Theme) -> Option<(f32, f32)> {
         let now = nd_core::time::Instant::now();
         let mut slides = self.backend.pane_slides.borrow_mut();
-        let slide =
-            slides.entry(id).or_insert(PaneSlide { open, from: if open { 1. } else { 0. }, since: now, width: None });
+        let slide = slides.entry(id).or_insert(PaneSlide {
+            open,
+            from: if open { 1. } else { 0. },
+            since: now,
+            width: None,
+            drawn: None,
+            floated: false,
+        });
         let duration = theme.motion.normal.as_secs_f32();
         let reduce = self.backend.platform_reduce_motion() == Some(true);
         if slide.open != open {
             slide.from = if reduce { slide.target() } else { slide.shown(now, duration) };
-            (slide.open, slide.since) = (open, now);
+            (slide.open, slide.since, slide.floated) = (open, now, false);
         }
         if reduce {
             slide.from = slide.target();
         }
         let shown = slide.shown(now, duration);
+        slide.drawn = None;
         if shown == slide.target() {
             // At rest open, the tracked bounds are the pane's own (sliding, they are the clip's).
             if open && let Some(b) = self.backend.bounds(id).filter(|b| b.size.width > 0.) {
@@ -854,8 +900,52 @@ impl Build<'_> {
             }
             return None;
         }
-        let width = slide.width.or(self.nodes.get(&id).and_then(|n| props::<PaneProps>(n)).and_then(|p| p.width));
-        width.map(|w| (shown, w))
+        let width = slide.width.or(self.nodes.get(&id).and_then(|n| props::<PaneProps>(n)).and_then(|p| p.width))?;
+        slide.drawn = Some((width * shown).round());
+        Some((shown, width))
+    }
+
+    /// While a sidebar beside `content` slides, how far the content runs past its far edge: it
+    /// keeps the width it has with the sidebar shut and its near edge follows the sidebar, so a
+    /// page in it is laid out once per slide rather than on every frame, and never shows a strip
+    /// it has not painted yet (Arc's and Safari's sidebars). Not beside an open inspector, which
+    /// the overhang would run under; an overlay pane lies over the row and does not count.
+    fn overhang(&self, id: NodeId, content: &Node) -> Option<f32> {
+        let row = &self.nodes.get(&content.parent?)?.children;
+        let at = row.iter().position(|c| *c == id)?;
+        let pane = |c: &NodeId| self.nodes.get(c).and_then(|n| props::<PaneProps>(n));
+        if row[at + 1..].iter().filter_map(pane).any(|p| p.role == PaneRole::Inspector && !p.collapsed) {
+            return None;
+        }
+        let slides = self.backend.pane_slides.borrow();
+        let overhang: f32 = row[..at]
+            .iter()
+            .filter(|c| pane(c).is_some_and(|p| p.role == PaneRole::Sidebar))
+            .filter_map(|c| slides.get(c)?.drawn)
+            .sum();
+        (overhang > 0.).then_some(overhang)
+    }
+
+    /// Whether the content among `panes` overhangs a sliding sidebar ([`Self::overhang`]).
+    fn overhangs(&self, panes: &[NodeId]) -> bool {
+        panes.iter().any(|c| {
+            self.nodes.get(c).is_some_and(|n| {
+                props::<PaneProps>(n).is_some_and(|p| p.role == PaneRole::Content) && self.overhang(*c, n).is_some()
+            })
+        })
+    }
+
+    /// An edge-reveal sidebar docking: from a floating panel that was in, it docks where it is
+    /// and the content moves out to it, rather than the panel going and the sidebar sliding in.
+    fn dock_floated(&self, id: NodeId) {
+        let now = nd_core::time::Instant::now();
+        let Some(reveal) = self.backend.reveals.borrow_mut().remove(&id) else { return };
+        if reveal.progress(now) <= 0. {
+            return;
+        }
+        let slide = PaneSlide { open: true, from: 0., since: now, width: None, drawn: None, floated: true };
+        self.backend.pane_slides.borrow_mut().insert(id, slide);
+        self.backend.state.borrow().events.emitter(id).emit(SidebarRevealed { revealed: false });
     }
 
     fn forget_bounds(&self, node: &Node) {

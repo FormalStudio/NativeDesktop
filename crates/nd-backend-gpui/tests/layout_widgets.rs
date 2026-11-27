@@ -277,6 +277,8 @@ impl Render for Scene {
                         cx.listener(|this, e: &PaneCollapsed, _, _| this.log.borrow_mut().collapsed.push(e.collapsed)),
                     ))
                     .content(text("Body"))
+                    // An app's overlay layer (toasts, menus), as most scaffolds carry.
+                    .overlay(div())
                     .into_any_element();
             }
             Kind::Footer | Kind::FittingFooter => {
@@ -1184,6 +1186,40 @@ mod gate_m6 {
         assert!(o.log.borrow().clicks.is_empty(), "and goes no further");
     }
 
+    /// A sidebar sliding shut or open never narrows the content frame by frame: the content keeps
+    /// the width it has with the sidebar shut while its leading edge follows the sidebar, so a
+    /// page in it is laid out once per slide and shows no strip it has not painted.
+    pub fn gpui_sidebar_slide_holds_the_content_width() {
+        unsafe { std::env::set_var("ND_ANIMATION_SLOWDOWN", "4") };
+        let mut o = open(Kind::Chrome);
+        let open_width = o.node("nd-content").bounds.expect("content laid out").size.width;
+        assert!(open_width < 800., "the sidebar takes its share at rest: {open_width}");
+        let window = o.window;
+        let travel = |o: &mut Opened| {
+            o.cx.update(|cx| o.host.update(cx, |app| app.window_command(window, WindowCommand::ToggleSidebar)));
+            let mut seen = Vec::new();
+            for _ in 0..80 {
+                std::thread::sleep(std::time::Duration::from_millis(16));
+                settle(&mut o.cx, &o.host);
+                let b = o.node("nd-content").bounds.expect("content laid out");
+                seen.push((b.origin.x, b.size.width));
+            }
+            seen
+        };
+        for (to, width) in [("shut", 800.), ("open", open_width)] {
+            let seen = travel(&mut o);
+            assert!(
+                seen.iter().any(|(x, _)| *x > 1. && *x < 800. - open_width - 1.),
+                "the content's edge follows the sidebar {to}: {seen:?}"
+            );
+            assert!(
+                seen.iter().all(|(_, w)| (w - 800.).abs() < 0.5 || (w - open_width).abs() < 0.5),
+                "the content is never laid out between its two widths: {seen:?}"
+            );
+            assert_eq!(seen.last().map(|s| s.1), Some(width), "rests {to} at its own width");
+        }
+    }
+
     /// libadwaita's backdrop state: an inactive window's sidebar goes halfway to the window's
     /// colour, and it comes back once the window is active again.
     pub fn gpui_an_inactive_window_takes_the_backdrop_look() {
@@ -1401,6 +1437,7 @@ fn main() {
             "gate_m6::gpui_narrow_window_folds_the_sidebar_over_the_content",
             gate_m6::gpui_narrow_window_folds_the_sidebar_over_the_content,
         ),
+        ("gate_m6::gpui_sidebar_slide_holds_the_content_width", gate_m6::gpui_sidebar_slide_holds_the_content_width),
         (
             "gate_m6::gpui_an_inactive_window_takes_the_backdrop_look",
             gate_m6::gpui_an_inactive_window_takes_the_backdrop_look,
