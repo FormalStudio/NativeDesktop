@@ -131,6 +131,8 @@ impl SourceNode {
         self
     }
 
+    /// A row the user cannot select draws dimmed, as a disabled control does: a search's
+    /// sections with no match.
     pub fn selectable(mut self, selectable: bool) -> Self {
         self.selectable = selectable;
         self

@@ -628,6 +628,8 @@ impl NdSourceCell {
         *iv.node.borrow_mut() = node.id.clone();
         let title = self.title();
         title.setStringValue(&NSString::from_str(&node.title));
+        let dimmed = !node.selectable && !node.section;
+        title.setAlphaValue(if dimmed { 0.45 } else { 1. });
         let image = node.icon.filter(|_| !node.section).and_then(|i| crate::icons::symbol(i.lucide()));
         iv.icon.setImage(image.as_deref());
         let artwork = node.artwork.clone().filter(|_| !node.section);

@@ -701,7 +701,9 @@ pub fn source_tree_view(
         // libadwaita's navigation sidebar selects with a tenth of the text colour and keeps the
         // text as it is (`.navigation-sidebar > row:selected`).
         let tinted = !fluent && !adwaita;
-        let (fg, secondary) = if selected && tinted {
+        let (fg, secondary) = if !node.selectable {
+            (theme.text.tertiary, theme.text.tertiary)
+        } else if selected && tinted {
             (theme.accent_container.fg, theme.accent_container.fg.opacity(0.8))
         } else {
             (theme.text.primary, theme.text.secondary)

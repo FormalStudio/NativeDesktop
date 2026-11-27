@@ -429,6 +429,28 @@ mod gate_m6 {
         assert_eq!(log.borrow().activated, ["action b add"], "pressing the button reports the row's action");
     }
 
+    pub fn gpui_an_unselectable_source_row_draws_dimmed() {
+        let theme = theme_for(Scheme::Light);
+        let mut props = golden_tree();
+        props.nodes = vec![source_node("a", "Alpha"), source_node("b", "Beta").selectable(false)];
+        props.selected = None;
+        let marks = Marks::default();
+        let _ = source_tree_view(
+            NodeId(1),
+            &props,
+            None,
+            None,
+            false,
+            None,
+            &Default::default(),
+            Paint { theme: &theme, marks: &marks },
+        );
+        let marks = marks.take();
+        let ink = |title: &str| marks.iter().find(|m| m.label == title).map(|m| m.color);
+        assert_eq!(ink("Alpha"), Some(theme.text.primary));
+        assert_eq!(ink("Beta"), Some(theme.text.tertiary), "the row that cannot be picked recedes");
+    }
+
     pub fn gpui_source_row_fits_a_caption_over_a_meter() {
         use gpui::AppContext as _;
         if nd_gpui::gpui_platform::current_headless_renderer().ok().flatten().is_none() {
@@ -1170,6 +1192,10 @@ fn main() {
             gate_m6::gpui_source_rows_take_menus_and_middle_clicks,
         ),
         ("gate_m6::gpui_source_rows_are_semantic_parts", gate_m6::gpui_source_rows_are_semantic_parts),
+        (
+            "gate_m6::gpui_an_unselectable_source_row_draws_dimmed",
+            gate_m6::gpui_an_unselectable_source_row_draws_dimmed,
+        ),
         (
             "gate_m6::gpui_source_list_overflow_scrolls_instead_of_squashing",
             gate_m6::gpui_source_list_overflow_scrolls_instead_of_squashing,
