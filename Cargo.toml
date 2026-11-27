@@ -50,14 +50,19 @@ gpui_fast_linux = { package = "gpui-fast-linux", version = "=0.1.13", default-fe
 # Same version and features as gpui-pre and gpui-fast, so their style enums convert into these types.
 taffy = { version = "0.15.0", default-features = false, features = ["std", "taffy_tree", "flexbox", "grid", "block_layout", "float_layout", "content_size"] }
 
+# File and line in backtraces without variable info, which is most of a debug build's size and
+# fills the build disk. A debugger session passes `--config profile.dev.debug=true` for that run.
 [profile.dev]
 split-debuginfo = "unpacked"
+debug = "line-tables-only"
 
 [profile.dev.package."*"]
 opt-level = 2
-# Dependencies keep file and line in backtraces but drop variable info, which is most of a debug
-# build's size; workspace crates keep full debug info.
-debug = "line-tables-only"
+
+# `cargo test` keeps an incremental cache per test target, hundreds across the workspace, and a
+# one-file edit rebuilds as fast without them. `cargo build` and `cargo run` keep theirs.
+[profile.test]
+incremental = false
 
 # libghostty-vt's build script compiles Ghostty in Zig's Debug mode whenever it sees debug info,
 # and Debug parses output thousands of times slower.
