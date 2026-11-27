@@ -343,7 +343,7 @@ mod gate_m6 {
                 backend.set_theme(nd_theme::ThemeRegistry::new(nd_theme::Preset::Adwaita));
                 app.set_global(Chrome(nd_backend_gpui::GpuiChrome::new(backend)));
                 let handle = app.open_window(WindowOptions::main("sources").size(size(px(300.), px(300.))), |_, cx| {
-                    cx.new(|_| Sources { log: l, selected: "a".into() })
+                    cx.new(|_| Sources { log: l, selected: "a".into(), visibility: ActionVisibility::Always })
                 });
                 *o.borrow_mut() = Some(handle.id());
             })
@@ -403,7 +403,7 @@ mod gate_m6 {
                 backend.set_theme(nd_theme::ThemeRegistry::new(nd_theme::Preset::Adwaita));
                 app.set_global(Chrome(nd_backend_gpui::GpuiChrome::new(backend)));
                 let handle = app.open_window(WindowOptions::main("sources").size(size(px(300.), px(70.))), |_, cx| {
-                    cx.new(|_| Sources { log: l, selected: "a".into() })
+                    cx.new(|_| Sources { log: l, selected: "a".into(), visibility: ActionVisibility::Always })
                 });
                 *o.borrow_mut() = Some(handle.id());
             })
@@ -443,12 +443,92 @@ mod gate_m6 {
             false,
             None,
             &Default::default(),
+            None,
             Paint { theme: &theme, marks: &marks },
         );
         let marks = marks.take();
         let ink = |title: &str| marks.iter().find(|m| m.label == title).map(|m| m.color);
         assert_eq!(ink("Alpha"), Some(theme.text.primary));
-        assert_eq!(ink("Beta"), Some(theme.text.tertiary), "the row that cannot be picked recedes");
+        assert_eq!(
+            ink("Beta"),
+            Some(theme.text.primary.opacity(nd_components::SOURCE_DIMMED)),
+            "the row that cannot be picked recedes as a dimmed row does"
+        );
+    }
+
+    /// A row's action shows on the selected row without the pointer, and hides when another row
+    /// is selected (still in the semantic tree, not visible).
+    pub fn gpui_source_action_shows_on_the_selected_row() {
+        use nd_ui::semantics::SemanticAction;
+        let mut cx = headless();
+        let log: Rc<RefCell<Log>> = Rc::default();
+        let l = log.clone();
+        let opened: Rc<RefCell<Option<WindowId>>> = Rc::default();
+        let o = opened.clone();
+        let host = cx.update(|cx| {
+            GpuiHost::builder().quit_when_empty(false).start(cx, move |app| {
+                let backend = app.backend_as::<nd_backend_gpui::GpuiBackend>().expect("GPUI backend").clone();
+                backend.set_theme(nd_theme::ThemeRegistry::new(nd_theme::Preset::Adwaita));
+                app.set_global(Chrome(nd_backend_gpui::GpuiChrome::new(backend)));
+                let handle = app.open_window(WindowOptions::main("sources").size(size(px(300.), px(300.))), |_, cx| {
+                    cx.new(|_| Sources { log: l, selected: "b".into(), visibility: ActionVisibility::HoverOrSelected })
+                });
+                *o.borrow_mut() = Some(handle.id());
+            })
+        });
+        settle(&mut cx, &host);
+        let window = opened.borrow_mut().take().expect("window");
+        let add = |host: &GpuiHost| {
+            host.read(|app| {
+                let tree = app.semantic_window(window).expect("window");
+                find(&tree.root, &|n| n.test_id.as_deref() == Some("sources.b.add")).expect("the action").visible
+            })
+        };
+        assert!(add(&host), "the selected row shows its action with the pointer away");
+        let alpha = by_test_id(&host, window, "sources.a");
+        cx.update(|cx| host.update(cx, |app| app.perform(alpha.id, &SemanticAction::Click))).expect("selects");
+        settle(&mut cx, &host);
+        assert_eq!(log.borrow().activated, ["select a"]);
+        assert!(!add(&host), "the action hides with the selection gone");
+    }
+
+    /// The app's rename field stands in row b's title, inside the row; typing replaces the
+    /// selected name and Return ends the edit with it.
+    pub fn gpui_source_row_takes_an_inline_editor() {
+        let mut cx = headless();
+        let log: Rc<RefCell<Log>> = Rc::default();
+        let l = log.clone();
+        let opened: Rc<RefCell<Option<WindowId>>> = Rc::default();
+        let o = opened.clone();
+        let host = cx.update(|cx| {
+            GpuiHost::builder().quit_when_empty(false).start(cx, move |app| {
+                let backend = app.backend_as::<nd_backend_gpui::GpuiBackend>().expect("GPUI backend").clone();
+                backend.set_theme(nd_theme::ThemeRegistry::new(nd_theme::Preset::Adwaita));
+                app.set_global(Chrome(nd_backend_gpui::GpuiChrome::new(backend)));
+                let handle = app.open_window(WindowOptions::main("sources").size(size(px(300.), px(300.))), |_, cx| {
+                    cx.new(|_| Renaming { log: l })
+                });
+                *o.borrow_mut() = Some(handle.id());
+            })
+        });
+        settle(&mut cx, &host);
+        let window = opened.borrow_mut().take().expect("window");
+        let (row, field) = (by_test_id(&host, window, "sources.b"), by_test_id(&host, window, "rename"));
+        let (row, field) = (row.bounds.expect("row bounds"), field.bounds.expect("field bounds"));
+        assert!(
+            field.origin.y >= row.origin.y - 0.5
+                && field.origin.y + field.size.height <= row.origin.y + row.size.height + 0.5
+                && field.size.width > row.size.width / 2.,
+            "the field sits in the row and takes its title's width: {field:?} in {row:?}"
+        );
+        assert!(cx.update(|cx| host.update(cx, |app| app.focus_id(window, "rename"))), "the field takes focus");
+        settle(&mut cx, &host);
+        for key in ["x", "enter"] {
+            let key = SyntheticInput::Key(Keystroke::parse(key).expect("keystroke"));
+            cx.update(|cx| host.update(cx, |app| app.synthesize(window, &key))).expect("posted");
+            settle(&mut cx, &host);
+        }
+        assert_eq!(log.borrow().activated, ["end x"], "typing replaced the name and Return ended the edit");
     }
 
     pub fn gpui_source_row_fits_a_caption_over_a_meter() {
@@ -709,8 +789,13 @@ mod gate_m6 {
         }
         let mut failed = Vec::new();
         for scheme in [Scheme::Light, Scheme::Dark] {
-            for view in [GoldenView::Sidebar, GoldenView::Palette, GoldenView::LongAddress, GoldenView::LongAddressEnd]
-            {
+            for view in [
+                GoldenView::Sidebar,
+                GoldenView::Tabs,
+                GoldenView::Palette,
+                GoldenView::LongAddress,
+                GoldenView::LongAddressEnd,
+            ] {
                 if let Err(e) = golden(view, scheme) {
                     failed.push(e);
                 }
@@ -724,6 +809,9 @@ mod gate_m6 {
 enum GoldenView {
     /// The source tree, a banner and a toast.
     Sidebar,
+    /// A browser's tab list: a loading tab's spinner, a named and a bare separator, the selected
+    /// tab's close button, a tab asleep at half ink.
+    Tabs,
     /// The palette with a completion, over the same window.
     Palette,
     /// The palette on a 300 character address, all of it selected.
@@ -747,6 +835,22 @@ struct Golden {
     scheme: Scheme,
 }
 
+fn tab_tree() -> SourceTreeProps {
+    SourceTreeProps {
+        nodes: vec![
+            source_node("t1", "Inbox").icon(Icon::Inbox).actions(["close"]).busy(true),
+            source_separator("s1", "Work"),
+            source_node("t2", "Release notes").icon(Icon::FileText).actions(["close"]),
+            source_separator("s2", ""),
+            source_node("t3", "Q3 planning").icon(Icon::Folder).actions(["close"]).dimmed(true),
+        ],
+        actions: vec![source_action("close", Icon::X).tooltip("Close Tab")],
+        selected: Some("t2".into()),
+        action_visibility: ActionVisibility::HoverOrSelected,
+        ..golden_tree()
+    }
+}
+
 fn golden_tree() -> SourceTreeProps {
     SourceTreeProps {
         nodes: vec![
@@ -767,6 +871,7 @@ fn golden_tree() -> SourceTreeProps {
         drop_onto: false,
         row_menus: false,
         fit_rows: false,
+        editing: None,
         style: Default::default(),
     }
 }
@@ -797,6 +902,7 @@ impl gpui::Render for Golden {
                 false,
                 None,
                 &Default::default(),
+                None,
                 Paint { theme: &theme, marks: &Marks::default() },
             )))
             .child(
@@ -812,6 +918,25 @@ impl gpui::Render for Golden {
         let mut model = PaletteModel::default();
         match self.view {
             GoldenView::Sidebar => return root.into_any_element(),
+            GoldenView::Tabs => {
+                let tabs = source_tree_view(
+                    NodeId(1),
+                    &tab_tree(),
+                    None,
+                    None,
+                    false,
+                    None,
+                    &Default::default(),
+                    None,
+                    Paint { theme: &theme, marks: &Marks::default() },
+                );
+                return gpui::div()
+                    .size_full()
+                    .bg(theme.surface.base)
+                    .text_color(theme.text.primary)
+                    .child(gpui::div().w(gpui::px(240.)).h_full().bg(theme.surface.sidebar).child(tabs))
+                    .into_any_element();
+            }
             GoldenView::Palette => {
                 model.set_items(&items("tri"));
                 model.present();
@@ -874,6 +999,7 @@ impl gpui::Render for Meters {
                 false,
                 None,
                 &Default::default(),
+                None,
                 Paint { theme: &theme, marks: &Marks::default() },
             ))
             .into_any_element()
@@ -885,6 +1011,7 @@ gpui::actions!(test, [OpenRow]);
 struct Sources {
     log: Rc<RefCell<Log>>,
     selected: SharedString,
+    visibility: ActionVisibility,
 }
 
 impl Render for Sources {
@@ -893,7 +1020,7 @@ impl Render for Sources {
         source_tree("sources")
             .nodes([source_node("a", "Alpha"), source_node("b", "Beta").actions(["add"]), source_node("c", "Gamma")])
             .actions([source_action("add", Icon::Plus).tooltip("Add Here")])
-            .action_visibility(ActionVisibility::Always)
+            .action_visibility(self.visibility)
             .selected(self.selected.clone())
             .on_select(cx.listener(|this, e: &SourceSelected, _, cx| {
                 this.log.borrow_mut().activated.push(format!("select {}", e.id));
@@ -910,6 +1037,31 @@ impl Render for Sources {
             .on_action(move |e: &SourceActionClicked, _, _| {
                 action_log.borrow_mut().activated.push(format!("action {} {}", e.id, e.action));
             })
+    }
+}
+
+/// A source tree renaming row b: the app's field in its title's place.
+struct Renaming {
+    log: Rc<RefCell<Log>>,
+}
+
+impl Render for Renaming {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        let (ended, cancelled) = (self.log.clone(), self.log.clone());
+        let field = nd_components::forms::text_field("rename")
+            .text("Beta")
+            .select_on_focus(0..4)
+            .on_end_editing(move |e: &nd_components::forms::TextEditingEnded, _, _| {
+                ended.borrow_mut().activated.push(format!("end {}", e.text));
+            })
+            .on_cancel(move |_: &nd_components::forms::TextCancelled, _, _| {
+                cancelled.borrow_mut().activated.push("cancel".into());
+            })
+            .flex_1();
+        source_tree("sources")
+            .nodes([source_node("a", "Alpha"), source_node("b", "Beta"), source_node("c", "Gamma")])
+            .selected("a")
+            .editor("b", field)
     }
 }
 
@@ -999,6 +1151,7 @@ impl gpui::Render for Volumes {
                 false,
                 None,
                 &Default::default(),
+                None,
                 Paint { theme: &theme, marks: &Marks::default() },
             ))
             .into_any_element()
@@ -1030,6 +1183,7 @@ impl gpui::Render for Crowded {
                 false,
                 None,
                 &Default::default(),
+                None,
                 Paint { theme: &theme, marks: &Marks::default() },
             ))
             .into_any_element()
@@ -1059,6 +1213,7 @@ impl gpui::Render for Meter {
                 false,
                 None,
                 &Default::default(),
+                None,
                 Paint { theme: &theme, marks: &Marks::default() },
             ))
             .into_any_element()
@@ -1103,6 +1258,7 @@ impl gpui::Render for Rail {
                 true,
                 None,
                 &art,
+                None,
                 Paint { theme: &theme, marks: &Marks::default() },
             ))
             .into_any_element()
@@ -1112,6 +1268,7 @@ impl gpui::Render for Rail {
 fn golden_path(view: GoldenView, scheme: Scheme) -> PathBuf {
     let view = match view {
         GoldenView::Sidebar => "sidebar",
+        GoldenView::Tabs => "tabs",
         GoldenView::Palette => "palette",
         GoldenView::LongAddress => "palette-long",
         GoldenView::LongAddressEnd => "palette-long-end",
@@ -1192,6 +1349,11 @@ fn main() {
             gate_m6::gpui_source_rows_take_menus_and_middle_clicks,
         ),
         ("gate_m6::gpui_source_rows_are_semantic_parts", gate_m6::gpui_source_rows_are_semantic_parts),
+        ("gate_m6::gpui_source_row_takes_an_inline_editor", gate_m6::gpui_source_row_takes_an_inline_editor),
+        (
+            "gate_m6::gpui_source_action_shows_on_the_selected_row",
+            gate_m6::gpui_source_action_shows_on_the_selected_row,
+        ),
         (
             "gate_m6::gpui_an_unselectable_source_row_draws_dimmed",
             gate_m6::gpui_an_unselectable_source_row_draws_dimmed,

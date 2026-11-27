@@ -137,6 +137,11 @@ impl TreeFrame {
         self.reduce
     }
 
+    /// The frame's time, which a busy row's spinner turns by.
+    pub(crate) fn now(&self) -> f64 {
+        self.now
+    }
+
     fn sync(&self, nodes: &[SourceNode], selected: Option<&gpui::SharedString>) {
         let now = self.now;
         let mut s = self.motion.0.borrow_mut();

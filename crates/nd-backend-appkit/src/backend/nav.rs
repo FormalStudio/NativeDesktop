@@ -133,6 +133,14 @@ impl AppKitBackend {
         }
     }
 
+    /// Whether row `id` shows its spinner, and its title's alpha.
+    pub fn source_row_look(&self, node: NodeId, id: &str) -> Option<(bool, f64)> {
+        match self.0.borrow().nodes.get(&node) {
+            Some(Native::SourceTree(s)) => s.row_look(id),
+            _ => None,
+        }
+    }
+
     pub fn source_empty_title(&self, node: NodeId) -> Option<String> {
         match self.0.try_borrow().ok()?.nodes.get(&node)? {
             Native::SourceTree(s) => s.empty_title(),

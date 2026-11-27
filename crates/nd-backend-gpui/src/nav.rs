@@ -515,8 +515,10 @@ pub fn source_tree_view(
     compact: bool,
     on_input: Option<OnInput<TreeInput>>,
     art: &HashMap<SharedString, Arc<gpui::RenderImage>>,
+    editor: Option<AnyElement>,
     paint: Paint<'_>,
 ) -> gpui::Stateful<gpui::Div> {
+    let mut editor = editor;
     let Paint { theme, marks } = paint;
     let (body, footnote) = (theme.type_scale.body, theme.type_scale.footnote);
     // WinUI's NavigationView: an icon per item, a subtle fill with an accent pill on the selected
@@ -567,7 +569,10 @@ pub fn source_tree_view(
     }
     let index = SourceIndex::new(&props.nodes);
     let actions: HashMap<&SharedString, _> = props.actions.iter().map(|a| (&a.id, a)).collect();
-    let hover_only = props.action_visibility == nd_components::ActionVisibility::Hover;
+    let visibility = props.action_visibility;
+    let look = crate::forms::FormLook::of(theme);
+    // A still frame (goldens, a tree drawn without motion) draws the spinner at its start.
+    let spin = motion.map_or(0., |m| (m.now() / look.spinner_seconds).rem_euclid(1.) as f32 * 2. * PI);
     let indent = theme.spacing.lg.as_f32();
     // Rows report where they are laid out, which a drag over the list places its slot by and
     // the semantic tree places each row's part by.
@@ -701,9 +706,7 @@ pub fn source_tree_view(
         // libadwaita's navigation sidebar selects with a tenth of the text colour and keeps the
         // text as it is (`.navigation-sidebar > row:selected`).
         let tinted = !fluent && !adwaita;
-        let (fg, secondary) = if !node.selectable {
-            (theme.text.tertiary, theme.text.tertiary)
-        } else if selected && tinted {
+        let (fg, secondary) = if selected && tinted {
             (theme.accent_container.fg, theme.accent_container.fg.opacity(0.8))
         } else {
             (theme.text.primary, theme.text.secondary)
@@ -720,11 +723,12 @@ pub fn source_tree_view(
             marks.fill("selected row", selected_fill, &[]);
             under.push(selected_fill);
         }
-        let show_actions = !hover_only || hovered == Some(&node.id);
+        let show_actions = visibility.shows(hovered == Some(&node.id), selected);
+        let dim = if node.dims() { nd_components::SOURCE_DIMMED } else { 1. };
         if expandable {
             marks.text(if node.expanded { "\u{25be}" } else { "\u{25b8}" }, secondary, &under, body, regular);
         }
-        marks.text(&node.title, fg, &under, body, regular);
+        marks.text(&node.title, fg.opacity(dim), &under, body, regular);
         for quiet in node.caption.iter().chain(node.badge.iter()) {
             marks.text(quiet, secondary, &under, footnote, regular);
         }
@@ -895,6 +899,37 @@ pub fn source_tree_view(
                     Some(button.into_any_element())
                 })
                 .collect();
+            // A busy row's spinner stands where its actions sit while they are hidden, and gives
+            // way to them under the pointer.
+            let buttons: Vec<AnyElement> = if node.busy && !show_actions {
+                let spinner = div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .right_0()
+                    .w(px(24.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(crate::forms::glyph::arc(look.spinner_size, spin, 1.5 * PI, secondary, look.spinner_stroke));
+                vec![
+                    div()
+                        .id(ElementId::Name(format!("{}-busy", node.id).into()))
+                        .role(gpui::Role::ProgressIndicator)
+                        .relative()
+                        .flex()
+                        .flex_row()
+                        .flex_shrink_0()
+                        .items_center()
+                        .min_w(px(24.))
+                        .min_h(px(24.))
+                        .children(buttons)
+                        .child(spinner)
+                        .into_any_element(),
+                ]
+            } else {
+                buttons
+            };
             let badge = node.badge.clone().map(|b| {
                 div()
                     .flex_shrink_0()
@@ -904,7 +939,11 @@ pub fn source_tree_view(
                     .child(b)
                     .into_any_element()
             });
-            let title = div().truncate().child(node.title.clone());
+            // The app's editor, a rename field, stands in the title's place.
+            let title = match editor.take_if(|_| props.editing.as_ref() == Some(&node.id)) {
+                Some(editor) => div().flex().items_center().min_w_0().child(editor),
+                None => div().truncate().child(node.title.clone()),
+            };
             let caption = node
                 .caption
                 .clone()
@@ -937,26 +976,44 @@ pub fn source_tree_view(
                 }
                 None => (text.child(title).children(caption), badge, buttons),
             };
-            row = row
-                .pl(lead + indent * depth as f32)
-                .pr(trail)
-                .children(leading)
-                .children(match (cover, icon) {
-                    (Some(cover), _) => {
-                        let gap = if fluent { icon_gap } else { theme.spacing.md };
-                        Some(cover.mr(gap).into_any_element())
-                    }
-                    (None, Some(icon)) => Some(icon.mr(icon_gap).into_any_element()),
-                    // A symbolic icon in the text colour, 12 px before the title on libadwaita.
-                    (None, None) => icon_glyph(node.icon).map(|g| {
-                        let (gap, ink) = if adwaita { (theme.spacing.md, fg) } else { (theme.spacing.sm, secondary) };
-                        div().flex_shrink_0().pr(gap).child(glyph(g, px(16.), ink, px(1.5))).into_any_element()
-                    }),
-                })
-                .child(text)
-                .children(badge)
-                .children(trailing)
-                .children(buttons);
+            if node.separator {
+                let rule = with_alpha(theme.text.primary, theme.text.primary.a * SEPARATOR_RULE);
+                let name = (!node.title.is_empty()).then(|| {
+                    div().min_w_0().truncate().text_size(footnote).text_color(secondary).child(node.title.clone())
+                });
+                row = row
+                    .min_h(px(SEPARATOR_ROW))
+                    .pl(lead + indent * depth as f32)
+                    .pr(trail)
+                    .gap(theme.spacing.sm)
+                    .children(name)
+                    .child(div().flex_1().min_w(px(12.)).h(px(1.)).bg(rule));
+            } else {
+                row = row
+                    .pl(lead + indent * depth as f32)
+                    .pr(trail)
+                    .children(leading)
+                    .children(
+                        match (cover, icon) {
+                            (Some(cover), _) => {
+                                let gap = if fluent { icon_gap } else { theme.spacing.md };
+                                Some(cover.mr(gap).into_any_element())
+                            }
+                            (None, Some(icon)) => Some(icon.mr(icon_gap).into_any_element()),
+                            // A symbolic icon in the text colour, 12 px before the title on libadwaita.
+                            (None, None) => icon_glyph(node.icon).map(|g| {
+                                let (gap, ink) =
+                                    if adwaita { (theme.spacing.md, fg) } else { (theme.spacing.sm, secondary) };
+                                div().flex_shrink_0().pr(gap).child(glyph(g, px(16.), ink, px(1.5))).into_any_element()
+                            }),
+                        }
+                        .map(|icon| div().flex_shrink_0().opacity(dim).child(icon)),
+                    )
+                    .child(text.opacity(dim))
+                    .children(badge)
+                    .children(trailing)
+                    .children(buttons);
+            }
         }
         if expandable {
             row = row.aria_expanded(node.expanded);
@@ -987,7 +1044,7 @@ pub fn source_tree_view(
                 };
                 row = wash(row, hover, pointer);
             }
-        } else {
+        } else if !node.separator {
             let hover = if fluent {
                 subtle
             } else if adwaita {
@@ -1030,7 +1087,7 @@ pub fn source_tree_view(
             row = row.on_mouse_up(MouseButton::Middle, move |_, window, cx| {
                 on_middle(TreeInput::Middle(middle_key.clone()), window, cx);
             });
-            if hover_only || motion.is_some() {
+            if visibility != nd_components::ActionVisibility::Always || motion.is_some() {
                 row = row.on_hover(move |inside, window, cx| {
                     on_input(TreeInput::Hover(key.clone(), *inside), window, cx);
                 });
@@ -1728,14 +1785,14 @@ fn tree_parts(props: &nd_components::SourceTreeProps, t: &TreeDrawn) -> Vec<(Str
     let rect = |b: &gpui::Bounds<Pixels>| {
         nd_core::Rect::new(b.origin.x.as_f32(), b.origin.y.as_f32(), b.size.width.as_f32(), b.size.height.as_f32())
     };
-    let hover_only = props.action_visibility == nd_components::ActionVisibility::Hover;
     let index = SourceIndex::new(&props.nodes);
     let mut parts = Vec::new();
     for (i, _) in index.visible(&props.nodes) {
         let node = &props.nodes[i];
         let Some(row) = t.rows.get(&node.id) else { continue };
         parts.push((node.id.to_string(), rect(row)));
-        if hover_only && t.hovered.as_ref() != Some(&node.id) {
+        let selected = props.selected.as_ref() == Some(&node.id);
+        if !props.action_visibility.shows(t.hovered.as_ref() == Some(&node.id), selected) {
             continue;
         }
         for action in &node.actions {
@@ -1804,6 +1861,10 @@ pub(crate) struct RowPress {
 
 /// How far a press moves before it drags, as a window tab's does.
 const DRAG_START: f32 = 4.;
+/// A separator row's height, and its rule as a share of the text colour so one number holds in
+/// light and dark.
+const SEPARATOR_ROW: f32 = 24.;
+const SEPARATOR_RULE: f32 = 0.16;
 
 pub(crate) fn drag_source(
     item: &nd_ui::DragItem,
@@ -2310,6 +2371,7 @@ impl Build<'_> {
             });
             let mut style = div();
             gpui::Refineable::refine(style.style(), &props.style);
+            let editor = node.children.first().map(|c| self.node(*c, window, cx));
             let tree = source_tree_view(
                 id,
                 props,
@@ -2318,9 +2380,12 @@ impl Build<'_> {
                 self.in_hidden_sidebar(node),
                 Some(on_input),
                 &art,
+                editor,
                 paint,
             );
-            if motion.moving(self.time) {
+            // A busy row's spinner turns on every frame, under Reduce Motion too, as AppKit's
+            // and GTK's spinners do.
+            if motion.moving(self.time) || props.nodes.iter().any(|n| n.busy) {
                 window.request_animation_frame();
             }
             return Some(

@@ -767,6 +767,11 @@ impl State {
                 self.mark_form(parent);
                 return;
             }
+            // A source tree's child is the app's editor, which the tree lays over a row.
+            [Some(Native::SourceTree(tree)), Some(child)] => {
+                tree.set_editor(child.view().map(objc2::Message::retain));
+                return;
+            }
             [Some(Native::ToolbarItem(item)), Some(child)] => {
                 match child {
                     Native::WindowControls { .. } => item.skip.set(true),
@@ -842,6 +847,7 @@ impl State {
                 rows.retain(|n| *n != node);
                 self.mark_form(parent.expect("parent"));
             }
+            Some([Some(Native::SourceTree(tree)), Some(_)]) => tree.set_editor(None),
             Some([Some(Native::FormRow(_, child)), Some(_)]) => {
                 *child = None;
                 self.mark_form(parent.expect("parent"));
@@ -1600,6 +1606,9 @@ impl Backend for AppKitBackend {
             }
         }
         let state = self.0.borrow();
+        if state.parents.get(&node).is_some_and(|p| matches!(state.nodes.get(p), Some(Native::SourceTree(_)))) {
+            return;
+        }
         match state.nodes.get(&node) {
             // The split view places a pane's host; nd frames the content inside it, and an
             // overlay's content in the scaffold's host.

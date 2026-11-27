@@ -53,6 +53,9 @@ mod nav {
         query: SharedString,
         nodes: Vec<SourceNode>,
         selected: Option<SharedString>,
+        visibility: ActionVisibility,
+        /// Row work is being renamed in the app's field.
+        renaming: bool,
         toasts: Vec<Toast>,
         banner: bool,
     }
@@ -103,6 +106,8 @@ mod nav {
                             .nodes(self.nodes.clone())
                             .actions([source_action("close", Icon::Trash).tooltip("Close")])
                             .selected_opt(self.selected.clone())
+                            .action_visibility(self.visibility)
+                            .when(self.renaming, |t| t.editor("work", text_field("rename").text("Work")))
                             .empty_state(Some(Icon::Folder), "No folders", Some("Add one with the plus button".into()))
                             .on_select(cx.listener(|this, e: &SourceSelected, _, cx| {
                                 this.log.borrow_mut().selected.push(e.id.to_string());
@@ -224,6 +229,8 @@ mod nav {
                 query: "gro".into(),
                 nodes: nodes(),
                 selected: None,
+                visibility: ActionVisibility::Hover,
+                renaming: false,
                 toasts: Vec::new(),
                 banner: true,
             })
@@ -514,6 +521,103 @@ mod nav {
             clicked && log.borrow().tree_actions == [("work".to_string(), "close".to_string())],
             &format!("an action click reports the row and the action ({:?})", log.borrow().tree_actions),
         );
+
+        let select = |env: &mut Env, id: &str, visibility| {
+            handle.root().update(&mut env.app, |this, cx| {
+                this.selected = Some(id.to_owned().into());
+                this.visibility = visibility;
+                cx.notify();
+            });
+            env.settle();
+        };
+        select(env, "work", ActionVisibility::HoverOrSelected);
+        let kept = env.backend.source_actions(node, "work", Some(false));
+        select(env, "q3", ActionVisibility::HoverOrSelected);
+        let left = env.backend.source_actions(node, "work", None);
+        c.check(
+            kept == [1.] && left == [0.],
+            &format!(
+                "the selected row keeps its action without the pointer, and drops it unselected ({kept:?} {left:?})"
+            ),
+        );
+        select(env, "q3", ActionVisibility::Hover);
+
+        handle.root().update(&mut env.app, |this, cx| {
+            for n in &mut this.nodes {
+                n.busy = n.id == "work";
+                n.dimmed = n.id == "inbox";
+            }
+            cx.notify();
+        });
+        env.settle();
+        let (work, inbox) = (env.backend.source_row_look(node, "work"), env.backend.source_row_look(node, "inbox"));
+        env.backend.source_actions(node, "work", Some(true));
+        let under = env.backend.source_row_look(node, "work");
+        env.backend.source_actions(node, "work", Some(false));
+        c.check(
+            work == Some((true, 1.)) && inbox == Some((false, 0.5)) && under.is_some_and(|l| !l.0),
+            &format!("a busy row spins until the pointer shows its actions, a dimmed row is half ink ({work:?} {under:?} {inbox:?})"),
+        );
+        handle.root().update(&mut env.app, |this, cx| {
+            this.renaming = true;
+            cx.notify();
+        });
+        env.settle();
+        let focused = env.app.focus_id(handle.id(), "rename");
+        env.settle();
+        handle.root().update(&mut env.app, |this, cx| {
+            this.nodes[1].title = "Inbox (4)".into();
+            cx.notify();
+        });
+        env.settle();
+        let tree = env.app.semantic_tree();
+        let find = |t: &str| tree.nodes().find(|(_, n)| n.test_id.as_deref() == Some(t)).map(|(_, n)| n.clone());
+        let (row, field) = (find("sidebar.work"), find("rename"));
+        let inside =
+            row.as_ref().and_then(|r| r.bounds).zip(field.as_ref().and_then(|f| f.bounds)).is_some_and(|(r, f)| {
+                f.origin.y >= r.origin.y - 0.5 && f.origin.y + f.size.height <= r.origin.y + r.size.height + 0.5
+            });
+        c.check(
+            focused && inside && field.as_ref().is_some_and(|f| f.focused),
+            &format!(
+                "the app's field lies over the row and keeps focus through a reload ({focused} {row:?} {field:?})"
+            ),
+        );
+        handle.root().update(&mut env.app, |this, cx| {
+            this.renaming = false;
+            this.nodes[1].title = "Inbox (renamed)".into();
+            for n in &mut this.nodes {
+                (n.busy, n.dimmed) = (false, false);
+            }
+            cx.notify();
+        });
+        env.settle();
+        c.check(
+            env.app.semantic_tree().nodes().all(|(_, n)| n.test_id.as_deref() != Some("rename")),
+            "the field goes with the edit",
+        );
+
+        handle.root().update(&mut env.app, |this, cx| {
+            this.nodes.push(source_separator("later", "Later").parent("lib"));
+            cx.notify();
+        });
+        env.settle();
+        let tree = env.app.semantic_tree();
+        let later = tree.nodes().find(|(_, n)| n.test_id.as_deref() == Some("sidebar.later")).map(|(_, n)| n.clone());
+        c.check(
+            later.as_ref().is_some_and(|n| {
+                n.role == Role::TreeItem
+                    && n.name == "Later"
+                    && n.selected.is_none()
+                    && n.bounds.is_some_and(|b| (b.size.height - 24.).abs() < 0.5)
+            }),
+            &format!("a separator is a 24 pt row named by its title, never selected ({later:?})"),
+        );
+        handle.root().update(&mut env.app, |this, cx| {
+            this.nodes.retain(|n| n.id != "later");
+            cx.notify();
+        });
+        env.settle();
 
         let tree = env.app.semantic_tree();
         let sidebar = tree.find(node).map(|(_, n)| n.clone()).expect("sidebar");

@@ -18,9 +18,9 @@ use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 
 use nd_components::{
-    ActionVisibility, ImageFit, SOURCE_ART, SOURCE_ART_RADIUS, SourceAction, SourceActionClicked, SourceActivated,
-    SourceCollapsed, SourceExpanded, SourceIndex, SourceMenuRequested, SourceMiddleClicked, SourceNode, SourceSelected,
-    SourceTreeProps,
+    ActionVisibility, ImageFit, SOURCE_ART, SOURCE_ART_RADIUS, SOURCE_DIMMED, SourceAction, SourceActionClicked,
+    SourceActivated, SourceCollapsed, SourceExpanded, SourceIndex, SourceMenuRequested, SourceMiddleClicked,
+    SourceNode, SourceSelected, SourceTreeProps,
 };
 use nd_ui::events::Emit;
 use nd_ui::prelude::SharedString;
@@ -32,10 +32,10 @@ use objc2_app_kit::{
     NSAccessibility, NSAppearanceCustomization, NSBackgroundStyle, NSBezelStyle, NSButton, NSColor,
     NSControlTextEditingDelegate, NSDragOperation, NSDraggingSession, NSEvent, NSFont, NSFontWeightRegular,
     NSImageView, NSLayoutConstraint, NSLineBreakMode, NSMenu, NSOutlineView, NSOutlineViewDataSource,
-    NSOutlineViewDelegate, NSPasteboardItem, NSPasteboardWriting, NSResponder, NSScrollView, NSTableCellView,
-    NSTableColumn, NSTableRowView, NSTableViewAnimationOptions, NSTableViewDataSource, NSTableViewDelegate,
-    NSTableViewRowSizeStyle, NSTableViewStyle, NSTextField, NSTrackingArea, NSTrackingAreaOptions,
-    NSUserInterfaceItemIdentification, NSView,
+    NSOutlineViewDelegate, NSPasteboardItem, NSPasteboardWriting, NSProgressIndicator, NSProgressIndicatorStyle,
+    NSResponder, NSScrollView, NSTableCellView, NSTableColumn, NSTableRowView, NSTableViewAnimationOptions,
+    NSTableViewDataSource, NSTableViewDelegate, NSTableViewRowSizeStyle, NSTableViewStyle, NSTextField, NSTrackingArea,
+    NSTrackingAreaOptions, NSUserInterfaceItemIdentification, NSView,
 };
 use objc2_foundation::{
     MainThreadMarker, NSArray, NSIndexSet, NSInteger, NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRect,
@@ -53,8 +53,10 @@ struct Data {
     /// One object per node id, kept while the id is listed.
     objects: HashMap<SharedString, Retained<NSString>>,
     actions: HashMap<SharedString, SourceAction>,
-    hover: bool,
+    visibility: ActionVisibility,
     drag_kind: Option<SharedString>,
+    /// The row the app's editor stands in.
+    editing: Option<SharedString>,
 }
 
 impl Data {
@@ -85,8 +87,9 @@ impl Data {
             .map(|id| (id.clone(), objects.remove(id).unwrap_or_else(|| NSString::from_str(id))))
             .collect();
         self.actions = props.actions.iter().map(|a| (a.id.clone(), a.clone())).collect();
-        self.hover = props.action_visibility == ActionVisibility::Hover;
+        self.visibility = props.action_visibility;
         self.drag_kind = props.drag_kind.clone();
+        self.editing = props.editing.clone();
     }
 
     /// The item row `i` drags as, if it drags.
@@ -115,6 +118,8 @@ pub(crate) struct Shared {
     programmatic: Cell<bool>,
     /// A right click on a row asks for its menu (`SourceTreeProps::row_menus`).
     row_menus: Cell<bool>,
+    /// The app's editor (`SourceTree::editor`), laid over the editing row's title.
+    editor: RefCell<Option<Retained<NSView>>>,
 }
 
 impl Shared {
@@ -292,6 +297,9 @@ define_class!(
             if data.node_index(Some(item)).is_some_and(|i| data.nodes[i].section) {
                 return GROUP_ROW;
             }
+            if data.node_index(Some(item)).is_some_and(|i| data.nodes[i].separator) {
+                return SEPARATOR_ROW;
+            }
             let node = data.node_index(Some(item)).map(|i| &data.nodes[i]);
             let (caption, meter) = node.map_or((false, false), |n| (n.caption.is_some(), n.meter.is_some()));
             if !caption && !meter {
@@ -308,7 +316,7 @@ define_class!(
         #[unsafe(method_id(outlineView:rowViewForItem:))]
         fn row_view(&self, outline: &NSOutlineView, _item: &AnyObject) -> Option<Retained<NSTableRowView>> {
             let mtm = MainThreadMarker::from(outline);
-            let row = NdSourceRowView::alloc(mtm).set_ivars(RowIvars { hover: Cell::new(self.ivars().shared.data.borrow().hover) });
+            let row = NdSourceRowView::alloc(mtm).set_ivars(RowIvars { visibility: Cell::new(self.ivars().shared.data.borrow().visibility), inside: Cell::new(false) });
             let row: Retained<NdSourceRowView> = unsafe { msg_send![super(row), init] };
             Some(Retained::into_super(row))
         }
@@ -377,7 +385,9 @@ impl NdSourceTree {
             cell
         });
         let actions: Vec<SourceAction> = node.actions.iter().filter_map(|a| data.actions.get(a).cloned()).collect();
-        cell.configure(node, &actions, data.hover);
+        cell.configure(node, &actions, data.visibility == ActionVisibility::Always);
+        let editor = shared.editor.borrow();
+        cell.set_editor(editor.as_deref().filter(|_| data.editing.as_ref() == Some(&node.id)));
         Some(Retained::into_super(Retained::into_super(cell)))
     }
 }
@@ -397,6 +407,8 @@ fn text_line(mtm: MainThreadMarker, size: f64) -> f64 {
 /// The height AppKit gives a source list's group row when no delegate sizes it, at every sidebar
 /// size (measured on macOS 27; AppKit has no API for it). The outline adds the space above
 /// a section itself, so a header sits as Finder's do.
+/// A separator row: as tall as its name in the small font with air around it.
+const SEPARATOR_ROW: f64 = 24.; // nd-lint: allow, the separator's own size
 const GROUP_ROW: f64 = 19.; // nd-lint: allow, AppKit's own group row height, which it does not expose
 
 /// The box every row's icon is centred in, so titles start at one x whatever each symbol's own
@@ -418,7 +430,9 @@ const AUTOSCROLL_TICK: f64 = 1. / 60.;
 const SECTION_CELL: &str = "nd.source.section";
 
 pub struct RowIvars {
-    hover: Cell<bool>,
+    visibility: Cell<ActionVisibility>,
+    /// The pointer is over the row.
+    inside: Cell<bool>,
 }
 
 define_class!(
@@ -438,7 +452,7 @@ define_class!(
                     self.removeTrackingArea(&area);
                 }
             }
-            if !self.ivars().hover.get() {
+            if self.ivars().visibility.get() == ActionVisibility::Always {
                 return;
             }
             let options = NSTrackingAreaOptions::MouseEnteredAndExited | NSTrackingAreaOptions::ActiveInKeyWindow;
@@ -464,6 +478,14 @@ define_class!(
                     cell.recolour(cell.backgroundStyle());
                 }
             }
+            self.refresh_actions();
+        }
+
+        // A reused cell comes in with its actions as its last row left them.
+        #[unsafe(method(didAddSubview:))]
+        fn did_add_subview(&self, sub: &NSView) {
+            let _: () = unsafe { msg_send![super(self), didAddSubview: sub] };
+            self.refresh_actions();
         }
 
         #[unsafe(method(mouseEntered:))]
@@ -479,7 +501,13 @@ define_class!(
 );
 
 impl NdSourceRowView {
-    fn show_actions(&self, visible: bool) {
+    fn show_actions(&self, inside: bool) {
+        self.ivars().inside.set(inside);
+        self.refresh_actions();
+    }
+
+    fn refresh_actions(&self) {
+        let visible = self.ivars().visibility.get().shows(self.ivars().inside.get(), self.isSelected());
         for sub in self.subviews().iter() {
             if let Some(cell) = sub.downcast_ref::<NdSourceCell>() {
                 cell.set_actions_visible(visible);
@@ -501,6 +529,15 @@ pub struct CellIvars {
     meter_width: RefCell<Option<Retained<NSLayoutConstraint>>>,
     badge: Retained<NSTextField>,
     actions: Retained<NSView>,
+    /// A busy row's spinner, at the trailing edge while its actions are hidden.
+    spinner: Retained<NSProgressIndicator>,
+    busy: Cell<bool>,
+    /// A separator row's rule, after its name.
+    rule: Retained<objc2_app_kit::NSBox>,
+    separator: Cell<bool>,
+    /// The app's editor while this cell's row is being edited, and what places it.
+    editor: RefCell<Option<Retained<NSView>>>,
+    editor_constraints: RefCell<Vec<Retained<NSLayoutConstraint>>>,
     /// The node the cell shows now, and the action ids of its buttons in order.
     node: RefCell<SharedString>,
     buttons: RefCell<Vec<(Retained<NSButton>, SharedString)>>,
@@ -568,6 +605,12 @@ impl NdSourceCell {
             meter_width: RefCell::default(),
             badge: label(),
             actions: NSView::new(mtm),
+            spinner: NSProgressIndicator::new(mtm),
+            busy: Cell::new(false),
+            rule: crate::controls::separator(mtm),
+            separator: Cell::new(false),
+            editor: RefCell::default(),
+            editor_constraints: RefCell::default(),
             node: RefCell::default(),
             buttons: RefCell::default(),
             constraints: RefCell::default(),
@@ -605,15 +648,25 @@ impl NdSourceCell {
             }
         }
         iv.meter.addSubview(&iv.meter_fill);
+        iv.spinner.setStyle(NSProgressIndicatorStyle::Spinning);
+        iv.spinner.setControlSize(objc2_app_kit::NSControlSize::Small);
+        iv.spinner.setIndeterminate(true);
+        iv.spinner.setDisplayedWhenStopped(false);
+        iv.spinner.setTranslatesAutoresizingMaskIntoConstraints(false);
+        this.addSubview(&iv.spinner);
+        iv.rule.setTranslatesAutoresizingMaskIntoConstraints(false);
+        this.addSubview(&iv.rule);
+        for v in [&*iv.art as &NSView, &iv.icon, &iv.caption, &iv.meter, &iv.badge, &iv.actions] {
+            this.addSubview(v);
+        }
         NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&[
+            iv.spinner.trailingAnchor().constraintEqualToAnchor(&iv.actions.trailingAnchor()),
+            iv.spinner.centerYAnchor().constraintEqualToAnchor(&this.centerYAnchor()),
             iv.meter.heightAnchor().constraintEqualToConstant(METER_HEIGHT),
             iv.meter_fill.leadingAnchor().constraintEqualToAnchor(&iv.meter.leadingAnchor()),
             iv.meter_fill.topAnchor().constraintEqualToAnchor(&iv.meter.topAnchor()),
             iv.meter_fill.bottomAnchor().constraintEqualToAnchor(&iv.meter.bottomAnchor()),
         ]));
-        for v in [&*iv.art as &NSView, &iv.icon, &iv.caption, &iv.meter, &iv.badge, &iv.actions] {
-            this.addSubview(v);
-        }
         unsafe { this.setImageView(Some(&iv.icon)) };
         this
     }
@@ -622,14 +675,12 @@ impl NdSourceCell {
         unsafe { self.textField() }.expect("title field")
     }
 
-    fn configure(&self, node: &SourceNode, actions: &[SourceAction], hover: bool) {
+    fn configure(&self, node: &SourceNode, actions: &[SourceAction], always: bool) {
         let mtm = MainThreadMarker::from(self);
         let iv = self.ivars();
         *iv.node.borrow_mut() = node.id.clone();
         let title = self.title();
         title.setStringValue(&NSString::from_str(&node.title));
-        let dimmed = !node.selectable && !node.section;
-        title.setAlphaValue(if dimmed { 0.45 } else { 1. });
         let image = node.icon.filter(|_| !node.section).and_then(|i| crate::icons::symbol(i.lucide()));
         iv.icon.setImage(image.as_deref());
         let artwork = node.artwork.clone().filter(|_| !node.section);
@@ -711,22 +762,89 @@ impl NdSourceCell {
             buttons.push((button, action.id.clone()));
         }
         *iv.buttons.borrow_mut() = buttons;
+        // A separator: its name in the small font at secondary ink, then the rule.
+        let separator = node.separator && !node.section;
+        iv.separator.set(separator);
+        iv.rule.setHidden(!separator);
+        if separator {
+            iv.icon.setHidden(true);
+            iv.art.setHidden(true);
+        }
+        title.setHidden(separator && node.title.is_empty());
+        let size = if separator { NSFont::smallSystemFontSize() } else { NSFont::systemFontSize() };
+        title.setFont(Some(&NSFont::systemFontOfSize(size)));
+        let ink = if separator { NSColor::secondaryLabelColor() } else { NSColor::labelColor() };
+        title.setTextColor(Some(&ink));
         self.constrain(node.section);
         if !iv.art.isHidden() {
             let side = f64::from(SOURCE_ART);
             iv.slot.place(NSRect::new(NSPoint::ZERO, NSSize::new(side, side)), crate::media::scale_of(self));
         }
+        let dim = if node.dims() { f64::from(SOURCE_DIMMED) } else { 1. };
+        for v in [&*title as &NSView, &iv.icon, &iv.art, &iv.caption] {
+            v.setAlphaValue(dim);
+        }
+        iv.busy.set(node.busy && !node.section);
         self.recolour(self.backgroundStyle());
         // Alpha, never hidden: a hidden button would hand its width to the title and the row
         // would shift under the pointer.
-        self.set_actions_visible(!hover);
+        self.set_actions_visible(always);
     }
 
     pub(crate) fn set_actions_visible(&self, visible: bool) {
-        for (b, _) in self.ivars().buttons.borrow().iter() {
+        let iv = self.ivars();
+        for (b, _) in iv.buttons.borrow().iter() {
             b.setAlphaValue(if visible { 1. } else { 0. });
             b.setEnabled(visible);
         }
+        // The spinner gives way to the actions under the pointer.
+        if iv.busy.get() && !visible {
+            unsafe { iv.spinner.startAnimation(None) };
+        } else {
+            unsafe { iv.spinner.stopAnimation(None) };
+        }
+    }
+
+    /// Lays `editor` over the title, or gives the title back. Moving the editor between cells
+    /// re-parents it in place, so a field keeps its focus and text.
+    pub(crate) fn set_editor(&self, editor: Option<&NSView>) {
+        let iv = self.ivars();
+        let held = iv.editor.borrow().clone();
+        if held.as_deref().map(|v| v as *const NSView) == editor.map(|v| v as *const NSView) {
+            // A reconfigured cell shows its title again; the editor still covers it.
+            if editor.is_some() {
+                self.title().setHidden(true);
+            }
+            return;
+        }
+        NSLayoutConstraint::deactivateConstraints(&NSArray::from_retained_slice(&iv.editor_constraints.take()));
+        if let Some(old) = held
+            && unsafe { old.superview() }.is_some_and(|s| std::ptr::eq(&*s, (self as *const Self).cast()))
+        {
+            old.removeFromSuperview();
+        }
+        let title = self.title();
+        let Some(editor) = editor else {
+            *iv.editor.borrow_mut() = None;
+            title.setHidden(iv.separator.get() && title.stringValue().length() == 0);
+            return;
+        };
+        editor.setTranslatesAutoresizingMaskIntoConstraints(false);
+        self.addSubview(editor);
+        let c = vec![
+            editor.leadingAnchor().constraintEqualToAnchor(&title.leadingAnchor()),
+            editor.trailingAnchor().constraintEqualToAnchor_constant(&iv.actions.leadingAnchor(), -4.),
+            editor.centerYAnchor().constraintEqualToAnchor(&self.centerYAnchor()),
+        ];
+        NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&c));
+        *iv.editor_constraints.borrow_mut() = c;
+        *iv.editor.borrow_mut() = Some(objc2::Message::retain(editor));
+        title.setHidden(true);
+    }
+
+    /// Whether the cell shows its spinner now.
+    pub(crate) fn spinning(&self) -> bool {
+        self.ivars().busy.get() && self.ivars().buttons.borrow().iter().all(|(b, _)| b.alphaValue() == 0.)
     }
 
     fn recolour(&self, style: NSBackgroundStyle) {
@@ -850,6 +968,20 @@ impl NdSourceCell {
             end.leadingAnchor()
                 .constraintGreaterThanOrEqualToSystemSpacingAfterAnchor_multiplier(&title.trailingAnchor(), 1.),
         );
+        if iv.separator.get() {
+            iv.rule
+                .setContentHuggingPriority_forOrientation(1., objc2_app_kit::NSLayoutConstraintOrientation::Horizontal);
+            c.push(iv.rule.centerYAnchor().constraintEqualToAnchor(&self.centerYAnchor()));
+            c.push(iv.rule.trailingAnchor().constraintEqualToAnchor(&self.trailingAnchor()));
+            c.push(iv.rule.widthAnchor().constraintGreaterThanOrEqualToConstant(12.));
+            c.push(if title.isHidden() {
+                iv.rule.leadingAnchor().constraintEqualToAnchor(&self.leadingAnchor())
+            } else {
+                iv.rule
+                    .leadingAnchor()
+                    .constraintEqualToSystemSpacingAfterAnchor_multiplier(&title.trailingAnchor(), 1.)
+            });
+        }
         let _ = section;
         NSLayoutConstraint::activateConstraints(&NSArray::from_retained_slice(&c));
         *iv.constraints.borrow_mut() = c;
@@ -919,6 +1051,7 @@ impl SourceTreeNative {
             wake,
             programmatic: Cell::new(false),
             row_menus: Cell::new(props.row_menus),
+            editor: RefCell::default(),
         });
         let outline: Retained<NSOutlineView> = Retained::into_super(NdOutlineView::new(mtm, shared.clone()));
         outline.setStyle(NSTableViewStyle::SourceList);
@@ -1062,6 +1195,36 @@ impl SourceTreeNative {
         &self.source.ivars().shared
     }
 
+    /// Takes the app's editor (`None` once the app drops it) and lays it over its row.
+    pub fn set_editor(&self, editor: Option<Retained<NSView>>) {
+        let old = self.shared().editor.replace(editor);
+        if let Some(old) = old
+            && let Some(cell) = unsafe { old.superview() }.and_then(|s| s.downcast::<NdSourceCell>().ok())
+        {
+            cell.set_editor(None);
+        }
+        self.place_editor();
+    }
+
+    /// Puts the editor in the editing row's cell, or takes it out when no row is editing.
+    fn place_editor(&self) {
+        let shared = self.shared();
+        let Some(editor) = shared.editor.borrow().clone() else { return };
+        let editing = shared.data.borrow().editing.clone();
+        let row = editing.and_then(|id| self.item(&id)).map(|item| unsafe { self.outline.rowForItem(Some(&item)) });
+        let held = unsafe { editor.superview() }.and_then(|s| s.downcast::<NdSourceCell>().ok());
+        let target = row
+            .filter(|&r| r >= 0)
+            .and_then(|r| self.outline.viewAtColumn_row_makeIfNecessary(0, r, true))
+            .and_then(|v| v.downcast::<NdSourceCell>().ok());
+        if let Some(held) = held.filter(|h| target.as_ref().is_none_or(|t| !std::ptr::eq(&**h, &**t))) {
+            held.set_editor(None);
+        }
+        if let Some(target) = target {
+            target.set_editor(Some(&editor));
+        }
+    }
+
     pub fn update(&mut self, props: &SourceTreeProps) {
         if props.fit_rows != self.props.fit_rows {
             self.props.fit_rows = props.fit_rows;
@@ -1082,6 +1245,10 @@ impl SourceTreeNative {
             self.props.empty = props.empty.clone();
             self.update_empty();
         }
+        // After any reload too: a reloaded row's cell may be a new one.
+        self.props.editing = props.editing.clone();
+        self.shared().data.borrow_mut().editing = props.editing.clone();
+        self.place_editor();
         if props.drag_kind != self.props.drag_kind || props.accepts != self.props.accepts {
             self.props.drag_kind = props.drag_kind.clone();
             self.props.accepts = props.accepts.clone();
@@ -1238,6 +1405,14 @@ impl SourceTreeNative {
         }
         shared.programmatic.set(false);
         self.select_now(true);
+        // Row views outlive a reload of unchanged rows and keep the visibility they were made with.
+        for r in 0..self.outline.numberOfRows() {
+            let row = self.outline.rowViewAtRow_makeIfNecessary(r, false);
+            if let Some(row) = row.and_then(|v| v.downcast::<NdSourceRowView>().ok()) {
+                row.ivars().visibility.set(props.action_visibility);
+                row.refresh_actions();
+            }
+        }
         self.update_empty();
     }
 
@@ -1389,6 +1564,14 @@ impl SourceTreeNative {
             }
         }
         parts
+    }
+
+    /// Whether row `id` shows its spinner, and its title's alpha.
+    pub fn row_look(&self, id: &str) -> Option<(bool, f64)> {
+        let object = self.item(id)?;
+        let row = unsafe { self.outline.rowForItem(Some(&object)) };
+        let cell = self.outline.viewAtColumn_row_makeIfNecessary(0, row, false)?.downcast::<NdSourceCell>().ok()?;
+        Some((cell.spinning(), cell.title().alphaValue()))
     }
 
     /// Alpha of row `id`'s action buttons: 0 while hidden for hover.

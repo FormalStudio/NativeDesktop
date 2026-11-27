@@ -35,6 +35,9 @@ pub const SOURCE_ART: f32 = 20.;
 /// The corner radius of a row's artwork, in points: Music's playlist covers.
 pub const SOURCE_ART_RADIUS: f32 = 4.;
 
+/// The opacity of a [`dimmed`](SourceNode::dimmed) row's icon and text.
+pub const SOURCE_DIMMED: f32 = 0.5;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct SourceNode {
     pub id: SharedString,
@@ -59,6 +62,14 @@ pub struct SourceNode {
     pub actions: Vec<SharedString>,
     /// The row drags when the list's rows do. Sections never drag.
     pub movable: bool,
+    /// Work under way for the row (a page loading): a spinner where its actions sit while they
+    /// are hidden.
+    pub busy: bool,
+    /// The row's icon and text at [`SOURCE_DIMMED`]: a tab put to sleep.
+    pub dimmed: bool,
+    /// A rule across the row after its title, which may be empty: a named break in a tab list.
+    /// Never selectable; it drags like any row.
+    pub separator: bool,
 }
 
 /// A row with `id` showing `title`.
@@ -78,7 +89,15 @@ pub fn source_node(id: impl Into<SharedString>, title: impl Into<SharedString>) 
         selectable: true,
         actions: Vec::new(),
         movable: true,
+        busy: false,
+        dimmed: false,
+        separator: false,
     }
+}
+
+/// A [`separator`](SourceNode::separator) row named `name`, which may be empty.
+pub fn source_separator(id: impl Into<SharedString>, name: impl Into<SharedString>) -> SourceNode {
+    SourceNode { separator: true, selectable: false, ..source_node(id, name) }
 }
 
 /// A section header; rows name it as their parent. Expanded unless the app collapses it.
@@ -147,6 +166,22 @@ impl SourceNode {
         self.movable = movable;
         self
     }
+
+    pub fn busy(mut self, busy: bool) -> Self {
+        self.busy = busy;
+        self
+    }
+
+    pub fn dimmed(mut self, dimmed: bool) -> Self {
+        self.dimmed = dimmed;
+        self
+    }
+
+    /// Whether the row draws at [`SOURCE_DIMMED`]: marked dimmed, or a row the user cannot
+    /// select that is neither a section nor a separator.
+    pub fn dims(&self) -> bool {
+        self.dimmed || !(self.selectable || self.section || self.separator)
+    }
 }
 
 impl FluentBuilder for SourceNode {}
@@ -193,7 +228,20 @@ pub enum ActionVisibility {
     /// While the pointer is over the row.
     #[default]
     Hover,
+    /// While the pointer is over the row, and on the selected row: a tab list's close button.
+    HoverOrSelected,
     Always,
+}
+
+impl ActionVisibility {
+    /// Whether a row's actions show with the pointer over it or not, selected or not.
+    pub fn shows(self, hovered: bool, selected: bool) -> bool {
+        match self {
+            Self::Hover => hovered,
+            Self::HoverOrSelected => hovered || selected,
+            Self::Always => true,
+        }
+    }
 }
 
 /// What the list shows with no rows.
@@ -221,6 +269,8 @@ pub struct SourceTreeProps {
     pub row_menus: bool,
     /// As tall as its rows, with nothing to scroll (`fit_rows`).
     pub fit_rows: bool,
+    /// The row whose title gives way to the app's [`editor`](SourceTree::editor).
+    pub editing: Option<SharedString>,
     pub style: StyleRefinement,
 }
 
@@ -324,8 +374,8 @@ impl WidgetSemantics for SourceTreeProps {
             .map(|(i, n)| {
                 let role = if n.section { Role::Text } else { Role::TreeItem };
                 SemanticPart {
-                    enabled: Some(n.section || n.selectable),
-                    selected: (!n.section).then(|| self.selected.as_ref() == Some(&n.id)),
+                    enabled: Some(n.section || n.separator || n.selectable),
+                    selected: (!n.section && !n.separator).then(|| self.selected.as_ref() == Some(&n.id)),
                     expanded: index.expandable(&self.nodes, i).then_some(n.expanded),
                     children: n
                         .actions
@@ -372,6 +422,7 @@ pub fn source_tree(id: impl Into<SharedString>) -> SourceTree {
         drop_onto: false,
         row_menus: false,
         fit_rows: false,
+        editing: None,
         style: StyleRefinement::default(),
     };
     SourceTree(NativeElement::described::<SourceTreeKind>(Key::Id(id.into()), props).size_full())
@@ -505,6 +556,15 @@ impl SourceTree {
     pub fn fit_rows(mut self) -> Self {
         self.0.props_mut().fit_rows = true;
         self.0.style().size.height = None;
+        self
+    }
+
+    /// Draws `editor`, an element the app owns such as a rename field, in row `id`'s title
+    /// place. The app focuses it, reads its events and drops it when the edit ends. A tree that
+    /// [fits its rows](Self::fit_rows) does not size to them while it holds one.
+    pub fn editor(mut self, id: impl Into<SharedString>, editor: impl IntoElement) -> Self {
+        self.0.props_mut().editing = Some(id.into());
+        self.0.host(editor);
         self
     }
 
@@ -744,6 +804,22 @@ impl SourceIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_row_dims_when_marked_or_out_of_reach_but_never_as_a_heading_or_break() {
+        assert!(source_node("a", "A").dimmed(true).dims());
+        assert!(source_node("b", "B").selectable(false).dims());
+        assert!(!source_node("c", "C").dims());
+        assert!(!source_section("s", "S").dims() && !source_separator("r", "R").dims());
+    }
+
+    #[test]
+    fn a_selected_row_keeps_its_actions_only_when_asked() {
+        use ActionVisibility::*;
+        assert!(!Hover.shows(false, true) && Hover.shows(true, false));
+        assert!(HoverOrSelected.shows(false, true) && HoverOrSelected.shows(true, false));
+        assert!(!HoverOrSelected.shows(false, false) && Always.shows(false, false));
+    }
 
     fn ids(nodes: &[SourceNode], rows: &[(usize, usize)]) -> Vec<(String, usize)> {
         rows.iter().map(|(i, d)| (nodes[*i].id.to_string(), *d)).collect()

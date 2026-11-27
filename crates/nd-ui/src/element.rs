@@ -1027,6 +1027,7 @@ pub struct NativeElement<P> {
     handlers: Vec<(TypeId, Handler)>,
     dispatch: DispatchProps,
     drag: crate::drag::DragSpec,
+    hosted: Vec<AnyElement>,
 }
 
 impl<P: AnyProps> NativeElement<P> {
@@ -1039,7 +1040,15 @@ impl<P: AnyProps> NativeElement<P> {
             handlers: Vec::new(),
             dispatch: DispatchProps::default(),
             drag: crate::drag::DragSpec::default(),
+            hosted: Vec::new(),
         }
+    }
+
+    /// A child the widget's backend places inside the widget itself, such as a source tree's
+    /// rename field over its row. While it has one, the widget is laid out by its style rather
+    /// than measured.
+    pub fn host(&mut self, child: impl IntoElement) {
+        self.hosted.push(child.into_any_element());
     }
 
     /// A widget whose props describe it to the semantic tree and answer automation's actions
@@ -1112,7 +1121,7 @@ impl<P: AnyProps> IntoElement for NativeElement<P> {
             props: Rc::new(self.props),
             layout: self.style,
             measured: true,
-            children: Vec::new(),
+            children: self.hosted,
             handlers: self.handlers,
             dispatch: self.dispatch,
             motion: None,

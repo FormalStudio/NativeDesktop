@@ -32,7 +32,7 @@ pub mod prelude {
         PaletteCancelled, PaletteItem, PaletteQueryChanged, PaletteSubmitted, SOURCE_ART, SourceAction,
         SourceActionClicked, SourceActivated, SourceCollapsed, SourceExpanded, SourceNode, SourceTree, Toast,
         ToastActionClicked, ToastDismissed, ToastOverlay, banner, command_palette, palette_item, source_action,
-        source_node, source_section, source_tree, toast, toast_overlay,
+        source_node, source_section, source_separator, source_tree, toast, toast_overlay,
     };
     pub use crate::chrome::{
         Alert, AlertResponse, AlertStyle, BottomAccessory, ButtonExt, ContextMenu, Glass, GlassGroup, Icon, IconView,

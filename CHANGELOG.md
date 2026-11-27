@@ -5,6 +5,13 @@ and the one it moves to.
 
 ## Unreleased
 
+- `source_tree` rows for a browser's tab list, on both backends:
+  `ActionVisibility::HoverOrSelected` keeps a row's actions on the selected row; `.busy(true)`
+  shows a spinner where hidden actions sit; `.dimmed(true)` draws icon and title at
+  `SOURCE_DIMMED`, as a row the user cannot select now does on both backends; `source_separator(id, name)` is a 24 pt break with an optional name and a rule;
+  and `SourceTree::editor(id, field)` puts an app's own field in a row's title slot while it
+  renames. `NativeElement::host` carries such an element under a native widget.
+
 - A `source_tree`'s rows join the semantic tree as tree items, with their selected and expanded
   state and bounds on both backends, and each row action is a button named by its tooltip that
   `App::perform` can press. Rows scrolled out of view stay in the tree, marked not visible.
