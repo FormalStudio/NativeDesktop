@@ -387,6 +387,48 @@ mod gate_m6 {
         assert!(!host.backend().menu_open(window));
     }
 
+    /// Each row is a tree item part with its own bounds, a row scrolled out of view is still in
+    /// the tree (marked not visible) so a long list stays findable, and a row's action is a
+    /// button that a click by name presses.
+    pub fn gpui_source_rows_are_semantic_parts() {
+        use nd_ui::semantics::SemanticAction;
+        let mut cx = headless();
+        let log: Rc<RefCell<Log>> = Rc::default();
+        let l = log.clone();
+        let opened: Rc<RefCell<Option<WindowId>>> = Rc::default();
+        let o = opened.clone();
+        let host = cx.update(|cx| {
+            GpuiHost::builder().quit_when_empty(false).start(cx, move |app| {
+                let backend = app.backend_as::<nd_backend_gpui::GpuiBackend>().expect("GPUI backend").clone();
+                backend.set_theme(nd_theme::ThemeRegistry::new(nd_theme::Preset::Adwaita));
+                app.set_global(Chrome(nd_backend_gpui::GpuiChrome::new(backend)));
+                let handle = app.open_window(WindowOptions::main("sources").size(size(px(300.), px(70.))), |_, cx| {
+                    cx.new(|_| Sources { log: l, selected: "a".into() })
+                });
+                *o.borrow_mut() = Some(handle.id());
+            })
+        });
+        settle(&mut cx, &host);
+        let window = opened.borrow_mut().take().expect("window");
+        let tree = by_test_id(&host, window, "sources");
+        assert_eq!(tree.role, Role::Tree);
+        let alpha = by_test_id(&host, window, "sources.a");
+        let beta = by_test_id(&host, window, "sources.b");
+        assert_eq!((alpha.role, alpha.name.as_str()), (Role::TreeItem, "Alpha"));
+        assert_eq!((alpha.selected, beta.selected), (Some(true), Some(false)), "the selected row says so");
+        let (a, b) = (alpha.bounds.expect("row bounds"), beta.bounds.expect("row bounds"));
+        assert!(a.size.height > 20. && b.origin.y >= a.origin.y + a.size.height, "rows stack: {a:?} {b:?}");
+        let gamma = by_test_id(&host, window, "sources.c");
+        assert!(alpha.visible && !gamma.visible, "the row past the pane is present but not visible: {gamma:?}");
+
+        let add = by_test_id(&host, window, "sources.b.add");
+        assert_eq!((add.role, add.name.as_str()), (Role::Button, "Add Here"), "the action is named by its tooltip");
+        let pressed = cx.update(|cx| host.update(cx, |app| app.perform(add.id, &SemanticAction::Click)));
+        settle(&mut cx, &host);
+        assert!(matches!(pressed, Ok(())), "pressing by name succeeds: {pressed:?}");
+        assert_eq!(log.borrow().activated, ["action b add"], "pressing the button reports the row's action");
+    }
+
     pub fn gpui_source_row_fits_a_caption_over_a_meter() {
         use gpui::AppContext as _;
         if nd_gpui::gpui_platform::current_headless_renderer().ok().flatten().is_none() {
@@ -825,7 +867,7 @@ struct Sources {
 
 impl Render for Sources {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let (menu_log, middle_log) = (self.log.clone(), self.log.clone());
+        let (menu_log, middle_log, action_log) = (self.log.clone(), self.log.clone(), self.log.clone());
         source_tree("sources")
             .nodes([source_node("a", "Alpha"), source_node("b", "Beta").actions(["add"]), source_node("c", "Gamma")])
             .actions([source_action("add", Icon::Plus).tooltip("Add Here")])
@@ -842,6 +884,9 @@ impl Render for Sources {
             })
             .on_middle_click(move |e: &SourceMiddleClicked, _, _| {
                 middle_log.borrow_mut().activated.push(format!("middle {}", e.id));
+            })
+            .on_action(move |e: &SourceActionClicked, _, _| {
+                action_log.borrow_mut().activated.push(format!("action {} {}", e.id, e.action));
             })
     }
 }
@@ -1124,6 +1169,7 @@ fn main() {
             "gate_m6::gpui_source_rows_take_menus_and_middle_clicks",
             gate_m6::gpui_source_rows_take_menus_and_middle_clicks,
         ),
+        ("gate_m6::gpui_source_rows_are_semantic_parts", gate_m6::gpui_source_rows_are_semantic_parts),
         (
             "gate_m6::gpui_source_list_overflow_scrolls_instead_of_squashing",
             gate_m6::gpui_source_list_overflow_scrolls_instead_of_squashing,

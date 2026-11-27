@@ -5,6 +5,12 @@ and the one it moves to.
 
 ## Unreleased
 
+- A `source_tree`'s rows join the semantic tree as tree items, with their selected and expanded
+  state and bounds on both backends, and each row action is a button named by its tooltip that
+  `App::perform` can press. Rows scrolled out of view stay in the tree, marked not visible.
+  `SemanticPart` gains `key`, `selected`, `expanded`, `enabled` and nested `children`, and a
+  widget answers actions on its parts through `WidgetSemantics::respond_part`.
+
 - `[linux] files`: files and directories copied beside the executable in the AppImage, as
   `[windows] files` does for `Setup.exe`. A `files` entry on either OS can now name a directory,
   which is copied with its tree.

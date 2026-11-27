@@ -534,6 +534,42 @@ mod nav {
         let missing = env.app.perform(node, &nd_ui::semantics::SemanticAction::SetValue("nope".into()));
         c.check(missing.is_err(), "automation refuses a row id the tree does not have");
 
+        // Each row is a tree item of its own with its place in the outline, and its action a
+        // button assistive tech and automation press by name.
+        let tree = env.app.semantic_tree();
+        let sidebar = tree.find(node).map(|(_, n)| n.clone()).expect("sidebar");
+        let row = |id: &str| tree.nodes().find(|(_, n)| n.test_id.as_deref() == Some(id)).map(|(_, n)| n.clone());
+        let work = row("sidebar.work").expect("the work row");
+        let inside = |b: Option<nd_core::Rect>| {
+            let (b, s) = (b.unwrap_or_default(), sidebar.bounds.unwrap_or_default());
+            b.size.height > 0.
+                && b.origin.y >= s.origin.y
+                && b.origin.y + b.size.height <= s.origin.y + s.size.height + 0.5
+        };
+        c.check(
+            work.role == Role::TreeItem && work.name == "Work" && work.visible && inside(work.bounds),
+            &format!(
+                "a row is a tree item in the outline's bounds ({:?} {:?} {:?})",
+                work.role, work.name, work.bounds
+            ),
+        );
+        let inbox = row("sidebar.inbox").expect("the inbox row");
+        c.check(
+            inbox.selected == Some(true) && work.selected == Some(false),
+            &format!("the selected row says so ({:?} {:?})", inbox.selected, work.selected),
+        );
+        let close = tree.nodes().find(|(_, n)| n.role == Role::Button && n.name == "Close").map(|(_, n)| n.clone());
+        c.check(
+            close.as_ref().and_then(|b| b.test_id.as_deref()) == Some("sidebar.work.close"),
+            &format!("the row's action is a button named by its tooltip ({close:?})"),
+        );
+        let pressed = close.map(|b| env.app.perform(b.id, &nd_ui::semantics::SemanticAction::Click));
+        env.settle();
+        c.check(
+            matches!(pressed, Some(Ok(()))) && log.borrow().tree_actions.len() == 2,
+            &format!("pressing the button by name reports the action ({pressed:?} {:?})", log.borrow().tree_actions),
+        );
+
         handle.root().update(&mut env.app, |this, cx| {
             this.nodes.clear();
             cx.notify();

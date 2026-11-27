@@ -1354,6 +1354,37 @@ impl SourceTreeNative {
         true
     }
 
+    /// Where each row and each shown action button is, in `content`'s coordinates, as part
+    /// bounds by key path (`<row>`, `<row>.<action>`). Rows scrolled out of the clip view keep
+    /// their place; rows inside a closed item are not rows and are left out.
+    pub fn part_rects(&self, content: &NSView) -> Vec<(String, nd_core::Rect)> {
+        let rect = |r: NSRect| {
+            nd_core::Rect::new(r.origin.x as f32, r.origin.y as f32, r.size.width as f32, r.size.height as f32)
+        };
+        let shared = self.shared();
+        let mut parts = Vec::new();
+        for row in 0..self.outline.numberOfRows() {
+            let Some(id) = shared.key_of(self.outline.itemAtRow(row).as_deref()) else { continue };
+            let frame = content.convertRect_fromView(self.outline.rectOfRow(row), Some(&self.outline));
+            parts.push((id.to_string(), rect(frame)));
+            let Some(cell) = self
+                .outline
+                .viewAtColumn_row_makeIfNecessary(0, row, false)
+                .and_then(|v| v.downcast::<NdSourceCell>().ok())
+            else {
+                continue;
+            };
+            for (button, action) in cell.ivars().buttons.borrow().iter() {
+                if button.isHidden() || button.alphaValue() == 0. {
+                    continue;
+                }
+                let frame = content.convertRect_fromView(button.bounds(), Some(button));
+                parts.push((format!("{id}.{action}"), rect(frame)));
+            }
+        }
+        parts
+    }
+
     /// Alpha of row `id`'s action buttons: 0 while hidden for hover.
     pub fn action_alpha(&self, id: &str) -> Vec<f64> {
         let Some(object) = self.item(id) else { return Vec::new() };

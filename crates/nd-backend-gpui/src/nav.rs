@@ -488,6 +488,8 @@ pub enum TreeInput {
     Press(nd_ui::DragItem, SharedString, gpui::Point<Pixels>),
     /// A row's bounds in the window, as just laid out, by its id.
     Row(SharedString, gpui::Bounds<Pixels>),
+    /// A row's action button's bounds in the window, as just laid out: row id, action id.
+    ActionAt(SharedString, SharedString, gpui::Bounds<Pixels>),
     /// A right click on a row, and where in the window it landed.
     Menu(SharedString, gpui::Point<Pixels>),
     Middle(SharedString),
@@ -567,10 +569,10 @@ pub fn source_tree_view(
     let actions: HashMap<&SharedString, _> = props.actions.iter().map(|a| (&a.id, a)).collect();
     let hover_only = props.action_visibility == nd_components::ActionVisibility::Hover;
     let indent = theme.spacing.lg.as_f32();
-    // Rows report where they are laid out, which a drag over the list places its slot by.
-    let drags = props.drag_kind.is_some() || !props.accepts.is_empty();
+    // Rows report where they are laid out, which a drag over the list places its slot by and
+    // the semantic tree places each row's part by.
     let report = |id: &SharedString| {
-        let on_input = on_input.clone().filter(|_| drags)?;
+        let on_input = on_input.clone()?;
         let id = id.clone();
         Some(
             gpui::canvas(
@@ -865,6 +867,21 @@ pub fn source_tree_view(
                             use gpui::AppContext as _;
                             cx.new(|_| tip.clone()).into()
                         });
+                    }
+                    if let Some(on_input) = on_input.clone() {
+                        let (key, action) = (key.clone(), action.id.clone());
+                        button = button.relative().child(
+                            gpui::canvas(
+                                move |bounds, window, cx| {
+                                    on_input(TreeInput::ActionAt(key.clone(), action.clone(), bounds), window, cx)
+                                },
+                                |_, (), _, _| {},
+                            )
+                            .absolute()
+                            .top_0()
+                            .left_0()
+                            .size_full(),
+                        );
                     }
                     if show_actions && let Some(on_input) = on_input.clone() {
                         let (key, action) = (key.clone(), action.id.clone());
@@ -1702,6 +1719,32 @@ fn adw_banner(
     bar.into_any_element()
 }
 
+/// Where a drawn tree's rows and their shown action buttons were last laid out, as part bounds
+/// by key path (`<row>`, `<row>.<action>`). A row inside a closed folder has none, and neither
+/// has a hover-only button while its row is not under the pointer.
+fn tree_parts(props: &nd_components::SourceTreeProps, t: &TreeDrawn) -> Vec<(String, nd_core::Rect)> {
+    let rect = |b: &gpui::Bounds<Pixels>| {
+        nd_core::Rect::new(b.origin.x.as_f32(), b.origin.y.as_f32(), b.size.width.as_f32(), b.size.height.as_f32())
+    };
+    let hover_only = props.action_visibility == nd_components::ActionVisibility::Hover;
+    let index = SourceIndex::new(&props.nodes);
+    let mut parts = Vec::new();
+    for (i, _) in index.visible(&props.nodes) {
+        let node = &props.nodes[i];
+        let Some(row) = t.rows.get(&node.id) else { continue };
+        parts.push((node.id.to_string(), rect(row)));
+        if hover_only && t.hovered.as_ref() != Some(&node.id) {
+            continue;
+        }
+        for action in &node.actions {
+            if let Some(b) = t.actions.get(&(node.id.clone(), action.clone())) {
+                parts.push((format!("{}.{action}", node.id), rect(b)));
+            }
+        }
+    }
+    parts
+}
+
 /// Per-node state of the drawn widgets, kept beside the retained tree and dropped on release.
 pub(crate) enum Drawn {
     Palette(PaletteDrawn),
@@ -1733,6 +1776,8 @@ pub(crate) struct TreeDrawn {
     pub press: Option<RowPress>,
     /// Each row's bounds in the window as last laid out, by id.
     pub rows: HashMap<SharedString, gpui::Bounds<Pixels>>,
+    /// Each row action button's bounds in the window as last laid out, by row and action id.
+    pub actions: HashMap<(SharedString, SharedString), gpui::Bounds<Pixels>>,
     /// The line marking where a drag over the list lands: its left end and width.
     pub slot: Option<(gpui::Point<Pixels>, Pixels)>,
     /// The row a drag over the list lands on, outlined instead of a slot line.
@@ -1867,7 +1912,15 @@ impl GpuiBackend {
                 }
             }
             Drawn::Toasts(t) => probe.name = t.queue.current().map(|t| t.title.to_string()),
-            Drawn::Tree(_) => {}
+            Drawn::Tree(t) => {
+                let Ok(state) = self.state.try_borrow() else { return };
+                let Some(props) =
+                    state.nodes.get(&node).and_then(|n| n.props.downcast_ref::<nd_components::SourceTreeProps>())
+                else {
+                    return;
+                };
+                probe.parts = tree_parts(props, t);
+            }
         }
     }
 
@@ -2212,6 +2265,12 @@ impl Build<'_> {
                     TreeInput::Row(id, bounds) => {
                         if let Drawn::Tree(t) = &mut *tree.borrow_mut() {
                             t.rows.insert(id, bounds);
+                        }
+                        return;
+                    }
+                    TreeInput::ActionAt(row, action, bounds) => {
+                        if let Drawn::Tree(t) = &mut *tree.borrow_mut() {
+                            t.actions.insert((row, action), bounds);
                         }
                         return;
                     }

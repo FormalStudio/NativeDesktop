@@ -10,7 +10,7 @@ use crate::app::App;
 use crate::backend::Backend;
 use crate::element::Key;
 use crate::semantics::{
-    ActionError, Capture, SemanticAction, SyntheticInput, WindowState, describe, part_id, part_owner,
+    ActionError, Capture, SemanticAction, SemanticPart, SyntheticInput, WindowState, describe, part_id, part_owner,
 };
 use crate::window::Window;
 
@@ -19,6 +19,66 @@ fn intersects(a: Rect, b: Rect) -> bool {
         && b.origin.x < a.origin.x + a.size.width
         && a.origin.y < b.origin.y + b.size.height
         && b.origin.y < a.origin.y + a.size.height
+}
+
+/// A widget's parts as semantic nodes, numbered depth first for [`part_id`].
+struct PartWalk<'a> {
+    owner: NodeId,
+    kind: &'a str,
+    test_id: Option<&'a str>,
+    enabled: bool,
+    focused: bool,
+    widget: Option<Rect>,
+    visible: bool,
+    viewport: Rect,
+    /// The backend's part bounds by key path; empty puts every part at the widget's bounds.
+    laid: &'a [(String, Rect)],
+    next: usize,
+}
+
+impl PartWalk<'_> {
+    fn nodes(&mut self, parts: &[SemanticPart], prefix: &str) -> Vec<SemanticNode> {
+        parts
+            .iter()
+            .map(|part| {
+                let path = if prefix.is_empty() { part.key.clone() } else { format!("{prefix}.{}", part.key) };
+                let id = part_id(self.owner, self.next);
+                self.next += 1;
+                let bounds = if self.laid.is_empty() {
+                    self.widget
+                } else {
+                    self.laid.iter().find(|(k, _)| *k == path).map(|(_, r)| *r)
+                };
+                // A part shows where it overlaps its widget: a row scrolled out of the list is
+                // still in the tree, not visible.
+                let visible = self.visible
+                    && bounds.is_some_and(|b| {
+                        b.size.width > 0.
+                            && b.size.height > 0.
+                            && intersects(b, self.viewport)
+                            && self.widget.is_some_and(|w| intersects(b, w))
+                    });
+                let children = self.nodes(&part.children, &path);
+                SemanticNode {
+                    id,
+                    role: part.role,
+                    kind: format!("{}.{}", self.kind, part.role.as_str()),
+                    name: part.name.clone(),
+                    value: part.value.clone(),
+                    test_id: self.test_id.map(|t| format!("{t}.{path}")),
+                    placeholder: part.placeholder.clone(),
+                    enabled: part.enabled.unwrap_or(self.enabled),
+                    focused: self.focused && part.focused,
+                    checked: None,
+                    selected: part.selected,
+                    expanded: part.expanded,
+                    bounds,
+                    visible,
+                    children,
+                }
+            })
+            .collect()
+    }
 }
 
 impl Tree {
@@ -56,24 +116,19 @@ impl Tree {
         };
         let focused = self.dispatch.focused() == Some(id);
         let enabled = probe.enabled.or(described.extra.enabled).unwrap_or(true);
-        let parts = described.extra.parts.iter().enumerate().map(|(i, part)| SemanticNode {
-            id: part_id(id, i),
-            role: part.role,
-            kind: format!("{}.{}", described.kind, part.key),
-            name: part.name.clone(),
-            value: part.value.clone(),
-            test_id: test_id.as_ref().map(|t| format!("{t}.{}", part.key)),
-            placeholder: part.placeholder.clone(),
+        let parts = PartWalk {
+            owner: id,
+            kind: &described.kind,
+            test_id: test_id.as_deref(),
             enabled,
-            focused: focused && part.focused,
-            checked: None,
-            selected: None,
-            expanded: None,
-            bounds,
+            focused,
+            widget: bounds,
             visible,
-            children: Vec::new(),
-        });
-        let parts: Vec<SemanticNode> = parts.collect();
+            viewport,
+            laid: &probe.parts,
+            next: 0,
+        }
+        .nodes(&described.extra.parts, "");
         SemanticNode {
             id,
             role: described.role,
@@ -168,6 +223,10 @@ impl App {
     /// Events the action causes are queued; hosts drain them on the next turn, tests with
     /// `run_until_idle`.
     pub fn perform(&mut self, node: NodeId, action: &SemanticAction) -> Result<(), ActionError> {
+        if let Some(response) = self.respond_part(node, action) {
+            self.events().emitter(part_owner(node).expect("a part")).emit_boxed(response?);
+            return Ok(());
+        }
         let node = part_owner(node).unwrap_or(node);
         let Some(window) = self.window_of(node) else {
             return Err(ActionError::NotActionable(format!("{node:?} is not in any window")));
@@ -184,6 +243,20 @@ impl App {
             };
         }
         self.backend.perform(node, action)
+    }
+
+    /// The event a widget's part answers `action` with, as its owner's props say, for a part
+    /// the widget acts on by itself (a row's own close button). `None` for an ordinary node or
+    /// a part that leaves the action to the widget.
+    fn respond_part(&self, node: NodeId, action: &SemanticAction) -> Option<crate::semantics::Response> {
+        let (owner, index) = (part_owner(node)?, crate::semantics::part_index(node)?);
+        let window = self.window_of(owner)?;
+        let tree = self.windows.get(&window)?.tree.as_ref()?;
+        let n = tree.nodes.get(&owner)?;
+        let SlotKind::Node(crate::backend::NodeKind::Widget(kind)) = n.ident.kind else { return None };
+        let parts = kind.semantics(&*n.props)?.parts;
+        let path = crate::semantics::part_path(&parts, index)?;
+        kind.respond_part(&*n.props, &path, action)
     }
 
     /// Posts synthetic input into `window`'s event queue through the backend.

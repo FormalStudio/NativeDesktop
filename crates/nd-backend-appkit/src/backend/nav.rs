@@ -48,6 +48,9 @@ impl State {
                     probe.value =
                         outline.itemAtRow(row).and_then(|i| i.downcast::<NSString>().ok()).map(|s| s.to_string());
                 }
+                if let Some(content) = content {
+                    probe.parts = s.part_rects(content);
+                }
             }
             _ => {}
         }

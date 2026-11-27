@@ -36,6 +36,10 @@ pub struct Probe {
     /// it out (a row scrolled out of its list) or hides it (a collapsed pane). `None` leaves it
     /// to the bounds.
     pub visible: Option<bool>,
+    /// Where the widget lays out its [`SemanticPart`]s, by key path (`row`, `row.close`), in the
+    /// same coordinates as `bounds`. Empty leaves every part at the widget's bounds; once a
+    /// backend gives any, a part it leaves out is not laid out (a hover-only button at rest).
+    pub parts: Vec<(String, Rect)>,
 }
 
 /// A window as the OS has it.
@@ -161,26 +165,75 @@ pub struct Semantics {
 /// A node inside a widget, without a retained node of its own.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SemanticPart {
-    /// Joined to the widget's test id with a dot (`palette.search`).
-    pub key: &'static str,
+    /// Joined to the widget's test id with a dot (`palette.search`), and to its parent part's
+    /// key the same way (`places.home.eject`).
+    pub key: String,
     pub role: Role,
     pub name: String,
     pub value: Option<String>,
     pub placeholder: Option<String>,
     /// Has keyboard focus while the widget does.
     pub focused: bool,
+    /// `None` takes the widget's.
+    pub enabled: Option<bool>,
+    pub selected: Option<bool>,
+    pub expanded: Option<bool>,
+    pub children: Vec<SemanticPart>,
+}
+
+impl SemanticPart {
+    pub fn new(key: impl Into<String>, role: Role, name: impl Into<String>) -> Self {
+        Self {
+            key: key.into(),
+            role,
+            name: name.into(),
+            value: None,
+            placeholder: None,
+            focused: false,
+            enabled: None,
+            selected: None,
+            expanded: None,
+            children: Vec::new(),
+        }
+    }
 }
 
 const PART_BIT: u64 = 1 << 63;
+/// Parts are numbered depth first across a widget's whole part tree: a sidebar of hundreds of
+/// rows, each with its buttons, stays under this.
+const PART_BITS: u32 = 24;
 
-/// The id of the `index`th part of `owner` in the semantic tree.
+/// The id of the `index`th part of `owner` in the semantic tree, counting depth first.
 pub fn part_id(owner: NodeId, index: usize) -> NodeId {
-    NodeId(PART_BIT | (owner.0 << 8) | index as u64)
+    NodeId(PART_BIT | (owner.0 << PART_BITS) | index as u64)
 }
 
 /// The widget a part id belongs to; `None` for an ordinary node.
 pub fn part_owner(id: NodeId) -> Option<NodeId> {
-    (id.0 & PART_BIT != 0).then_some(NodeId((id.0 & !PART_BIT) >> 8))
+    (id.0 & PART_BIT != 0).then_some(NodeId((id.0 & !PART_BIT) >> PART_BITS))
+}
+
+/// Which part a part id names, counting depth first; `None` for an ordinary node.
+pub fn part_index(id: NodeId) -> Option<usize> {
+    (id.0 & PART_BIT != 0).then_some((id.0 & ((1 << PART_BITS) - 1)) as usize)
+}
+
+/// The key path (`row.close`) of the `index`th part of `parts`, counting depth first.
+pub fn part_path(parts: &[SemanticPart], index: usize) -> Option<String> {
+    fn walk(parts: &[SemanticPart], prefix: &str, index: &mut usize) -> Option<String> {
+        for part in parts {
+            let path = if prefix.is_empty() { part.key.clone() } else { format!("{prefix}.{}", part.key) };
+            if *index == 0 {
+                return Some(path);
+            }
+            *index -= 1;
+            if let Some(found) = walk(&part.children, &path, index) {
+                return Some(found);
+            }
+        }
+        None
+    }
+    walk(parts, "", &mut { index })
 }
 
 impl Semantics {
@@ -228,6 +281,13 @@ pub trait WidgetSemantics: crate::backend::AnyProps + Sized {
     /// control does not take the action. Backends that draw the control themselves emit it;
     /// AppKit drives the real control instead.
     fn respond(&self, _action: &SemanticAction) -> Option<Response> {
+        None
+    }
+
+    /// The event the control emits when automation performs `action` on its part at key path
+    /// `part` (`row.close`), as the user doing the same would. `None` when the part does not
+    /// take the action; the action then goes to the widget as a whole.
+    fn respond_part(&self, _part: &str, _action: &SemanticAction) -> Option<Response> {
         None
     }
 }

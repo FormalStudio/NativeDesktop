@@ -42,6 +42,7 @@ pub enum NodeKind {
 
 type SemanticsFn = fn(&dyn AnyProps) -> Option<crate::semantics::Semantics>;
 type RespondFn = fn(&dyn AnyProps, &crate::semantics::SemanticAction) -> Option<crate::semantics::Response>;
+type RespondPartFn = fn(&dyn AnyProps, &str, &crate::semantics::SemanticAction) -> Option<crate::semantics::Response>;
 
 /// Names a `NativeWidget` implementation by its Rust type. Equal kinds have the same type.
 #[derive(Clone, Copy, Debug)]
@@ -50,6 +51,7 @@ pub struct WidgetKind {
     pub type_id: TypeId,
     semantics: Option<SemanticsFn>,
     respond: Option<RespondFn>,
+    respond_part: Option<RespondPartFn>,
 }
 
 impl PartialEq for WidgetKind {
@@ -68,7 +70,13 @@ impl std::hash::Hash for WidgetKind {
 
 impl WidgetKind {
     pub fn of<W: 'static>() -> Self {
-        Self { name: std::any::type_name::<W>(), type_id: TypeId::of::<W>(), semantics: None, respond: None }
+        Self {
+            name: std::any::type_name::<W>(),
+            type_id: TypeId::of::<W>(),
+            semantics: None,
+            respond: None,
+            respond_part: None,
+        }
     }
 
     /// A kind whose props `P` describe the node to the semantic tree and answer semantic
@@ -85,7 +93,19 @@ impl WidgetKind {
         ) -> Option<crate::semantics::Response> {
             props.downcast_ref::<P>().and_then(|p| p.respond(action))
         }
-        Self { semantics: Some(semantics::<P>), respond: Some(respond::<P>), ..Self::of::<W>() }
+        fn respond_part<P: crate::semantics::WidgetSemantics>(
+            props: &dyn AnyProps,
+            part: &str,
+            action: &crate::semantics::SemanticAction,
+        ) -> Option<crate::semantics::Response> {
+            props.downcast_ref::<P>().and_then(|p| p.respond_part(part, action))
+        }
+        Self {
+            semantics: Some(semantics::<P>),
+            respond: Some(respond::<P>),
+            respond_part: Some(respond_part::<P>),
+            ..Self::of::<W>()
+        }
     }
 
     /// What the props say about the node, for kinds built with [`WidgetKind::described`].
@@ -101,6 +121,16 @@ impl WidgetKind {
         action: &crate::semantics::SemanticAction,
     ) -> Option<crate::semantics::Response> {
         self.respond.and_then(|f| f(props, action))
+    }
+
+    /// The event the control emits for `action` on its part at key path `part`.
+    pub fn respond_part(
+        &self,
+        props: &dyn AnyProps,
+        part: &str,
+        action: &crate::semantics::SemanticAction,
+    ) -> Option<crate::semantics::Response> {
+        self.respond_part.and_then(|f| f(props, part, action))
     }
 }
 

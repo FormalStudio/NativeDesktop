@@ -217,22 +217,13 @@ impl WidgetSemantics for CommandPaletteProps {
         };
         let mut s = Semantics::new(Role::Dialog, name.clone());
         s.parts.push(SemanticPart {
-            key: "search",
-            role: Role::SearchBox,
-            name,
             value: Some(value),
             placeholder: self.placeholder.as_ref().map(|p| p.to_string()),
             focused: true,
+            ..SemanticPart::new("search", Role::SearchBox, name)
         });
         // The rows after it, top first, each read as its title, subtitle and hint.
-        s.parts.extend(self.items.iter().map(|item| SemanticPart {
-            key: "row",
-            role: Role::ListItem,
-            name: item.accessible_label(),
-            value: None,
-            placeholder: None,
-            focused: false,
-        }));
+        s.parts.extend(self.items.iter().map(|item| SemanticPart::new("row", Role::ListItem, item.accessible_label())));
         s
     }
 

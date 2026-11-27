@@ -330,14 +330,7 @@ impl WidgetSemantics for BannerProps {
         let mut s = Semantics::new(Role::Status, self.title.to_string());
         // The button is part of the one native banner; a click on it reaches `respond`.
         if let Some(action) = &self.action {
-            s.parts.push(SemanticPart {
-                key: "action",
-                role: Role::Button,
-                name: action.to_string(),
-                value: None,
-                placeholder: None,
-                focused: false,
-            });
+            s.parts.push(SemanticPart::new("action", Role::Button, action.to_string()));
         }
         s
     }

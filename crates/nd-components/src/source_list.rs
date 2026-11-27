@@ -20,8 +20,8 @@
 use std::collections::HashMap;
 
 use nd_core::semantic::Role;
-use nd_ui::backend::Props;
 use nd_ui::prelude::*;
+use nd_ui::semantics::{ActionError, Response, SemanticAction, SemanticPart, Semantics, WidgetSemantics};
 use nd_ui::{DragEnded, DragItem, DragOver, DropSlot, Dropped, Key, NativeElement, StyleRefinement};
 
 use crate::icon::Icon;
@@ -293,13 +293,72 @@ pub struct SourceTreeKind;
 
 pub struct SourceTree(NativeElement<SourceTreeProps>);
 
-fn describe(props: &Props) -> (Role, String) {
-    let _ = props;
-    (Role::Tree, String::new())
+impl SourceTreeProps {
+    /// The node a part's key path (`<row>` or `<row>.<action>`) names, and the action if any.
+    /// Row ids may hold dots (a path), so the path is matched whole against each row's.
+    fn part(&self, path: &str) -> Option<(&SourceNode, Option<&SourceAction>)> {
+        self.nodes.iter().find_map(|n| {
+            if path == n.id.as_ref() {
+                return Some((n, None));
+            }
+            let action = path.strip_prefix(n.id.as_ref())?.strip_prefix('.')?;
+            let action = self.actions.iter().find(|a| a.id.as_ref() == action && n.actions.contains(&a.id))?;
+            Some((n, Some(action)))
+        })
+    }
+}
+
+/// The tree, and each row as a part of it (`<tree>.<row>`) holding its trailing actions as
+/// buttons (`<tree>.<row>.<action>`), hover-only ones included: assistive tech and automation
+/// find every row, scrolled out of view or not, and press a row's button by name.
+impl WidgetSemantics for SourceTreeProps {
+    fn semantics(&self) -> Semantics {
+        let mut s = Semantics::new(Role::Tree, String::new());
+        let index = SourceIndex::new(&self.nodes);
+        s.parts = self
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(i, n)| {
+                let role = if n.section { Role::Text } else { Role::TreeItem };
+                SemanticPart {
+                    enabled: Some(n.section || n.selectable),
+                    selected: (!n.section).then(|| self.selected.as_ref() == Some(&n.id)),
+                    expanded: index.expandable(&self.nodes, i).then_some(n.expanded),
+                    children: n
+                        .actions
+                        .iter()
+                        .filter_map(|id| self.actions.iter().find(|a| a.id == *id))
+                        .map(|a| SemanticPart::new(a.id.to_string(), Role::Button, a.accessible_label().to_string()))
+                        .collect(),
+                    ..SemanticPart::new(n.id.to_string(), role, n.title.to_string())
+                }
+            })
+            .collect();
+        s
+    }
+
+    fn respond_part(&self, part: &str, action: &SemanticAction) -> Option<Response> {
+        let (node, button) = self.part(part)?;
+        match (button, action) {
+            (Some(button), SemanticAction::Click) => {
+                Some(Ok(Box::new(SourceActionClicked { id: node.id.clone(), action: button.id.clone() })))
+            }
+            (None, SemanticAction::Click) if node.selectable && !node.section => {
+                Some(Ok(Box::new(SourceSelected { id: node.id.clone() })))
+            }
+            (None, SemanticAction::DoubleClick) if node.selectable && !node.section => {
+                Some(Ok(Box::new(SourceActivated { id: node.id.clone() })))
+            }
+            (None, SemanticAction::Click | SemanticAction::DoubleClick) => {
+                Some(Err(ActionError::NotActionable(format!("row {} is not selectable", node.id))))
+            }
+            _ => None,
+        }
+    }
 }
 
 pub fn source_tree(id: impl Into<SharedString>) -> SourceTree {
-    nd_ui::semantics::describe_widget::<SourceTreeKind>(describe);
     let props = SourceTreeProps {
         nodes: Vec::new(),
         actions: Vec::new(),
@@ -313,7 +372,7 @@ pub fn source_tree(id: impl Into<SharedString>) -> SourceTree {
         fit_rows: false,
         style: StyleRefinement::default(),
     };
-    SourceTree(NativeElement::new::<SourceTreeKind>(Key::Id(id.into()), props).size_full())
+    SourceTree(NativeElement::described::<SourceTreeKind>(Key::Id(id.into()), props).size_full())
 }
 
 impl SourceTree {
