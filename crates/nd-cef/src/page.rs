@@ -1461,12 +1461,13 @@ struct DownloadHandle {
 }
 
 impl DownloadHandle {
-    fn with(&self, f: impl FnOnce(&mut DownloadEntry)) {
-        if let Some(p) = get(self.page)
-            && let Some(entry) = p.st.borrow_mut().downloads.get_mut(&self.id)
-        {
-            f(entry);
-        }
+    /// `f`'s result on the download's entry. CEF answers a callback's `cont`, `cancel`, `pause`
+    /// and `resume`, or the drop of an unexecuted one, with `on_download_updated` on the same
+    /// stack, which borrows the page again: `f` hands those out to call after the borrow ends.
+    fn with<R>(&self, f: impl FnOnce(&mut DownloadEntry) -> R) -> Option<R> {
+        let p = get(self.page)?;
+        let mut st = p.st.borrow_mut();
+        st.downloads.get_mut(&self.id).map(f)
     }
 }
 
@@ -1485,38 +1486,35 @@ impl DownloadControl for DownloadHandle {
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        self.with(|e| {
+        let before = self.with(|e| {
             e.path = Some(path.clone());
-            if let Some(before) = e.before.take() {
-                before.cont(Some(&CefString::from(path.to_string_lossy().as_ref())), 0);
-            }
+            e.before.take()
         });
+        if let Some(before) = before.flatten() {
+            before.cont(Some(&CefString::from(path.to_string_lossy().as_ref())), 0);
+        }
     }
 
     fn cancel(&self) {
         self.decided.set(true);
-        self.with(|e| {
-            e.before.take();
-            if let Some(item) = &e.item {
+        if let Some((before, item)) = self.with(|e| (e.before.take(), e.item.clone())) {
+            drop(before);
+            if let Some(item) = item {
                 item.cancel();
             }
-        });
+        }
     }
 
     fn pause(&self) {
-        self.with(|e| {
-            if let Some(item) = &e.item {
-                item.pause();
-            }
-        });
+        if let Some(item) = self.with(|e| e.item.clone()).flatten() {
+            item.pause();
+        }
     }
 
     fn resume(&self) {
-        self.with(|e| {
-            if let Some(item) = &e.item {
-                item.resume();
-            }
-        });
+        if let Some(item) = self.with(|e| e.item.clone()).flatten() {
+            item.resume();
+        }
     }
 }
 

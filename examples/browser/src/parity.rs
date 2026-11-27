@@ -292,6 +292,13 @@ fn steps() -> Vec<Step> {
                     && std::fs::read_to_string(&d.download).is_ok_and(|s| s == server::DOWNLOAD_BODY)
             },
         },
+        // Nobody takes this one: its handle drops, which cancels it while CEF reports on it.
+        Step {
+            name: "download-dropped",
+            only: &[],
+            run: |d, _| d.page.load(format!("{}/download-dropped", d.base)),
+            done: |d| d.saw("download-requested dropped.txt") && d.saw("download cancelled"),
+        },
         Step {
             name: "scheme",
             only: &[],
@@ -384,7 +391,9 @@ impl Render for Driver {
                 d.push(format!("newwindow {} popup={}", e.url, e.popup.is_some()), cx)
             }))
             .on_download_requested(cx.listener(|d, e: &DownloadRequested, _, cx| {
-                e.download.save_to(d.download.clone());
+                if e.download.suggested_filename != "dropped.txt" {
+                    e.download.save_to(d.download.clone());
+                }
                 d.push(format!("download-requested {}", e.download.suggested_filename), cx);
             }))
             .on_download_updated(cx.listener(|d, e: &DownloadUpdated, _, cx| {

@@ -106,6 +106,12 @@ fn serve(listener: TcpListener, port: u16) {
                         "Content-Disposition: attachment; filename=\"parity.txt\"\r\n",
                         DOWNLOAD_BODY.into(),
                     ),
+                    "/download-dropped" => (
+                        "200 OK",
+                        "application/octet-stream",
+                        "Content-Disposition: attachment; filename=\"dropped.txt\"\r\n",
+                        DOWNLOAD_BODY.into(),
+                    ),
                     "/icon.png" => ("200 OK", "image/png", "", Vec::new()),
                     "/origin" => ("200 OK", "text/plain", "Access-Control-Allow-Origin: *\r\n", origin.into_bytes()),
                     _ => ("404 Not Found", "text/plain", "", b"not found".to_vec()),
