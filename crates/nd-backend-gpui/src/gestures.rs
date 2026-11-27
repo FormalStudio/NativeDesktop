@@ -102,10 +102,13 @@ fn contains(r: &Rect, p: Point) -> bool {
     p.x >= r.origin.x && p.y >= r.origin.y && p.x < r.origin.x + r.size.width && p.y < r.origin.y + r.size.height
 }
 
-/// A view drawn scaled (`b` its layout bounds): the box it is drawn in, and `at` in the space its
-/// children's bounds were recorded in, which the scale leaves unscaled. `None` at scale 1.
+/// A view drawn moved or scaled (`b` its layout bounds): the box it is drawn in, and `at` in the
+/// space its children's bounds were recorded in, which the scale leaves unscaled. `None` untransformed.
 fn scaled(node: &Node, b: &Rect, at: Point) -> Option<(Rect, Point)> {
-    let props = node.props.downcast_ref::<DivProps>().filter(|d| d.transform.scale != 1.)?;
+    let props = node
+        .props
+        .downcast_ref::<DivProps>()
+        .filter(|d| d.transform.scale != 1. || d.transform.offset != (0., 0.))?;
     // GPUI's floor for a scale, below which nothing is drawn.
     let s = props.transform.scale.max(1e-4);
     let (x, y) = props.transform.offset;
@@ -769,6 +772,25 @@ mod tests {
         ]);
         assert_eq!(hit_path(&nodes, &bounds, root, Point { x: 50., y: 5. }, false), vec![title, bar, root]);
         assert_eq!(hit_path(&nodes, &bounds, root, Point { x: 50., y: 50. }, false), vec![content, root]);
+    }
+
+    #[test]
+    fn a_press_reaches_a_view_drawn_moved_off_its_layout() {
+        // A dropped tile: laid out in its old slot, drawn in its new one until the move settles.
+        let (root, tile, label) = (NodeId(1), NodeId(2), NodeId(3));
+        let mut moved = view(Some(root), vec![label], true);
+        let mut props = moved.props.downcast_ref::<DivProps>().unwrap().clone();
+        props.transform.offset = (-117., 0.);
+        moved.props = Rc::new(props);
+        let nodes =
+            HashMap::from([(root, view(None, vec![tile], false)), (tile, moved), (label, view(Some(tile), vec![], false))]);
+        let bounds = HashMap::from([
+            (root, Rect::new(0., 0., 240., 100.)),
+            (tile, Rect::new(123., 40., 52., 39.)),
+            (label, Rect::new(6., 40., 52., 39.)),
+        ]);
+        assert_eq!(hit_path(&nodes, &bounds, root, Point { x: 32., y: 60. }, false), vec![label, tile, root]);
+        assert_eq!(hit_path(&nodes, &bounds, root, Point { x: 149., y: 60. }, false), vec![root]);
     }
 
     #[test]
