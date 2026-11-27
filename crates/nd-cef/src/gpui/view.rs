@@ -503,10 +503,13 @@ impl OsrView {
         window.with_content_mask(Some(ContentMask { bounds }), |window| {
             // Under a frame that has not caught up with a resize yet: the page's own edge colour,
             // so a flat page reads as one surface while Chromium draws the new size.
-            let under = match (&st.frame, self.chrome()) {
-                (Some(f), _) => f.edge,
-                (None, Some(chrome)) => gpui::rgb(chrome.edge()),
-                (None, None) => gpui::Rgba { r: 1., g: 1., b: 1., a: 1. },
+            // While a side pane slides, a Chrome-style page's own window lands frames before
+            // GPUI's frame around it, so this shows beside the page: in the pane's ground.
+            let under: gpui::Hsla = match (&st.frame, self.chrome()) {
+                (Some(f), _) => f.edge.into(),
+                (None, Some(chrome)) => nd_backend_gpui::occlusion::sliding(window)
+                    .unwrap_or_else(|| gpui::rgb(chrome.edge()).into()),
+                (None, None) => gpui::white(),
             };
             let corners = st.radii;
             window.paint_quad(fill(bounds, under).corner_radii(corners));

@@ -192,7 +192,9 @@ impl Build<'_> {
             let (pane, fill, edge) = match p.role {
                 PaneRole::Sidebar | PaneRole::Inspector if clear_sidebar => (pane, None, None),
                 PaneRole::Sidebar => {
-                    let edge = (!p.sidebar_ground).then(|| divider().right_0());
+                    // None while it slides: drawn frames behind a native page that moves with
+                    // it, the line would trail the page across the sidebar's ground.
+                    let edge = (!p.sidebar_ground && slide.is_none()).then(|| divider().right_0());
                     (pane.relative().bg(sidebar), Some(sidebar), edge)
                 }
                 PaneRole::Inspector => (pane.relative().bg(sidebar), Some(sidebar), Some(divider().left_0())),
@@ -211,6 +213,7 @@ impl Build<'_> {
             let pane = match (p.role == PaneRole::Content).then(|| self.overhang(id, node)).flatten() {
                 Some(overhang) => {
                     window.request_animation_frame();
+                    crate::occlusion::slide(window, sidebar);
                     pane.mr(px(-overhang))
                 }
                 None => pane,

@@ -38,6 +38,21 @@ thread_local! {
     static LIVE: RefCell<HashMap<gpui::WindowId, HashMap<u64, Hide>>> = RefCell::default();
     /// The overlay whose content is painting, as its index in the frame's list.
     static PAINTING: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+    /// Windows with a side pane sliding this frame, and that pane's ground.
+    static SLIDING: RefCell<HashMap<gpui::WindowId, gpui::Hsla>> = RefCell::default();
+}
+
+/// A side pane on `ground` slides in `window` this frame, moving the content beside it.
+pub(crate) fn slide(window: &gpui::Window, ground: gpui::Hsla) {
+    SLIDING.with(|s| s.borrow_mut().insert(window.window_handle().window_id(), ground));
+}
+
+/// The ground of the side pane sliding in `window` this frame. A native surface moved with it
+/// shows at once, frames ahead of what GPUI draws around it (its frames queue in the
+/// swapchain), so what the surface draws under itself shows beside it meanwhile: drawn in this,
+/// it reads as the pane.
+pub fn sliding(window: &gpui::Window) -> Option<gpui::Hsla> {
+    SLIDING.with(|s| s.borrow().get(&window.window_handle().window_id()).copied())
 }
 
 /// A window's frame starts: its overlays record themselves afresh, and once it is drawn the
@@ -46,6 +61,7 @@ pub(crate) fn begin_frame(window: &gpui::Window, cx: &mut App) {
     let id = window.window_handle().window_id();
     FRAME.with(|f| f.borrow_mut().remove(&id));
     SHOWN.with(|s| s.borrow_mut().remove(&id));
+    SLIDING.with(|s| s.borrow_mut().remove(&id));
     cx.defer(move |_| end_frame(id));
 }
 
