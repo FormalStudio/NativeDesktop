@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use nd_core::semantic::{SemanticNode, SemanticTree, SemanticWindow};
 use nd_core::{NodeId, Point, WindowId};
-use nd_ui::semantics::{ActionError, MouseButton, PointerPhase, SemanticAction, SyntheticInput};
+use nd_ui::semantics::{ActionError, MouseButton, PointerPhase, SemanticAction, SyntheticInput, part_owner};
 use nd_ui::{App, Keystroke, OperatingSystem};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -77,7 +77,8 @@ fn resolve_target(app: &App, target: &Target) -> Result<NodeId, RpcError> {
     match (target.reference, &target.test_id) {
         (Some(r), None) => {
             let node = NodeId(r);
-            if app.window_of(node).is_none() {
+            // A widget's part (a row's button) lives in the window its owner does.
+            if app.window_of(part_owner(node).unwrap_or(node)).is_none() {
                 return Err(action_error(Some(node), ActionError::NotActionable("unknown".into())));
             }
             Ok(node)

@@ -4813,6 +4813,7 @@ name = "nd-automation"
 version = "0.6.1"
 dependencies = [
  "interprocess",
+ "nd-components",
  "nd-core",
  "nd-ui",
  "serde",

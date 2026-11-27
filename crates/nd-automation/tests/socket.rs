@@ -27,15 +27,38 @@ impl Render for Counter {
     }
 }
 
+/// A source tree with one row, counting the times it is picked.
+struct Rows {
+    picked: u32,
+}
+
+impl Render for Rows {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        use nd_components::{SourceSelected, source_node, source_tree};
+        v_flex()
+            .child(source_tree("rows").nodes(vec![source_node("r1", "Row")]).on_select(cx.listener(
+                |this, _: &SourceSelected, _, cx| {
+                    this.picked += 1;
+                    cx.notify();
+                },
+            )))
+            .child(text(format!("picked {}", self.picked)))
+    }
+}
+
 /// Starts the server with jobs running on an app thread; returns a connected client.
 fn serve(name: &str) -> UnixStream {
+    serve_view(name, |_, cx| cx.new(|_| Counter { count: 0 }))
+}
+
+fn serve_view<V: Render>(name: &str, view: fn(&mut Window, &mut App) -> Entity<V>) -> UnixStream {
     let (tx, rx) = mpsc::channel::<Job>();
     std::thread::spawn(move || {
         // Every measured node is 80 by 20, so text is visible.
         let mut backend = nd_ui::test_backend::TestBackend::new();
         backend.on_measure(|_, _, _| Size { width: 80., height: 20. });
         let mut app = TestApp::with_backend(backend);
-        app.open_window(Size { width: 300., height: 200. }, |_, cx| cx.new(|_| Counter { count: 0 }));
+        app.open_window(Size { width: 300., height: 200. }, view);
         for job in rx {
             job(&mut app);
             app.run_until_idle();
@@ -71,6 +94,18 @@ fn click_and_wait_over_the_socket() {
     assert_eq!(waited.unwrap()["matched"], 1);
     let windows = call(&mut s, 6, "windows", Value::Null).unwrap();
     assert_eq!(windows[0]["key"], true);
+}
+
+/// A widget's part (a source tree's row) is a ref the server acts on, as a node's is.
+#[test]
+fn a_part_clicks_by_ref() {
+    let mut s = serve_view("part", |_, cx| cx.new(|_| Rows { picked: 0 }));
+    let tree = call(&mut s, 1, "getTree", json!({})).unwrap();
+    let row = &tree["windows"][0]["root"]["children"][0]["children"][0]["children"][0];
+    assert_eq!(row["testId"].as_str(), Some("rows.r1"));
+    assert!(call(&mut s, 2, "click", json!({ "ref": row["ref"].as_u64().unwrap() })).is_ok());
+    let waited = call(&mut s, 3, "waitFor", json!({ "condition": { "textContains": "picked 1" }, "timeoutMs": 1000 }));
+    assert!(waited.is_ok(), "the click reached the row");
 }
 
 #[test]

@@ -24,3 +24,4 @@ interprocess = "2.4.5"
 
 [dev-dependencies]
 nd-ui = { workspace = true, features = ["test-support"] }
+nd-components = { workspace = true }
