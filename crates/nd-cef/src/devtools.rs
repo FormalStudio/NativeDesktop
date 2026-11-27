@@ -146,7 +146,8 @@ impl Devtools {
     pub(crate) fn detach(&self) {
         self.registration.borrow_mut().take();
         self.host.borrow_mut().take();
-        for (_, reply) in self.pending.borrow_mut().drain() {
+        let replies: Vec<_> = self.pending.borrow_mut().drain().collect();
+        for (_, reply) in replies {
             reply(Err("the page closed".into()));
         }
     }
@@ -339,7 +340,8 @@ impl Devtools {
             return;
         }
         let frame = frame.map_or_else(|| self.main_frame.borrow().clone(), str::to_owned);
-        if let Some((session, id)) = self.contexts.borrow().find(&frame, world) {
+        let found = self.contexts.borrow().find(&frame, world);
+        if let Some((session, id)) = found {
             then(Ok((session, Some(id))));
             return;
         }

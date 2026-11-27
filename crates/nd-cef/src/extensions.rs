@@ -1286,9 +1286,10 @@ fn run_action_in_view(page: &CefPage, id: String, anchor: Anchor, done: Then<Act
                 view.register_script_message(VIEW_POPUP_MESSAGE, None, [format!("chrome-extension://{id}")]);
                 view.add_user_script(shim);
                 view.load(url);
-                ST.with(|s| {
-                    s.borrow_mut().view_popup = Some(ViewPopup { id: id.clone(), page: page_id, view: view.clone() })
+                let old = ST.with(|s| {
+                    s.borrow_mut().view_popup.replace(ViewPopup { id: id.clone(), page: page_id, view: view.clone() })
                 });
+                drop(old);
                 let bounds = Anchor::new(anchor.x, anchor.y + anchor.height, POPUP_MIN, POPUP_MIN);
                 parent.page.emit(nd_webview::ExtensionPopupOpened { id, bounds, page: Some(view) });
                 done(Ok(ActionOutcome::PopupOpened));

@@ -728,7 +728,8 @@ impl CefPage {
                 .then(|| format!("interrupted ({})", item.interrupt_reason().get_raw())),
         });
         if matches!(state, DownloadState::Done | DownloadState::Cancelled) {
-            self.st.borrow_mut().downloads.remove(&id);
+            let gone = self.st.borrow_mut().downloads.remove(&id);
+            drop(gone);
         }
     }
 
@@ -1034,7 +1035,8 @@ impl CefPage {
             }
             Command::UnregisterScriptMessage { name, world } => {
                 let world = world.unwrap_or_default();
-                if let Some((identifier, _)) = self.st.borrow_mut().handlers.remove(&(name.clone(), world.clone())) {
+                let removed = self.st.borrow_mut().handlers.remove(&(name.clone(), world.clone()));
+                if let Some((identifier, _)) = removed {
                     if let Some(identifier) = identifier {
                         self.devtools.remove_script(&identifier);
                     }
@@ -1290,11 +1292,11 @@ impl EngineView for CefPage {
         self.st.borrow_mut().count_input_queued = props.count_input && self.host().is_none();
         if props.count_input && self.host().is_some() && self.st.borrow().count_input.is_none() {
             self.count_input();
-        } else if !props.count_input
-            && let Some(identifier) = self.st.borrow_mut().count_input.take()
-            && !identifier.is_empty()
-        {
-            self.devtools.remove_script(&identifier);
+        } else if !props.count_input {
+            let taken = self.st.borrow_mut().count_input.take();
+            if let Some(identifier) = taken.filter(|i| !i.is_empty()) {
+                self.devtools.remove_script(&identifier);
+            }
         }
         if let Some(url) = props.url.as_deref().filter(|u| !u.is_empty()) {
             let differs = {
