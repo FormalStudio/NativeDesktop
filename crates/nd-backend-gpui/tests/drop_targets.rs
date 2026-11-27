@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use nd_backend_gpui::{GpuiBackend, GpuiHost};
-use nd_components::{TabStyle, source_item, source_list, tab_strip};
+use nd_components::{TabStyle, TileMoved, source_item, source_list, tab_strip, tile, tile_grid};
 use nd_gpui::gpui::{
     ExternalPaths, FileDropEvent, HeadlessAppContext, Modifiers, MouseButton, MouseDownEvent, MouseMoveEvent,
     MouseUpEvent, PlatformInput, point,
@@ -476,6 +476,113 @@ fn drag_over_a_list_marks_the_slot() {
     assert_eq!(r.take(), ["None at 3"], "past the last row");
 }
 
+struct Pins {
+    order: Vec<&'static str>,
+}
+
+impl Render for Pins {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let tiles = self.order.iter().map(|id| {
+            let face = div()
+                .id(format!("pin-{id}"))
+                .role(nd_core::semantic::Role::Button, *id)
+                .size_full()
+                .active(|pose| pose.scale(0.96))
+                .on_tap(|_: &TapEvent, _, _| {});
+            tile(*id, face)
+        });
+        div().size_full().child(tile_grid("pinned").max_columns(3).tiles(tiles).draggable_tiles("tab").on_move(
+            cx.listener(|this, e: &TileMoved, _, cx| {
+                let at = this.order.iter().position(|i| *i == e.id.as_ref()).expect("a tile of the grid");
+                let id = this.order.remove(at);
+                this.order.insert(e.index.min(this.order.len()), id);
+                cx.notify();
+            }),
+        ))
+    }
+}
+
+/// A tile held again right where the last drop let it go, as soon as it lands: the press is the
+/// second of a double click on Wayland, and the tile under the pointer still makes room.
+fn a_tile_lifts_again_where_it_was_dropped() {
+    let mut cx = headless();
+    let mut opened = None;
+    let host = cx.update(|cx| {
+        GpuiHost::builder().quit_when_empty(false).start(cx, |app| {
+            let handle = app.open_window(WindowOptions::main("pins").size(size(px(300.), px(160.))), |_, cx| {
+                cx.new(|_| Pins { order: vec!["a", "b", "c"] })
+            });
+            opened = Some(handle.id());
+        })
+    });
+    frames(&mut cx, &host, 8);
+    let window = opened.expect("window");
+    let dispatch = |cx: &mut HeadlessAppContext, events: Vec<PlatformInput>| {
+        let handle = host.window_handle(window).expect("gpui window");
+        for e in events {
+            cx.update(|cx| {
+                let _ = handle.update(cx, |_, window, cx| {
+                    window.dispatch_event(e, cx);
+                });
+            });
+            frames(cx, &host, 1);
+        }
+        // The tiles slide on the frame clock; let them land.
+        frames(cx, &host, 120);
+    };
+    let centre = |id: &str| {
+        host.read(|app| {
+            let tree = app.semantic_window(window).expect("window");
+            let id = format!("pin-{id}");
+            let b =
+                tree.root.iter().find(|n| n.test_id.as_deref() == Some(&id)).and_then(|n| n.bounds).expect("a tile");
+            (b.origin.x + b.size.width / 2., b.origin.y + b.size.height / 2.)
+        })
+    };
+    let slots: Vec<f32> = ["a", "b", "c"].iter().map(|id| centre(id).0).collect();
+    let lift = |cx: &mut HeadlessAppContext, from: (f32, f32), to: (f32, f32), clicks: usize| {
+        let mut events = vec![PlatformInput::MouseDown(MouseDownEvent {
+            button: MouseButton::Left,
+            position: point(px(from.0), px(from.1)),
+            modifiers: Modifiers::none(),
+            click_count: clicks,
+            first_mouse: false,
+        })];
+        for step in 1..=12 {
+            let f = step as f32 / 12.;
+            events.push(PlatformInput::MouseMove(MouseMoveEvent {
+                position: point(px(from.0 + (to.0 - from.0) * f), px(from.1 + (to.1 - from.1) * f)),
+                pressed_button: Some(MouseButton::Left),
+                modifiers: Modifiers::none(),
+            }));
+        }
+        dispatch(cx, events);
+    };
+    let release = |cx: &mut HeadlessAppContext, at: (f32, f32), clicks: usize| {
+        dispatch(
+            cx,
+            vec![PlatformInput::MouseUp(MouseUpEvent {
+                button: MouseButton::Left,
+                position: point(px(at.0), px(at.1)),
+                modifiers: Modifiers::none(),
+                click_count: clicks,
+            })],
+        );
+    };
+
+    let (c, a) = (centre("c"), centre("a"));
+    lift(&mut cx, c, a, 1);
+    assert_eq!((centre("a").0, centre("b").0), (slots[1], slots[2]), "a and b made room for c");
+    release(&mut cx, a, 1);
+    assert_eq!(centre("c").0, slots[0], "the drop kept c first");
+
+    let b = centre("b");
+    lift(&mut cx, a, b, 2);
+    assert_eq!(centre("b").0, slots[1], "b made room for c held a second time");
+    release(&mut cx, b, 2);
+    assert_eq!(["a", "b", "c"].map(|id| centre(id).0), [slots[0], slots[1], slots[2]], "the second drop put c last");
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let tests: Vec<(&str, fn())> = vec![
@@ -483,6 +590,7 @@ fn main() {
         ("gpui_drops::rows_drag_out_with_the_selection", rows_drag_out_with_the_selection),
         ("gpui_drops::rows_carry_files_out_of_the_window", rows_carry_files_out_of_the_window),
         ("gpui_drops::drag_over_a_list_marks_the_slot", drag_over_a_list_marks_the_slot),
+        ("gpui_drops::a_tile_lifts_again_where_it_was_dropped", a_tile_lifts_again_where_it_was_dropped),
     ];
     let has = |flag: &str| args.iter().any(|a| a == flag);
     if has("--list") {
