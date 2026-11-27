@@ -23,7 +23,7 @@ use nd_ui::backend::NodeKind;
 use nd_ui::events::{EventQueue, emit_gesture};
 use nd_ui::{DivProps, Modality, OverlayProps};
 
-use crate::backend::Node;
+use crate::backend::{Node, is_button};
 
 #[derive(Default)]
 struct WindowGestures {
@@ -152,6 +152,11 @@ fn hit_path(
     let Some(root) = hit_start(nodes, bounds, root, at, scroll) else { return Vec::new() };
     let mut path = descend(nodes, bounds, root, at);
     path.reverse();
+    // A press on a button is the button's: the row or list around it neither taps, selects nor
+    // drags. A wheel still scrolls what holds the button.
+    if !scroll && let Some(button) = path.iter().position(|n| nodes.get(n).is_some_and(|n| is_button(n.kind))) {
+        path.truncate(button + 1);
+    }
     path
 }
 

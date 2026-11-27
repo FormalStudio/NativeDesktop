@@ -1236,10 +1236,12 @@ impl<'a> Build<'a> {
             // The look's control radius: WinUI rounds a button at 4 px, libadwaita at 9.
             .rounded(theme.radius.md)
             .text_color(ink)
-            // Inside a drag region the button keeps its clicks and never starts a window move. A
-            // wheel passes on to the window root's router, so a scroll view full of buttons
-            // still scrolls.
-            .block_mouse_except_scroll();
+            // The press stays with the button: inside a drag region it never starts a window
+            // move, and a list row under it is not picked. Blocking the mouse instead would
+            // unhover every ancestor, and a row that shows its close button only while hovered
+            // would take the button away under the pointer.
+            .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_mouse_up(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation());
         // A labelled button with an icon leads with it, as libadwaita's button content does.
         let leading = (!props.label.is_empty()).then(|| props.icon.as_deref().and_then(Glyph::named)).flatten();
         // A text size on an icon-only button sizes its glyph, as AppKit sizes a symbol from the

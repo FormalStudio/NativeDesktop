@@ -62,6 +62,30 @@ impl Render for Scaled {
     }
 }
 
+/// A row that reports its hover and its taps, with a button inside, as a list row and its close
+/// button are.
+struct RowWithButton {
+    hovered: Rc<Cell<bool>>,
+    row_taps: Rc<Cell<u32>>,
+    clicks: Rc<Cell<u32>>,
+}
+
+impl Render for RowWithButton {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        let (hovered, row_taps, clicks) = (self.hovered.clone(), self.row_taps.clone(), self.clicks.clone());
+        v_flex().size_full().p(px(20.)).child(
+            h_flex()
+                .id("row")
+                .w(px(240.))
+                .h(px(40.))
+                .on_hover(move |over: &bool, _, _| hovered.set(*over))
+                .on_tap(move |_: &nd_ui::TapEvent, _, _| row_taps.set(row_taps.get() + 1))
+                .child(div().flex_1())
+                .child(button("close", "Close").on_click(move |_: &ClickEvent, _, _| clicks.set(clicks.get() + 1))),
+        )
+    }
+}
+
 struct TitleRow;
 
 impl Render for TitleRow {
@@ -223,6 +247,46 @@ mod gate_m2 {
         });
         settle(&mut cx, &host);
         assert_eq!(count_text(&host, window), "1");
+    }
+
+    /// A button inside a row leaves the row hovered and keeps its press to itself: a list row
+    /// shows its close button only while hovered, and a press on the button must not pick the row.
+    pub fn a_button_keeps_its_row_hovered_and_its_press() {
+        let mut cx = headless();
+        let (hovered, row_taps, clicks) = (Rc::new(Cell::new(false)), Rc::new(Cell::new(0)), Rc::new(Cell::new(0)));
+        let (h, t, c) = (hovered.clone(), row_taps.clone(), clicks.clone());
+        let mut window = None;
+        let host = cx.update(|cx| {
+            GpuiHost::builder().quit_when_empty(false).start(cx, |app| {
+                let options = WindowOptions::main("row").title("Row").size(size(px(320.), px(120.)));
+                window = Some(
+                    app.open_window(options, |_, cx| cx.new(|_| RowWithButton { hovered: h, row_taps: t, clicks: c }))
+                        .id(),
+                );
+            })
+        });
+        let window = window.expect("window");
+        settle(&mut cx, &host);
+        let pointer = |cx: &mut HeadlessAppContext, phase, at| {
+            cx.update(|cx| {
+                host.update(cx, |app| {
+                    let input = SyntheticInput::Pointer { phase, at, button: MouseButton::Left, click_count: 1 };
+                    app.synthesize(window, &input).expect("posted");
+                })
+            });
+            settle(cx, &host);
+        };
+        let row = by_test_id(&host, window, "row").bounds.expect("row");
+        pointer(&mut cx, PointerPhase::Move, nd_ui::Point { x: row.origin.x + 10., y: row.origin.y + 20. });
+        assert!(hovered.get(), "the pointer over the row hovers it");
+        let b = node(&host, window, |n| n.role == Role::Button).bounds.expect("button");
+        let at = nd_ui::Point { x: b.origin.x + b.size.width / 2., y: b.origin.y + b.size.height / 2. };
+        pointer(&mut cx, PointerPhase::Move, at);
+        assert!(hovered.get(), "the row stays hovered with the pointer over its own button");
+        pointer(&mut cx, PointerPhase::Down, at);
+        pointer(&mut cx, PointerPhase::Up, at);
+        assert_eq!(clicks.get(), 1, "the button took the click");
+        assert_eq!(row_taps.get(), 0, "the row did not");
     }
 
     pub fn keys_reach_nd_dispatch_before_gpui() {
@@ -946,6 +1010,10 @@ fn main() {
         (
             "gate_m2::a_pointer_click_goes_through_the_window_input_path",
             gate_m2::a_pointer_click_goes_through_the_window_input_path,
+        ),
+        (
+            "gate_m2::a_button_keeps_its_row_hovered_and_its_press",
+            gate_m2::a_button_keeps_its_row_hovered_and_its_press,
         ),
         ("gate_m2::keys_reach_nd_dispatch_before_gpui", gate_m2::keys_reach_nd_dispatch_before_gpui),
         ("gate_m2::fluent_access_keys_press_buttons", gate_m2::fluent_access_keys_press_buttons),
